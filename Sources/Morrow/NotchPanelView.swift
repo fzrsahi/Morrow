@@ -385,7 +385,7 @@ struct NotchPanelView: View {
     private var showBar: Bool {
         if workspaceManager.testWingPreview == .emptyIdle { return false }
         if workspaceManager.testWingPreview == .nonGitIdle || workspaceManager.testWingPreview == .nonGitThinking { return true }
-        if signals.isPlaying || nowPlaying.isPlaying || signals.showMiniPeekBanner || signals.showChargingBanner || mailManager.showMailArrivalAnimation || PrayerTimeManager.shared.testWingThinking { return true }
+        if signals.isPlaying || nowPlaying.isPlaying || mailManager.showMailArrivalAnimation || PrayerTimeManager.shared.testWingThinking { return true }
         return isActive && !(hideWhenNoSession && appState.activeSessionCount == 0)
     }
     private var shouldShowExpanded: Bool {
@@ -868,11 +868,12 @@ struct NotchPanelView: View {
             return min(max(baseWidth, minWidth), maxPanelWidth)
         }
         if isToastOnly {
+            let targetToastWidth: CGFloat = signals.showMiniPeekBanner ? 500 : 380
             if displayMode == .dynamicIsland && !hasNotch {
-                return min(280, maxPanelWidth)
+                return min(targetToastWidth, maxPanelWidth)
             }
             let requiredActiveBarWidth = nw + symmetricWingWidth * 2
-            return min(max(280, requiredActiveBarWidth), maxPanelWidth)
+            return min(max(targetToastWidth, requiredActiveBarWidth), maxPanelWidth)
         }
         if showIdleIndicator {
             if displayMode == .dynamicIsland && !hasNotch {
@@ -925,12 +926,6 @@ struct NotchPanelView: View {
             return min(CGFloat(width) + prehoverExtra, maxSafe)
         }
         let requiredActiveBarWidth = collapsedNotchGapWidth + collapsedLeftWingWidth + collapsedRightWingWidth
-        if signals.showChargingBanner && !appState.surface.isExpanded {
-            return min(max(280, requiredActiveBarWidth), maxPanelWidth)
-        }
-        if signals.showMiniPeekBanner && !appState.surface.isExpanded {
-            return min(max(280, requiredActiveBarWidth), maxPanelWidth)
-        }
         let maxSafeCollapsed = maxSafeCollapsedBarWidth
         return min(requiredActiveBarWidth, maxSafeCollapsed)
     }
@@ -1335,62 +1330,102 @@ struct NotchPanelView: View {
                 let isFlushNonNotchToast = displayMode == .dynamicIsland && !hasNotch && isToastOnly && !shouldShowExpanded
                 if isFlushNonNotchToast {
                     belowNotchContent
-                        .frame(height: effectiveNotchHeight)
+                        .frame(minHeight: effectiveNotchHeight)
                 } else {
-                    if showBar || shouldShowExpanded {
-                        activeCompactBar
-                    } else if showIdleIndicator {
-                        IdleIndicatorBar(
-                            mascotSize: mascotSize,
-                            wingWidth: idleLeftIndicatorWingWidth,
-                            rightWingWidth: idleIndicatorWingWidth,
-                            notchW: collapsedNotchGapWidth,
-                            notchHeight: notchHeight,
-                            hasNotch: hasNotch,
-                            hovered: idleHovered,
-                            displayMode: displayMode,
-                            onExpand: {
-                                withAnimation(NotchAnimation.open) {
-                                    if signals.isPrayerPrioritized {
-                                        appState.transitionToTab(.prayer)
-                                    } else if signals.isPlaying || nowPlaying.isPlaying {
-                                        appState.transitionToTab(.music)
-                                    } else {
-                                        appState.transitionToTab(.agents)
+                    Group {
+                        if showBar || shouldShowExpanded {
+                            activeCompactBar
+                        } else if showIdleIndicator {
+                            IdleIndicatorBar(
+                                mascotSize: mascotSize,
+                                wingWidth: idleLeftIndicatorWingWidth,
+                                rightWingWidth: idleIndicatorWingWidth,
+                                notchW: collapsedNotchGapWidth,
+                                notchHeight: notchHeight,
+                                hasNotch: hasNotch,
+                                hovered: idleHovered,
+                                displayMode: displayMode,
+                                onExpand: {
+                                    withAnimation(NotchAnimation.open) {
+                                        if signals.isPrayerPrioritized {
+                                            appState.transitionToTab(.prayer)
+                                        } else if signals.isPlaying || nowPlaying.isPlaying {
+                                            appState.transitionToTab(.music)
+                                        } else {
+                                            appState.transitionToTab(.agents)
+                                        }
+                                        appState.surface = .sessionList
                                     }
-                                    appState.surface = .sessionList
+                                },
+                                onOpenMail: {
+                                    withAnimation(NotchAnimation.open) {
+                                        appState.transitionToTab(.mail)
+                                        appState.surface = .sessionList
+                                    }
                                 }
-                            },
-                            onOpenMail: {
-                                withAnimation(NotchAnimation.open) {
-                                    appState.transitionToTab(.mail)
-                                    appState.surface = .sessionList
-                                }
-                            }
-                        )
-                    } else {
-                        // Idle: just the notch shell
-                        Spacer()
-                            .frame(height: notchHeight)
+                            )
+                        } else {
+                            // Idle: just the notch shell
+                            Spacer()
+                                .frame(height: notchHeight)
+                        }
                     }
+                    .fixedSize(horizontal: !shouldShowExpanded, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .opacity(isToastOnly ? 0 : 1)
+                    .blur(radius: isToastOnly ? 3 : 0)
+                    .offset(y: isToastOnly ? -7 : 0)
+                    .allowsHitTesting(!isToastOnly)
+                    .animation(
+                        isToastOnly
+                            ? .easeOut(duration: 0.12)
+                            : .easeOut(duration: 0.20).delay(0.14),
+                        value: isToastOnly
+                    )
 
                     // Below-notch expanded content
                     if shouldShowExpanded || isToastOnly || signals.showChargingBanner {
                         belowNotchContent
+                            .clipped()
                     }
                 }
             }
             .recordsCompletionCardChrome(in: cardSpace)
             .frame(width: panelWidth)
-            .clipShape(displayMode == .dynamicIsland ? dynamicIslandShape : AnyShape(Rectangle()))
-            .animation(.spring(response: 0.40, dampingFraction: 0.84), value: panelWidth)
+            .background(panelChromeBackground)
+            .clipShape(
+                displayMode == .dynamicIsland
+                    ? dynamicIslandShape
+                    : (appState.isFullscreenMode
+                        ? AnyShape(RoundedRectangle(cornerRadius: 7))
+                        : AnyShape(NotchPanelShape(
+                            topExtension: currentTopExt,
+                            bottomRadius: currentBottomRadius,
+                            minHeight: effectiveNotchHeight
+                        )))
+            )
+            .animation(
+                isToastOnly
+                    ? .spring(response: 0.36, dampingFraction: 0.84)
+                    : .spring(response: 0.34, dampingFraction: 1.0).delay(0.05),
+                value: panelWidth
+            )
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: shouldShowExpanded)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: displayMode)
-            .animation(.spring(response: 0.40, dampingFraction: 0.84), value: signals.showMiniPeekBanner)
-            .animation(.spring(response: 0.40, dampingFraction: 0.84), value: signals.showChargingBanner)
+            .animation(
+                signals.showMiniPeekBanner
+                    ? .spring(response: 0.36, dampingFraction: 0.84)
+                    : .spring(response: 0.34, dampingFraction: 1.0).delay(0.05),
+                value: signals.showMiniPeekBanner
+            )
+            .animation(
+                signals.showChargingBanner
+                    ? .spring(response: 0.36, dampingFraction: 0.84)
+                    : .spring(response: 0.34, dampingFraction: 1.0).delay(0.05),
+                value: signals.showChargingBanner
+            )
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: mailManager.showMailArrivalAnimation)
             .animation(.spring(response: 0.38, dampingFraction: 0.82), value: expandedTab)
-            .background(panelChromeBackground)
             .offset(y: curtainOffset)
             .opacity(curtainOpacity)
             .onChange(of: showToolStatus) { _, newValue in
@@ -1689,6 +1724,19 @@ struct NotchPanelView: View {
 
     // MARK: - Below-Notch Dynamic Island Banners & Expanded Cards
 
+    private var toastBannerTransition: AnyTransition {
+        .asymmetric(
+            insertion: .blurFade
+                .combined(with: .scale(scale: 0.93, anchor: .top))
+                .combined(with: .offset(y: -6))
+                .animation(.spring(response: 0.30, dampingFraction: 0.86).delay(0.07)),
+            removal: .blurFade
+                .combined(with: .scale(scale: 0.94, anchor: .top))
+                .combined(with: .offset(y: -4))
+                .animation(.easeIn(duration: 0.10))
+        )
+    }
+
     @ViewBuilder
     private var belowNotchContent: some View {
         if signals.showChargingBanner && !appState.surface.isExpanded {
@@ -1698,22 +1746,18 @@ struct NotchPanelView: View {
                     sys.dismissChargingBanner()
                 }
             }
-            .transition(.asymmetric(
-                insertion: .move(edge: .top).combined(with: .opacity),
-                removal: .move(edge: .top).combined(with: .opacity)
-            ))
+            .frame(width: 380)
+            .transition(toastBannerTransition)
         } else if signals.showMiniPeekBanner && !appState.surface.isExpanded {
-            // PRAYER MINI PEEK BANNER: Buka tipis saat T-10m & saat masuk waktu salat
-            PrayerMiniPeekBannerView(manager: prayerManager) {
+            // PRAYER MINI PEEK BANNER: Sun-Arc compact notification at prayer entry (T-0m)
+            PrayerMiniPeekBannerView(manager: prayerManager, displayMode: displayMode) {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     appState.transitionToTab(.prayer)
                     appState.surface = .sessionList
                 }
             }
-            .transition(.asymmetric(
-                insertion: .move(edge: .top).combined(with: .opacity),
-                removal: .move(edge: .top).combined(with: .opacity)
-            ))
+            .frame(width: 500)
+            .transition(toastBannerTransition)
         } else {
             expandedSurfaceContent
         }

@@ -470,23 +470,43 @@ public final class PrayerTimeManager: ObservableObject {
 
     // MARK: - Mini Peek Toast Banner & Agent Suppression
     private var bannerDismissWorkItem: DispatchWorkItem?
+    private var isMiniPeekBannerHovered: Bool = false
 
     public func dismissMiniPeekBanner() {
         bannerDismissWorkItem?.cancel()
         bannerDismissWorkItem = nil
         bannerDismissTask?.cancel()
         bannerDismissTask = nil
+        isMiniPeekBannerHovered = false
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             self.showMiniPeekBanner = false
+        }
+    }
+
+    public func setMiniPeekBannerHovered(_ hovering: Bool) {
+        guard showMiniPeekBanner else {
+            isMiniPeekBannerHovered = false
+            return
+        }
+        if hovering {
+            isMiniPeekBannerHovered = true
+            bannerDismissWorkItem?.cancel()
+            bannerDismissWorkItem = nil
+            bannerDismissTask?.cancel()
+            bannerDismissTask = nil
+        } else if isMiniPeekBannerHovered {
+            dismissMiniPeekBanner()
         }
     }
 
     private func scheduleBannerAutoDismiss() {
         bannerDismissWorkItem?.cancel()
         bannerDismissTask?.cancel()
+        guard !isMiniPeekBannerHovered else { return }
         let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.isMiniPeekBannerHovered else { return }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                self?.showMiniPeekBanner = false
+                self.showMiniPeekBanner = false
             }
         }
         bannerDismissWorkItem = item
@@ -588,6 +608,11 @@ public final class PrayerTimeManager: ObservableObject {
     }
 
     private func presentBanner(title: String, subtitle: String) {
+        SystemMonitorManager.shared.dismissChargingBanner()
+        isMiniPeekBannerHovered = false
+        if let appState, appState.surface.isExpanded {
+            appState.surface = .collapsed
+        }
         miniPeekBannerTitle = title
         miniPeekBannerSubtitle = subtitle
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {

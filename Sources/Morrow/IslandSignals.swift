@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 /// The values the collapsed bar actually shows.
 ///
@@ -70,12 +71,16 @@ final class IslandSignals {
     }
 
     func setChargingBanner(visible: Bool, batteryLevel: Int) {
-        if showChargingBanner != visible { showChargingBanner = visible }
-        if self.batteryLevel != batteryLevel { self.batteryLevel = batteryLevel }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
+            if showChargingBanner != visible { showChargingBanner = visible }
+            if self.batteryLevel != batteryLevel { self.batteryLevel = batteryLevel }
+        }
     }
 
     func setMiniPeekBanner(_ visible: Bool) {
-        if showMiniPeekBanner != visible { showMiniPeekBanner = visible }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
+            if showMiniPeekBanner != visible { showMiniPeekBanner = visible }
+        }
     }
 
     func setVolumeHUDVisible(_ visible: Bool) {
