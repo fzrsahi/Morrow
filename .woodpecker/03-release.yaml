@@ -1,6 +1,12 @@
 # ==============================================================================
 # Pipeline 3: Deployment & Artifact Distribution to EC2 Mirror and GitHub
 # ==============================================================================
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      lfs: false
+
 when:
   - event: tag
   - event: push

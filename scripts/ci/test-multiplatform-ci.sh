@@ -136,6 +136,8 @@ p1_check_windows = p1_steps.get('check-windows', {})
 p1_test_linux_cmds = "\n".join(str(c) for c in p1_test_linux.get('commands', []))
 p1_check_win_cmds = "\n".join(str(c) for c in p1_check_windows.get('commands', []))
 
+p1_clone_lfs = p1.get('clone', {}).get('git', {}).get('settings', {}).get('lfs', True)
+print(f'P1_CLONE_LFS={"NO" if p1_clone_lfs is False else "YES"}')
 print(f'P1_PLATFORM={p1_platform}')
 print(f'P1_STEPS={",".join(p1_step_names)}')
 print(f'P1_PUSH_PATH_FILTER={"YES" if p1_push_has_path else "NO"}')
@@ -161,7 +163,9 @@ p2_pr_when = [c for c in p2_when if 'pull_request' in c.get('event', [])]
 p2_pr_has_path = any('path' in c for c in p2_pr_when)
 p2_test = p2_steps.get('test', {})
 p2_test_cmds = "\n".join(str(c) for c in p2_test.get('commands', []))
+p2_clone_lfs = p2.get('clone', {}).get('git', {}).get('settings', {}).get('lfs', True)
 
+print(f'P2_CLONE_LFS={"NO" if p2_clone_lfs is False else "YES"}')
 print(f'P2_PLATFORM={p2_platform}')
 print(f'P2_STEPS={",".join(p2_step_names)}')
 print(f'P2_PUSH_PATH_FILTER={"YES" if p2_push_has_path else "NO"}')
@@ -176,6 +180,9 @@ p3_steps = {s.get('name'): s for s in p3.get('steps', [])}
 p3_step_names = list(p3_steps.keys())
 p3_build_dev = p3_steps.get('build-dev-dmg', {})
 p3_dev_cmds = "\n".join(str(c) for c in p3_build_dev.get('commands', []))
+p3_clone_lfs = p3.get('clone', {}).get('git', {}).get('settings', {}).get('lfs', True)
+
+print(f'P3_CLONE_LFS={"NO" if p3_clone_lfs is False else "YES"}')
 print(f'P3_PLATFORM={p3_platform}')
 print(f'P3_STEPS={",".join(p3_step_names)}')
 print(f'P3_MANIFEST_DISPATCH={"YES" if "shared/ci/manifest.sh" in p3_dev_cmds else "NO"}')
@@ -187,6 +194,7 @@ EOF
     assert_contains "woodpecker multi-workflow config loaded from directory" "CONFIG_TYPE=DIR" "$YAML_REPORT"
     assert_contains "woodpecker directory defines exactly 3 workflow files" "FILES_COUNT=3" "$YAML_REPORT"
     assert_contains "Pipeline 1 targets linux/amd64" "P1_PLATFORM=linux/amd64" "$YAML_REPORT"
+    assert_contains "Pipeline 1 clone step disables git-lfs" "P1_CLONE_LFS=NO" "$YAML_REPORT"
     assert_contains "Pipeline 1 has test-linux step" "test-linux" "$YAML_REPORT"
     assert_contains "Pipeline 1 has check-windows step" "check-windows" "$YAML_REPORT"
     assert_contains "Pipeline 1 push event has no path constraint" "P1_PUSH_PATH_FILTER=NO" "$YAML_REPORT"
@@ -203,10 +211,12 @@ EOF
     assert_contains "Pipeline 2 push event has no path constraint" "P2_PUSH_PATH_FILTER=NO" "$YAML_REPORT"
     assert_contains "Pipeline 2 pull_request event has no path constraint" "P2_PR_PATH_FILTER=NO" "$YAML_REPORT"
     assert_contains "Pipeline 2 targets darwin/amd64" "P2_PLATFORM=darwin/amd64" "$YAML_REPORT"
+    assert_contains "Pipeline 2 clone step disables git-lfs" "P2_CLONE_LFS=NO" "$YAML_REPORT"
     assert_contains "Pipeline 2 has test step" "test" "$YAML_REPORT"
     assert_contains "Pipeline 2 dispatches to macos/ci/test.sh" "P2_MACOS_DISPATCH=YES" "$YAML_REPORT"
     assert_contains "Pipeline 2 has smart fast-bypass detection" "P2_MACOS_FAST_BYPASS=YES" "$YAML_REPORT"
     assert_contains "Pipeline 3 targets darwin/amd64" "P3_PLATFORM=darwin/amd64" "$YAML_REPORT"
+    assert_contains "Pipeline 3 clone step disables git-lfs" "P3_CLONE_LFS=NO" "$YAML_REPORT"
     assert_contains "Pipeline 3 has build-dev-dmg step" "build-dev-dmg" "$YAML_REPORT"
     assert_contains "Pipeline 3 has build-release-dmg step" "build-release-dmg" "$YAML_REPORT"
     assert_contains "Pipeline 3 dispatches to shared/ci/manifest.sh" "P3_MANIFEST_DISPATCH=YES" "$YAML_REPORT"

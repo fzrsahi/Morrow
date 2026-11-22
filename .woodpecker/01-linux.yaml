@@ -1,6 +1,12 @@
 # ==============================================================================
 # Pipeline 1: Linux & Windows Fast Lane (Docker Runner on Host)
 # ==============================================================================
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      lfs: false
+
 when:
   - event: [pull_request, tag]
   - event: push

@@ -1,6 +1,12 @@
 # ==============================================================================
 # Pipeline 2: macOS Native Test Suite (macOS Sonoma KVM Runner via local backend)
 # ==============================================================================
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      lfs: false
+
 when:
   - event: [pull_request, tag]
   - event: push
