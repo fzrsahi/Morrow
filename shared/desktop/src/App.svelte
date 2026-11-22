@@ -5,6 +5,7 @@
   // passes on the user's Approve / Deny.
   import { onMount, tick } from 'svelte';
   import { Channel, invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { GONE_NOTICE_MS } from './lib/approval';
   import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
@@ -40,7 +41,9 @@
     type Size,
   } from './lib/panel';
   import {
+    SETTINGS_CHANGED_EVENT,
     SETTINGS_KEYS,
+    appearanceFromSettings,
     sessionDensityFromSettings,
     sessionFilterFromSettings,
   } from './lib/settings';
@@ -56,25 +59,24 @@
     type LyricLine,
     type Track,
   } from './lib/music';
-  import { MOTION, PALETTE, cssVariables } from './lib/tokens';
+  import { MOTION, PALETTE, cssVariables, type Theme } from './lib/tokens';
   import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
   import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
 
   // B (floating pill) is the default: it clears the GNOME top bar. Variant A
   // covers the clock and is used only when a maintainer asks for ?variant=A.
   const variant = resolveVariant(window.location.search);
-  const vars = cssVariables();
-  const css = Object.entries(vars)
-    .map(([key, value]) => `${key}:${value}`)
-    .join(';');
-  const style = [
-    css,
+  // #202: the theme is a view state, not a URL flag. It loads from the same
+  // settings document as the filter and changes live when Settings writes it.
+  let theme = $state<Theme>('pixel');
+  const style = $derived([
+    ...Object.entries(cssVariables(11, theme)).map(([key, value]) => `${key}:${value}`),
     `--open-dur:${OPEN_TRANSITION.durationMs}ms`,
     `--open-ease:${OPEN_TRANSITION.css}`,
     `--close-dur:${CLOSE_TRANSITION.durationMs}ms`,
     `--close-ease:${CLOSE_TRANSITION.css}`,
     `--panel-w:${OPEN_WIDTH}px`,
-  ].join(';');
+  ].join(';'));
 
   let sessions = $state<Session[]>([]);
   let cards = $state<Card[]>([]);
@@ -624,7 +626,17 @@
       .then((stored) => {
         filter = sessionFilterFromSettings(stored);
         density = sessionDensityFromSettings(stored);
+        theme = appearanceFromSettings(stored).theme;
       })
+      .catch(() => {});
+    // #202: Settings lives in another webview. The shell emits one event after
+    // every settings write; adopting the theme here needs no restart and does
+    // not touch the fit/reportCards chain.
+    let unlisten: (() => void) | undefined;
+    void listen<unknown>(SETTINGS_CHANGED_EVENT, (event) => {
+      theme = appearanceFromSettings(event.payload).theme;
+    })
+      .then((off) => (unlisten = off))
       .catch(() => {});
     loadCapabilities();
     // One seed read so the collapsed wing can show a track; the tab effect
@@ -636,6 +648,7 @@
     reportFit(collapsed, false);
 
     return () => {
+      unlisten?.();
       clearTimeout(hoverTimer);
       clearTimeout(collapseTimer);
       clearTimeout(openTimer);
@@ -708,6 +721,7 @@
   class:locked={view.suspended}
   data-variant={variant}
   data-phase={fit.phase}
+  data-theme={theme}
   {style}
   style:width={expanded ? undefined : `${collapsed.width}px`}
   style:height={openHeight === null ? undefined : `${openHeight}px`}
@@ -739,6 +753,7 @@
         aria-label="Open the Morrow panel"
       >
         <CollapsedBar
+          {theme}
           sessionCount={sessions.length}
           {prehover}
           quiet={view.quiet}
@@ -754,6 +769,7 @@
   {/if}
   <div class="panel-content" class:visible={expanded || closing} bind:this={panelContent}>
     <Header
+      {theme}
       {tab}
       {filter}
       {muted}
@@ -775,6 +791,7 @@
           />
         {:else}
           <SessionList
+            {theme}
             {sessions}
             {filter}
             {density}
@@ -787,6 +804,7 @@
       </div>
     {:else}
       <MusicDeck
+        {theme}
         {track}
         state={deck}
         {lyrics}

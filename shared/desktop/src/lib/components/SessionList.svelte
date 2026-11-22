@@ -6,6 +6,7 @@
   import Mascot from './Mascot.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import PixelText from './PixelText.svelte';
+  import LineIcon from './LineIcon.svelte';
   import { displayName } from '../approval';
   import { MASCOT_SIZES } from '../mascots';
   import {
@@ -13,6 +14,7 @@
     branchLabel,
     liveReply,
     mascotStatus,
+    modernStatus,
     subLabel,
     taskGauge,
     taskLabel,
@@ -27,10 +29,11 @@
     splitOverflow,
   } from '../session-list';
   import type { SessionDensity, SessionFilter } from '../panel';
-  import { PALETTE } from '../tokens';
+  import { PALETTE, type Theme } from '../tokens';
   import type { Card, Decision, Session } from '../types';
 
   type Props = {
+    theme?: Theme;
     sessions: Session[];
     filter: SessionFilter;
     density?: SessionDensity;
@@ -41,6 +44,7 @@
     onAnswer?: (id: number, decision: Decision) => void;
   };
   let {
+    theme = 'pixel',
     sessions,
     filter,
     density = 'compact',
@@ -136,6 +140,53 @@
               </span>
             </li>
           {:else}
+            {#if theme === 'modern'}
+              {@const modern = modernStatus(session.status)}
+              <li class="mcard" style="--sc:{modern.color}">
+                <i class="rail"></i>
+                <Mascot
+                  source={session.source}
+                  status={mascotStatus(session.status)}
+                  size={MASCOT_SIZES.card}
+                />
+                <div class="mbody">
+                  <div class="mrow">
+                    <span class="chip">{modern.label}</span>
+                    <b class="mcwd">{session.cwd_name || session.session_id}</b>
+                    {#if session.git_branch}
+                      <span class="mbr"><LineIcon name="branch" size={10} />{session.git_branch}</span>
+                    {/if}
+                    {#if session.subagent_count > 0}
+                      <span class="mtag">+{session.subagent_count} Sub</span>
+                    {/if}
+                    <span class="hsp"></span>
+                    <span class="msrc">{session.source}</span>
+                    <span class="mt">{timeLabel(session.updated_at, Date.now()).toLowerCase()}</span>
+                  </div>
+                  {#if session.current_tool}
+                    <div class="mtool">
+                      <span class="tc" style="--tc:{toolColor(session.current_tool)}">{toolLabel(session.current_tool).charAt(0) + toolLabel(session.current_tool).slice(1).toLowerCase()}</span>
+                      <span>{session.tool_description}</span>
+                    </div>
+                  {/if}
+                  {#if approval}
+                    <div class="mapp">
+                      <span class="tagp">PERMISSION</span>
+                      <span class="mttl">{displayName(approval.tool_name)} wants to run a command</span>
+                      <span class="sp"></span>
+                      <button class="mdeny deny" onclick={() => onAnswer?.(approval.id, 'deny')}>Deny</button>
+                      <button class="mallow approve" onclick={() => onAnswer?.(approval.id, 'allow')}>Allow once</button>
+                    </div>
+                  {/if}
+                  {#if session.last_user_prompt}
+                    <div class="mline"><b>›</b><span>{session.last_user_prompt}</span></div>
+                  {/if}
+                  {#if reply}
+                    <div class="mline reply"><span>{reply}</span></div>
+                  {/if}
+                </div>
+              </li>
+            {:else}
             <li class="pcard" style="--sc:{meta.color}">
               <div class="pslot">
                 <Mascot
@@ -256,6 +307,7 @@
                 {/if}
               </div>
             </li>
+            {/if}
           {/if}
         {/each}
       {/each}
@@ -599,6 +651,141 @@
   }
   .p16.acc {
     background: var(--cyan);
+  }
+
+  /* #202 — canvas.css:194-207 / components.js modernCard(): a single card
+     with a status rail, title-case chip and system-font rows. */
+  .mcard {
+    position: relative;
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    margin: 0 2px;
+    overflow: hidden;
+  }
+  .mcard .rail {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: 3px;
+    background: var(--sc);
+  }
+  .mbody {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    min-width: 0;
+  }
+  .mrow {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--f);
+  }
+  .mrow .hsp {
+    flex: 1;
+  }
+  .chip {
+    font: 700 clamp(9px, calc(var(--f) - 2px), 10px) var(--ui, ui-monospace, monospace);
+    color: var(--sc);
+    background: color-mix(in srgb, var(--sc) 15%, transparent);
+    padding: 2px 5px;
+    border-radius: 4px;
+  }
+  .mcwd {
+    font: 700 var(--f) var(--ui, ui-monospace, monospace);
+  }
+  .msrc,
+  .mbr,
+  .mt {
+    color: rgba(255, 255, 255, 0.55);
+    font: var(--f-sec) var(--ui, ui-monospace, monospace);
+    display: inline-flex;
+    gap: 3px;
+    align-items: center;
+  }
+  .mtag {
+    font: 600 var(--f-cap) var(--ui, system-ui, sans-serif);
+    padding: 1px 5px;
+    border-radius: 4px;
+    color: var(--subagent, #a68cf2);
+    background: color-mix(in srgb, var(--subagent, #a68cf2) 15%, transparent);
+  }
+  .mtool {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    font: var(--f) var(--ui, ui-monospace, monospace);
+    color: rgba(255, 255, 255, 0.85);
+    min-width: 0;
+  }
+  .mtool .tc {
+    font: 700 max(9px, calc(var(--f) - 1px)) var(--ui, ui-monospace, monospace);
+    padding: 1px 4px;
+    border-radius: 3px;
+    color: var(--tc);
+    background: color-mix(in srgb, var(--tc) 15%, transparent);
+  }
+  .mtool span:last-child,
+  .mline span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .mline {
+    display: flex;
+    gap: 6px;
+    font: var(--f) var(--ui, system-ui, sans-serif);
+    color: rgba(255, 255, 255, 0.85);
+  }
+  .mline b {
+    color: var(--green);
+    font-family: var(--ui, ui-monospace, monospace);
+  }
+  .mline.reply {
+    color: rgba(255, 255, 255, 0.65);
+  }
+  .mapp {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .mapp .sp {
+    flex: 1;
+  }
+  .mapp .tagp {
+    padding: 2px 5px;
+    border-radius: 4px;
+    background: rgba(255, 153, 51, 0.14);
+    color: var(--tag);
+    font: 700 var(--f-badge) var(--ui, ui-monospace, monospace);
+  }
+  .mttl {
+    font: 600 var(--f) var(--ui, system-ui, sans-serif);
+    color: rgba(255, 255, 255, 0.92);
+  }
+  .mdeny,
+  .mallow {
+    min-height: 26px;
+    border: 0;
+    border-radius: 6px;
+    padding: 6px 11px;
+    font: 600 var(--f-btn) var(--ui, system-ui, sans-serif);
+  }
+  .mdeny {
+    background: none;
+    color: var(--deny);
+    box-shadow: inset 0 0 0 1px rgba(235, 97, 97, 0.7);
+  }
+  .mallow {
+    color: #fff;
+    background: var(--allow);
+    padding: 6px 14px;
   }
   @media (prefers-reduced-motion: reduce) {
     .gauge i.cur {

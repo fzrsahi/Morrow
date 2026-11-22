@@ -27,6 +27,21 @@ export const PALETTE = {
   agent: '#FF9966',
 } as const;
 
+/** #202 — the two panel themes. Pixel stays the default. */
+export type Theme = 'pixel' | 'modern';
+
+/** NotchPanelView.swift:4432-4440 — the Modern Clean card's status colours. */
+export const MODERN_PALETTE = {
+  needsYou: '#FFB833',
+  working: '#00F5D4',
+  thinking: '#00F5D4',
+  done: '#D9D9D9',
+  idle: 'rgba(255,255,255,.55)',
+  stopped: '#FF8C66',
+  error: '#FF6170',
+  subagent: '#A68CF2',
+} as const;
+
 export type TypeScale = {
   title: number;
   body: number;
@@ -64,9 +79,9 @@ export const MOTION = {
   dwell: 0.5,
 } as const;
 
-export function cssVariables(base = 11): Record<string, string> {
+export function cssVariables(base = 11, theme: Theme = 'pixel'): Record<string, string> {
   const t = typeScale(base);
-  return {
+  const vars: Record<string, string> = {
     '--chassis': PALETTE.chassis,
     '--surface': PALETTE.surface,
     '--raised': PALETTE.surfaceRaised,
@@ -90,5 +105,15 @@ export function cssVariables(base = 11): Record<string, string> {
     '--f-badge': `${t.badge}px`,
     '--f-btn': `${t.button}px`,
     '--f-link': `${t.link}px`,
+    '--ui': theme === 'modern' ? 'system-ui, sans-serif' : 'ui-monospace, monospace',
   };
+  if (theme === 'modern') {
+    // The Modern Clean card swaps the retro status words for title-case chips;
+    // these are the only palette values the canvas changes (#180 keeps the rest).
+    vars['--subagent'] = MODERN_PALETTE.subagent;
+    vars['--s-idle'] = MODERN_PALETTE.idle;
+    vars['--s-stopped'] = MODERN_PALETTE.stopped;
+    vars['--s-error'] = MODERN_PALETTE.error;
+  }
+  return vars;
 }

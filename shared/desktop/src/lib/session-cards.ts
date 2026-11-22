@@ -3,6 +3,7 @@
 // #list-status and #collapsed-working; the shell owns the session data.
 
 import type { MascotStatus } from './mascots';
+import { MODERN_PALETTE } from './tokens';
 import type { CardStatus, Session } from './types';
 
 export type { CardStatus } from './types';
@@ -24,6 +25,30 @@ export const STATUS_META: Record<CardStatus, StatusMeta> = {
   stopped: { label: 'STOPPED', color: '#F25959', tier: 2, fill: false },
   error: { label: 'ERROR', color: '#F25959', tier: 2, fill: false },
 };
+
+/**
+ * #202 — the Modern Clean chip in a session card (components.js ST.m / .mc).
+ * Pixel keeps the shouted badge above; the modern card spells the same state
+ * in title case and gives idle/stopped/error their softer canvas colours.
+ */
+export function modernStatus(status: CardStatus): { label: string; color: string } {
+  switch (status) {
+    case 'needs_you':
+      return { label: 'Needs you', color: MODERN_PALETTE.needsYou };
+    case 'working':
+      return { label: 'Working', color: MODERN_PALETTE.working };
+    case 'thinking':
+      return { label: 'Thinking', color: MODERN_PALETTE.thinking };
+    case 'done':
+      return { label: 'Done', color: MODERN_PALETTE.done };
+    case 'idle':
+      return { label: 'Idle', color: MODERN_PALETTE.idle };
+    case 'stopped':
+      return { label: 'Stopped', color: MODERN_PALETTE.stopped };
+    case 'error':
+      return { label: 'Error', color: MODERN_PALETTE.error };
+  }
+}
 
 export function mascotStatus(status: CardStatus): MascotStatus {
   switch (status) {
