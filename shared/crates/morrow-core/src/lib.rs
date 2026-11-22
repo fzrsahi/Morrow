@@ -36,6 +36,7 @@ pub mod model_label;
 pub mod music;
 pub mod path_identity;
 pub mod reduce;
+pub mod scan_policy;
 pub mod session_recap;
 pub mod sqlite;
 pub mod time;
