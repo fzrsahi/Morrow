@@ -141,38 +141,96 @@ public struct MagSafeChargingBanner: View {
     // MARK: - 1. Pixel 32-Bit Power Banner
 
     private var pixelChargingBanner: some View {
-        let pct = animatedProgress
-
-        return HStack(spacing: 12) {
+        HStack(spacing: 12) {
             ZStack {
-                Rectangle()
-                    .stroke(stateColor.opacity(rippleOpacity), lineWidth: 1.5)
-                    .frame(width: 38, height: 38)
-                    .scaleEffect(rippleScale)
+                Canvas { ctx, _ in
+                    let px: CGFloat = 2.0
+                    let wallColor = Color.white.opacity(0.34)
 
-                Canvas { ctx, size in
-                    let cx = size.width / 2
-                    let cy = size.height / 2
-                    let radius: CGFloat = 16.0
-                    let steps = 64
-                    for i in 0..<steps {
-                        let t = Double(i) / Double(steps)
-                        let angle = t * Double.pi * 2.0 - Double.pi / 2.0
-                        let px = (cx + cos(angle) * radius).rounded()
-                        let py = (cy + sin(angle) * radius).rounded()
-                        let rect = CGRect(x: px - 1.2, y: py - 1.2, width: 2.4, height: 2.4)
-                        if t <= pct {
-                            ctx.fill(Path(rect), with: .color(stateColor))
-                        } else {
-                            ctx.fill(Path(rect), with: .color(Color.white.opacity(0.14)))
+                    // 20x17 integer-grid 16-bit pixel battery casing
+                    ctx.fill(Path(CGRect(x: 1 * px, y: 3 * px, width: 16 * px, height: 1 * px)), with: .color(wallColor))
+                    ctx.fill(Path(CGRect(x: 1 * px, y: 13 * px, width: 16 * px, height: 1 * px)), with: .color(wallColor))
+                    ctx.fill(Path(CGRect(x: 1 * px, y: 3 * px, width: 1 * px, height: 11 * px)), with: .color(wallColor))
+                    ctx.fill(Path(CGRect(x: 16 * px, y: 3 * px, width: 1 * px, height: 11 * px)), with: .color(wallColor))
+                    // Positive terminal nub on right
+                    ctx.fill(Path(CGRect(x: 17 * px, y: 6 * px, width: 2 * px, height: 5 * px)), with: .color(wallColor))
+
+                    // 4 crisp internal pixel energy blocks
+                    let blocks = 4
+                    let ratio = Double(effectiveBattery) / 100.0
+                    let litCount = max(1, Int((ratio * Double(blocks)).rounded()))
+                    for i in 0..<blocks {
+                        let blockColor = i < litCount ? stateColor : Color.white.opacity(0.10)
+                        let bx = (3.0 + Double(i) * 3.2) * px
+                        ctx.fill(
+                            Path(CGRect(x: bx, y: 5 * px, width: 2.4 * px, height: 7 * px)),
+                            with: .color(blockColor)
+                        )
+                    }
+
+                    // 7x7 crisp integer-grid status glyph centered inside the battery (matches Opsi B preview)
+                    let glyphMatrix: [[Int]] = {
+                        switch effectiveState {
+                        case .charging:
+                            return [
+                                [0,0,0,1,1,0,0],
+                                [0,0,1,1,0,0,0],
+                                [0,1,1,0,0,0,0],
+                                [1,1,1,1,1,1,0],
+                                [0,0,0,1,1,0,0],
+                                [0,0,1,1,0,0,0],
+                                [0,1,1,0,0,0,0]
+                            ]
+                        case .onHold:
+                            return [
+                                [0,1,1,0,1,1,0],
+                                [0,1,1,0,1,1,0],
+                                [0,1,1,0,1,1,0],
+                                [0,1,1,0,1,1,0],
+                                [0,1,1,0,1,1,0],
+                                [0,1,1,0,1,1,0],
+                                [0,1,1,0,1,1,0]
+                            ]
+                        case .fullyCharged:
+                            return [
+                                [0,0,0,0,0,0,1],
+                                [0,0,0,0,0,1,1],
+                                [0,0,0,0,1,1,0],
+                                [1,0,0,1,1,0,0],
+                                [1,1,1,1,0,0,0],
+                                [0,1,1,0,0,0,0],
+                                [0,0,0,0,0,0,0]
+                            ]
+                        case .lowBattery:
+                            return [
+                                [0,0,1,1,1,0,0],
+                                [0,0,1,1,1,0,0],
+                                [0,0,1,1,1,0,0],
+                                [0,0,1,1,1,0,0],
+                                [0,0,0,0,0,0,0],
+                                [0,0,1,1,1,0,0],
+                                [0,0,1,1,1,0,0]
+                            ]
+                        }
+                    }()
+
+                    for (r, row) in glyphMatrix.enumerated() {
+                        for (c, bit) in row.enumerated() where bit == 1 {
+                            ctx.fill(
+                                Path(CGRect(
+                                    x: (5.5 + Double(c)) * px,
+                                    y: (5.0 + Double(r)) * px,
+                                    width: px,
+                                    height: px
+                                )),
+                                with: .color(.white)
+                            )
                         }
                     }
                 }
-                .frame(width: 42, height: 42)
-
-                PixelIcon(glyph: pixelGlyph, color: .white, pixelSize: 1.5)
-                    .scaleEffect(pulseRing ? 1.07 : 0.95)
+                .frame(width: 40, height: 34)
             }
+            .layoutPriority(2)
 
             VStack(alignment: .leading, spacing: 3) {
                 PixelText(text: effectiveState.title.uppercased(), color: .white, pixelSize: 1.45)
