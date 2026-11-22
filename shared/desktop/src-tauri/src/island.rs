@@ -183,14 +183,30 @@ pub struct Rect {
     height: f64,
 }
 
-/// A Question card opened or closed: on Windows the panel takes keyboard focus
-/// for as long as it is open, and gives it back when it closes (#106). On other
-/// platforms the window can always be focused, so this is a no-op.
+/// A Question card opened or closed: the panel takes keyboard focus for as
+/// long as a typed field is open, and gives it back when it closes (#106,
+/// W-005). On Windows this lifts `WS_EX_NOACTIVATE`; on Linux X11 the window
+/// is `focusable(false)` too (GTK accept-focus false), so toggle it before
+/// presenting the window or the keystrokes never reach the field. macOS keeps
+/// its native behaviour.
 #[tauri::command]
 pub fn island_question_focus(window: WebviewWindow, open: bool) -> Result<(), String> {
     #[cfg(windows)]
     return crate::windows_panel::set_question_focus(&window, open);
-    #[cfg(not(windows))]
+
+    #[cfg(target_os = "linux")]
+    {
+        // tao maps `focusable` to gtk_window_set_accept_focus. Presenting an
+        // already-mapped window then hands the keyboard to it; closing puts
+        // the overlay back to non-activating so clicks reach the app below.
+        window.set_focusable(open).map_err(|error| error.to_string())?;
+        if open {
+            window.set_focus().map_err(|error| error.to_string())?;
+        }
+        Ok(())
+    }
+
+    #[cfg(not(any(windows, target_os = "linux")))]
     {
         let _ = (window, open);
         Ok(())

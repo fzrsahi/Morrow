@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   answersOf,
   canConfirm,
+  canSubmitTyped,
   goBack,
   goNext,
   isQuestion,
@@ -14,6 +15,8 @@ import {
   pickIndex,
   progressChip,
   putWizard,
+  questionInput,
+  QuestionFocusGate,
   togglePick,
   wizardFor,
   type QuestionPrompt,
@@ -26,6 +29,43 @@ describe('number keys (#question)', () => {
     for (const key of ['0', 'a', '', '10', 'Enter', '1x']) {
       expect(pickIndex(key)).toBeNull();
     }
+  });
+});
+
+describe('typed answers (#question, #question-multi)', () => {
+  test('a prompt with no options is free text: the field shows at once', () => {
+    expect(questionInput([])).toBe('free');
+  });
+
+  test('a prompt with options appends the Other row that reveals the field', () => {
+    expect(questionInput([{ label: 'A' }])).toBe('other');
+  });
+
+  test('only typed text can be submitted, never an empty field', () => {
+    expect(canSubmitTyped('')).toBe(false);
+    expect(canSubmitTyped('Jotai, we already use it in admin')).toBe(true);
+  });
+});
+
+describe('typed-field focus (#189)', () => {
+  test('clicking a field asks the island for focus once per card', () => {
+    const gate = new QuestionFocusGate();
+    expect(gate.focus(7)).toEqual({ open: true });
+    expect(gate.focus(7)).toBeNull();
+  });
+
+  test('closing the owning card gives focus back once', () => {
+    const gate = new QuestionFocusGate();
+    gate.focus(7);
+    expect(gate.release()).toEqual({ open: false });
+    expect(gate.release()).toBeNull();
+  });
+
+  test('a field re-asks for focus after its card closed', () => {
+    const gate = new QuestionFocusGate();
+    gate.focus(7);
+    gate.release();
+    expect(gate.focus(7)).toEqual({ open: true });
   });
 });
 

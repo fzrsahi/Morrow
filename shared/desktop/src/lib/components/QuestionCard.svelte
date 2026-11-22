@@ -1,14 +1,17 @@
 <script lang="ts">
   // #188 — the single-choice Question card of sections #question /
   // #collapsed-attention. The shell holds the hook and writes the answer.
+  // #189 — the Other row and no-option prompts get a real, focused input.
   // #190 — #question-multi: multi-select rows and the multi-question wizard.
   // This component only draws the current prompt and forwards the actions;
   // the shell owns the per-request wizard state and builds the reply.
+  import { tick } from 'svelte';
   import Mascot from './Mascot.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import { GONE_NOTICE, SHORTCUTS, queueLabel, shortcutHint } from '../approval';
   import { MASCOT_SIZES } from '../mascots';
   import { PALETTE } from '../tokens';
+  import { canSubmitTyped, OTHER_LABEL, questionInput } from '../question';
   import type { QuestionCardView } from '../question';
   import type { QuestionPrompt, Session } from '../types';
 
@@ -38,6 +41,8 @@
     onAdvance: (id: number) => void;
     onSkip: (id: number) => void;
     onHide: (id: number) => void;
+    /** #189: the field was clicked; the panel asks the island for keyboard focus. */
+    onFieldFocus: (id: number) => void;
   };
   let {
     card,
@@ -58,13 +63,60 @@
     onAdvance,
     onSkip,
     onHide,
+    onFieldFocus,
   }: Props = $props();
 
   let hovered = $state(-1);
+  let draft = $state('');
+  let showOther = $state(false);
+  let inputEl: HTMLInputElement;
   let queue = $derived(queueLabel(position, total));
   let hideKey = $derived(shortcutHint(SHORTCUTS.hide, hotkeySupported));
   let immediate = $derived(!prompt.multi_select && chip === '');
+  // #189: typing belongs to a single prompt; #190's multi-select / wizard
+  // keeps its own Confirm / Next path and is left untouched.
+  let typed = $derived(immediate ? questionInput(prompt.options) : null);
+  let canSubmit = $derived(canSubmitTyped(draft) && !gone);
+
+  // The Other row reveals the field and focuses it; the input's onfocus is
+  // the one place that asks the shell to make the island keyboard-accessible.
+  async function revealOther() {
+    if (gone) return;
+    showOther = true;
+    await tick();
+    inputEl?.focus();
+  }
+
+  function submit() {
+    if (!canSubmit) return;
+    onPick(card.id, draft);
+  }
+
+  function onFieldKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    submit();
+  }
+
 </script>
+
+{#snippet answerField()}
+  <!-- #189: a real input; the blue :focus-within ring is the canvas' .ans.focus. -->
+  <div class="ans">
+    <b aria-hidden="true">&gt;</b>
+    <input
+      bind:this={inputEl}
+      class="field"
+      type="text"
+      placeholder="Type your answer..."
+      aria-label="Your answer"
+      bind:value={draft}
+      disabled={gone}
+      onfocus={() => onFieldFocus(card.id)}
+      onkeydown={onFieldKeydown}
+    />
+  </div>
+{/snippet}
 
 <!-- data-card is the E2E-1 seam, shared with the approval card. -->
 <section class="card" class:dim={gone} data-card={card.id} aria-label="Question">
@@ -94,37 +146,59 @@
     <span class="qt">{prompt.question}</span>
     {#if chip}<span class="prog">{chip}</span>{/if}
   </div>
-  <div class="opts">
-    {#each prompt.options as option, i (i)}
-      <button
-        class="opt"
-        class:hov={hovered === i}
-        class:sel={picks.includes(i)}
-        disabled={gone}
-        aria-pressed={prompt.multi_select ? picks.includes(i) : undefined}
-        onpointerenter={() => (hovered = i)}
-        onpointerleave={() => (hovered = -1)}
-        onclick={() => (immediate ? onPick(card.id, option.label) : onToggle(card.id, i))}
-      >
-        <span class="mk">▸</span>
-        {#if prompt.multi_select}
-          <span class="cb" aria-hidden="true">
-            {#if picks.includes(i)}
-              <svg viewBox="0 0 16 16" width="9" height="9">
-                <path d="M3.5 8.5l3 3 6-7" stroke="#000" stroke-width="2" fill="none" />
-              </svg>
-            {/if}
+  {#if typed === 'free'}
+    {@render answerField()}
+  {:else}
+    <div class="opts">
+      {#each prompt.options as option, i (i)}
+        <button
+          class="opt"
+          class:hov={hovered === i}
+          class:sel={picks.includes(i)}
+          disabled={gone}
+          aria-pressed={prompt.multi_select ? picks.includes(i) : undefined}
+          onpointerenter={() => (hovered = i)}
+          onpointerleave={() => (hovered = -1)}
+          onclick={() => (immediate ? onPick(card.id, option.label) : onToggle(card.id, i))}
+        >
+          <span class="mk">▸</span>
+          {#if prompt.multi_select}
+            <span class="cb" aria-hidden="true">
+              {#if picks.includes(i)}
+                <svg viewBox="0 0 16 16" width="9" height="9">
+                  <path d="M3.5 8.5l3 3 6-7" stroke="#000" stroke-width="2" fill="none" />
+                </svg>
+              {/if}
+            </span>
+          {:else}
+            <span class="ix">{i + 1}.</span>
+          {/if}
+          <span class="body">
+            <span class="ol">{option.label}</span>
+            {#if option.description}<span class="od">{option.description}</span>{/if}
           </span>
-        {:else}
-          <span class="ix">{i + 1}.</span>
-        {/if}
-        <span class="body">
-          <span class="ol">{option.label}</span>
-          {#if option.description}<span class="od">{option.description}</span>{/if}
-        </span>
-      </button>
-    {/each}
-  </div>
+        </button>
+      {/each}
+      {#if typed === 'other'}
+        <button
+          class="opt"
+          class:hov={hovered === -2}
+          class:sel={showOther}
+          disabled={gone}
+          onpointerenter={() => (hovered = -2)}
+          onpointerleave={() => (hovered = -1)}
+          onclick={revealOther}
+        >
+          <span class="mk">▸</span>
+          <span class="ix">…</span>
+          <span class="body"><span class="ol">{OTHER_LABEL}</span></span>
+        </button>
+      {/if}
+    </div>
+    {#if showOther}
+      {@render answerField()}
+    {/if}
+  {/if}
   <div class="acts">
     {#if canBack}
       <button class="btn q back" disabled={gone} onclick={() => onBack(card.id)}>
@@ -138,7 +212,9 @@
     <button class="btn q" disabled={gone} onclick={() => onHide(card.id)}
       >Hide{#if hideKey}<kbd>{hideKey}</kbd>{/if}</button>
     <button class="btn s" disabled={gone} onclick={() => onSkip(card.id)}>Skip</button>
-    {#if !immediate}
+    {#if typed === 'free' || showOther}
+      <button class="btn p" disabled={!canSubmit} onclick={submit}>Submit</button>
+    {:else if !immediate}
       <button class="btn p" disabled={gone || !canAdvance} onclick={() => onAdvance(card.id)}
         >{isLast ? 'Confirm' : 'Next'}</button>
     {/if}
@@ -278,6 +354,40 @@
     font: var(--f-cap) system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.58);
   }
+  /* #189 — canvas .ans: padding 6 × 10, white 0.05 fill, white 0.10 stroke. */
+  .ans {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    font: var(--f-link) system-ui, sans-serif;
+  }
+  .ans:focus-within {
+    box-shadow: inset 0 0 0 1px rgba(102, 179, 255, 0.55);
+  }
+  .ans b {
+    color: var(--green);
+    font: 700 var(--f-sec) ui-monospace, monospace;
+  }
+  .field {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: #fff;
+    font: inherit;
+  }
+  .field::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+  }
+  .field:disabled {
+    cursor: default;
+  }
   .acts {
     display: flex;
     align-items: center;
@@ -358,8 +468,8 @@
     background: var(--allow);
   }
   .btn.p:hover:not(:disabled) {
-    background: var(--allow);
-    filter: brightness(1.08);
+    /* canvas --allow-h / PALETTE.allowHover */
+    background: #2b8742;
   }
   .btn.p:disabled {
     background: rgba(41, 128, 61, 0.22);
