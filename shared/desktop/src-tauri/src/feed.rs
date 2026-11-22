@@ -194,7 +194,7 @@ impl Feed {
 
     /// Holds `payload` as a permission card; its decision arrives on the
     /// receiver.
-    pub fn hold(&self, payload: &HookPayload) -> (u64, Receiver<Decision>) {
+    pub fn hold(&self, payload: &HookPayload) -> (u64, Receiver<Vec<u8>>) {
         let (answer, decision) = mpsc::channel();
         let id = self.change(|state| state.permissions.hold(payload, answer));
         (id, decision)
@@ -203,6 +203,16 @@ impl Feed {
     /// The user's answer to card `id`; false if it is no longer held.
     pub fn answer(&self, id: u64, decision: Decision) -> bool {
         self.change(|state| state.permissions.answer(id, decision))
+    }
+
+    /// #188: a question option was picked; its label is echoed as the answer.
+    pub fn answer_question(&self, id: u64, pick: &str) -> bool {
+        self.change(|state| state.permissions.answer_question(id, pick))
+    }
+
+    /// #188: the question card was skipped, not answered.
+    pub fn skip_question(&self, id: u64) -> bool {
+        self.change(|state| state.permissions.skip_question(id))
     }
 
     /// Card `id`'s hook is gone.

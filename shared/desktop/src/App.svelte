@@ -14,7 +14,9 @@
   import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
+  import QuestionCard from './lib/components/QuestionCard.svelte';
   import VolumeHud from './lib/components/VolumeHud.svelte';
+  import { isQuestion, pickIndex } from './lib/question';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -84,6 +86,9 @@
   // on a request the shell no longer holds shows a notice before it drops.
   let hiddenIds = $state<number[]>([]);
   let gone = $state<{ card: Card }[]>([]);
+  // #188: the option being answered, held while the shell writes the reply so
+  // a click (or a number key) shows the canvas' selected row until it lands.
+  let selected = $state<{ id: number; label: string } | null>(null);
   let hotkeySupported = $state(false);
   // #191: the last finished turn. The shell has already decided (via the
   // attention policy) whether it is a card, a glance or nothing at all.
@@ -155,6 +160,13 @@
   );
   let visibleCards = $derived([...liveCards, ...gone.map((g) => g.card)]);
   let hiddenCount = $derived(cards.filter((card) => hiddenIds.includes(card.id)).length);
+  // #188: the bell is for approvals, the amber `?` for questions.
+  let hiddenApprovals = $derived(
+    cards.filter((card) => !isQuestion(card) && hiddenIds.includes(card.id)).length,
+  );
+  let hiddenQuestions = $derived(
+    cards.filter((card) => isQuestion(card) && hiddenIds.includes(card.id)).length,
+  );
   // #186 bell + #193 music wing both need room in the tight-fit pill.
   // Idle music is the canvas' 292 pt frame; a working bar keeps its wider size.
   let collapsed = $derived({
@@ -173,13 +185,13 @@
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   const POLL_MS = 1000;
 
-  async function answer(id: number, decision: Decision) {
-    // Capture before the await: the feed can drop the card while IPC is in
-    // flight, and the notice still needs the words it had when clicked.
+  // All three answers share the "answered elsewhere" path: the feed can drop
+  // a card while IPC is in flight, so the notice keeps the words it had when
+  // clicked. `send` is the one shell call that differs between them.
+  async function settle(id: number, send: () => Promise<boolean>) {
     const card = cards.find((c) => c.id === id);
     try {
-      const answered = await invoke<boolean>('answer_permission', { id, decision });
-      if (answered) {
+      if (await send()) {
         hiddenIds = hiddenIds.filter((hidden) => hidden !== id);
       } else {
         // Answered in the terminal (or its hook went) before this click.
@@ -190,7 +202,42 @@
       }
     } catch (error) {
       hooksError = String(error);
+    } finally {
+      if (selected?.id === id) selected = null;
     }
+  }
+
+  function answer(id: number, decision: Decision) {
+    return settle(id, () => invoke<boolean>('answer_permission', { id, decision }));
+  }
+
+  // #188: one click (or number key) answers at once. The shell keys the reply
+  // by question text; the label we send is the option the user picked.
+  function answerQuestion(id: number, label: string) {
+    if (selected?.id === id) return;
+    selected = { id, label };
+    return settle(id, () => invoke<boolean>('answer_question', { id, answer: label }));
+  }
+
+  // #188: macOS' Skip answers the hook without a pick (deny for a
+  // PermissionRequest, bare output for a Notification question).
+  function skipQuestion(id: number) {
+    if (selected?.id === id) return;
+    return settle(id, () => invoke<boolean>('skip_question', { id }));
+  }
+
+  // #question: 1–9 pick the first visible question while the panel is open.
+  function onKeyDown(event: KeyboardEvent) {
+    if (!expanded || closing || event.ctrlKey || event.altKey || event.metaKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName)) return;
+    const index = pickIndex(event.key);
+    if (index === null) return;
+    const card = liveCards.find(isQuestion);
+    const label = card?.question?.options[index]?.label;
+    if (!card || !label) return;
+    event.preventDefault();
+    void answerQuestion(card.id, label);
   }
 
   function hide(id: number) {
@@ -227,10 +274,15 @@
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     };
     for (const el of island.querySelectorAll<HTMLElement>('[data-card]')) {
+      // #188: a question card has no Approve / Deny buttons; E2E-1 measures
+      // approvals, so leave question cards out of that report.
+      const approve = el.querySelector('.approve');
+      const deny = el.querySelector('.deny');
+      if (!approve || !deny) continue;
       invoke('smoke_card', {
         id: Number(el.dataset.card),
-        approve: rect(el.querySelector('.approve')),
-        deny: rect(el.querySelector('.deny')),
+        approve: rect(approve),
+        deny: rect(deny),
       });
     }
   }
@@ -388,6 +440,10 @@
       suppressClick = false;
       return;
     }
+    // #188: macOS' collapsed question badge reopens a card the user hid;
+    // approvals keep #186's bell-only reminder.
+    const reopened = cards.find((card) => isQuestion(card) && hiddenIds.includes(card.id));
+    if (reopened) hiddenIds = hiddenIds.filter((id) => id !== reopened.id);
     openPanel();
   }
 
@@ -692,7 +748,14 @@
   // #186: a card's title and body can change while its count stays the same.
   let cardContent = $derived(
     visibleCards
-      .map((card) => `${card.id}:${card.tool_name}:${JSON.stringify(card.tool_input)}`)
+      .map((card) => {
+        const question = card.question
+          ? `${card.question.question}:${card.question.header}:${card.question.options
+              .map((option) => `${option.label}/${option.description}`)
+              .join(',')}`
+          : '';
+        return `${card.id}:${card.tool_name}:${JSON.stringify(card.tool_input)}:${question}`;
+      })
       .join('|'),
   );
 
@@ -712,6 +775,8 @@
     });
   });
 </script>
+
+<svelte:window onkeydown={onKeyDown} />
 
 <div
   class="island"
@@ -758,7 +823,8 @@
           {prehover}
           quiet={view.quiet}
           {active}
-          hiddenApprovals={hiddenCount}
+          {hiddenApprovals}
+          {hiddenQuestions}
           {track}
           glance={completion !== null && completion.presentation !== 'status_only'}
           glanceLabel={completionSession?.cwd_name ?? ''}
@@ -819,16 +885,31 @@
     {#if visibleCards.length > 0}
       <div class="padded cards">
         {#each visibleCards as card, i (card.id)}
-          <PermissionCard
-            {card}
-            session={sessions.find((s) => s.session_id === card.session_id) ?? null}
-            position={i + 1}
-            total={visibleCards.length}
-            {hotkeySupported}
-            gone={gone.some((g) => g.card.id === card.id)}
-            onAnswer={answer}
-            onHide={hide}
-          />
+          {#if isQuestion(card)}
+            <QuestionCard
+              {card}
+              session={sessions.find((s) => s.session_id === card.session_id) ?? null}
+              position={i + 1}
+              total={visibleCards.length}
+              {hotkeySupported}
+              selected={selected?.id === card.id ? selected.label : null}
+              gone={gone.some((g) => g.card.id === card.id)}
+              onPick={answerQuestion}
+              onSkip={skipQuestion}
+              onHide={hide}
+            />
+          {:else}
+            <PermissionCard
+              {card}
+              session={sessions.find((s) => s.session_id === card.session_id) ?? null}
+              position={i + 1}
+              total={visibleCards.length}
+              {hotkeySupported}
+              gone={gone.some((g) => g.card.id === card.id)}
+              onAnswer={answer}
+              onHide={hide}
+            />
+          {/if}
         {/each}
       </div>
     {/if}

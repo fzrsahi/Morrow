@@ -56,6 +56,19 @@ fn answer_permission(feed: State<'_, Arc<Feed>>, id: u64, decision: Decision) ->
     feed.answer(id, decision)
 }
 
+/// #188: one option of a Question card. The shell keys the reply by question
+/// text (not header) and writes `updatedInput.answers` exactly as macOS does.
+#[tauri::command]
+fn answer_question(feed: State<'_, Arc<Feed>>, id: u64, answer: String) -> bool {
+    feed.answer_question(id, &answer)
+}
+
+/// #188: Skip closes the card without answering it — deny for AskUserQuestion.
+#[tauri::command]
+fn skip_question(feed: State<'_, Arc<Feed>>, id: u64) -> bool {
+    feed.skip_question(id)
+}
+
 /// #185: the ✕ on a session card removes it from the shell's store.
 #[tauri::command]
 fn session_dismiss(feed: State<'_, Arc<Feed>>, session_id: String) {
@@ -101,6 +114,8 @@ fn main() -> ExitCode {
         .invoke_handler(tauri::generate_handler![
             subscribe,
             answer_permission,
+            answer_question,
+            skip_question,
             session_dismiss,
             island::set_island_size,
             island::move_island,

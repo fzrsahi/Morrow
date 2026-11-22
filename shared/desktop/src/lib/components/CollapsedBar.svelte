@@ -20,6 +20,8 @@
     active?: Session | null;
     /** #186: approvals the user hid are still pending — the bell stays. */
     hiddenApprovals?: number;
+    /** #188: hidden questions keep the amber `?` of canvas #collapsed-attention. */
+    hiddenQuestions?: number;
     /** #193: currently playing track; null leaves the #183 bar untouched. */
     track?: Track | null;
     /** #191: last turn finished — canvas #collapsed-attention's cyan check. */
@@ -33,6 +35,7 @@
     quiet = false,
     active = null,
     hiddenApprovals = 0,
+    hiddenQuestions = 0,
     track = null,
     glance = false,
     glanceLabel = '',
@@ -158,6 +161,30 @@
         <path d="M6.8 13.6a1.3 1.3 0 0 0 2.4 0" />
       </svg>
     {/if}
+    {#if hiddenQuestions > 0}
+      <!-- #188: canvas #collapsed-attention's `question-dismissed`: the user
+           hid the card, so the question bubble waits without pulsing. -->
+      <svg
+        class="qbubble"
+        viewBox="0 0 15 14"
+        width="15"
+        height="14"
+        aria-label="{hiddenQuestions} hidden questions waiting"
+        role="img"
+      >
+        <path
+          d="M2 1h11a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 10H6l-3.5 3V10H2A1.5 1.5 0 0 1 .5 8.5v-6A1.5 1.5 0 0 1 2 1z"
+          fill="#FFB347"
+        />
+        <path
+          d="M5.8 4.2a1.7 1.7 0 1 1 2.3 1.6c-.5.2-.6.5-.6 1M7.5 8.2h.01"
+          stroke="#000"
+          stroke-width="1.3"
+          fill="none"
+          stroke-linecap="round"
+        />
+      </svg>
+    {/if}
     {#if quiet}
       <!-- #197: canvas #collapsed-ambient, quiet frame. The moon is a line
            icon (no bitmap in pixel-icons.json), coloured with the #180 token. -->
@@ -217,7 +244,8 @@
   /* #180 idle/empty states keep their 21 pt mascot; #183 reuses it working. */
   .moon,
   .bell,
-  .check {
+  .check,
+  .qbubble {
     flex: none;
   }
   .bell {
