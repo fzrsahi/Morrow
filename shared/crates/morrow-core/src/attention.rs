@@ -10,6 +10,8 @@
 //! with the `morrow-platform` adapters (plan §5.2) and no fixture covers it.
 //! Until then a shell settles what it has in its own outlets.
 
+use serde::Serialize;
+
 use crate::reduce::{HookEventFacts, SessionSnapshot};
 
 /// `SoundCue`: the sound cues the policy speaks in, as `SoundManager` keys
@@ -395,4 +397,45 @@ fn finished_turn_intents(turn_failed: bool, subject: AttentionSubject) -> Attent
 /// it themselves: an interrupted turn is not news to anyone.
 fn follow_up(turn_failed: bool, subject: AttentionSubject) -> Option<FollowUpIntent> {
     (!subject.interrupted).then_some(FollowUpIntent::TrackCompletion { turn_failed })
+}
+
+// MARK: Settling completions (AttentionPolicy.settle)
+
+/// The three-way completion notification style (Settings › Behavior), as
+/// `CompletionStyle` in Swift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CompletionStyle {
+    Expand,
+    Glance,
+    Off,
+}
+
+/// How the island shows a finished turn — `CompletionPresentation` in Swift.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CompletionPresentation {
+    /// Completion style "off": the session card updates, nothing pops.
+    StatusOnly,
+    /// The collapsed bar lights its cyan check.
+    Glance,
+    /// The completion card opens with the reply.
+    Card,
+}
+
+/// The completion half of `settle(_:context:)`: what the user's settings and
+/// the room allow. Swift reads the settings and the frontmost app itself;
+/// here the shell supplies them. A card Smart Suppress holds back becomes a
+/// glance — the turn is still tracked, but the user is already looking at it.
+pub fn settle_completion(
+    completion: Option<&Completion>,
+    style: CompletionStyle,
+    session_in_front: bool,
+) -> Option<CompletionPresentation> {
+    let _ = completion?;
+    Some(match style {
+        CompletionStyle::Off => CompletionPresentation::StatusOnly,
+        CompletionStyle::Glance => CompletionPresentation::Glance,
+        CompletionStyle::Expand if session_in_front => CompletionPresentation::Glance,
+        CompletionStyle::Expand => CompletionPresentation::Card,
+    })
 }

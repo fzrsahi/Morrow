@@ -55,7 +55,49 @@ export type Card = {
   tool_input: ToolInput;
 };
 
-export type Snapshot = { sessions: Session[]; permissions: Card[] };
+/** Inline spans are parsed by `morrow_core::markdown`; the panel never parses
+ *  Markdown itself. `spans` nests for `strong` / `emphasis`. */
+export type InlineSpan = {
+  kind: 'text' | 'code' | 'link' | 'strong' | 'emphasis';
+  text: string;
+  url?: string;
+  spans?: InlineSpan[];
+};
+
+export type MarkdownListItem = {
+  checkbox: 'unchecked' | 'checked' | null;
+  blocks: MarkdownBlock[];
+};
+
+/** Mirrors the serialized `morrow_core::markdown::MarkdownBlock`. */
+export type MarkdownBlock =
+  | { kind: 'heading'; level: number; spans: InlineSpan[] }
+  | { kind: 'paragraph'; spans: InlineSpan[] }
+  | { kind: 'list'; ordered: boolean; start: number; items: MarkdownListItem[] }
+  | { kind: 'code'; language: string | null; code: string; closed: boolean }
+  | {
+      kind: 'table';
+      header: InlineSpan[][];
+      alignments: ('automatic' | 'leading' | 'center' | 'trailing')[];
+      rows: InlineSpan[][][];
+    }
+  | { kind: 'quote'; blocks: MarkdownBlock[] }
+  | { kind: 'thematic_break' };
+
+/** `AttentionDecision.completion` settled for the panel (style + Smart Suppress). */
+export type Completion = {
+  session_id: string;
+  updated_at: number;
+  turn_failed: boolean;
+  presentation: 'status_only' | 'glance' | 'card';
+  blocks: MarkdownBlock[];
+};
+
+export type Snapshot = {
+  sessions: Session[];
+  permissions: Card[];
+  completion: Completion | null;
+};
 export type Decision = 'allow' | 'deny';
 
 export type HooksStatus = {

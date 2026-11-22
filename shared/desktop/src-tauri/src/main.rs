@@ -3,6 +3,7 @@
 //! tight-fit, nonactivating panel, which answers permission requests.
 
 mod adapters;
+mod completion;
 mod feed;
 mod hooks;
 mod hotkey;

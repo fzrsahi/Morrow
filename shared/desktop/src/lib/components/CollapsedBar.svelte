@@ -20,6 +20,9 @@
     hiddenApprovals?: number;
     /** #193: currently playing track; null leaves the #183 bar untouched. */
     track?: Track | null;
+    /** #191: last turn finished — canvas #collapsed-attention's cyan check. */
+    glance?: boolean;
+    glanceLabel?: string;
   };
   let {
     sessionCount,
@@ -28,6 +31,8 @@
     active = null,
     hiddenApprovals = 0,
     track = null,
+    glance = false,
+    glanceLabel = '',
   }: Props = $props();
 
   // #193: canvas #collapsed-ambient fixes the wing's place — note + title on
@@ -42,7 +47,9 @@
     active ? (toolName ? 'tool' : 'thinking') : sessionCount > 0 ? 'idle' : 'empty',
   );
   let dockLabel = $derived(
-    active ? middleTruncate(active.cwd_name || active.session_id, 26) : '',
+    active || glance
+      ? middleTruncate(glanceLabel || active?.cwd_name || active?.session_id || '', 26)
+      : '',
   );
 </script>
 
@@ -81,6 +88,30 @@
         <PixelIcon name="workspace" size={0.9} color={PALETTE.cyan} />
         <span class="t">{dockLabel}</span>
       </span>
+    {:else if glance}
+      <span class="dock">
+        <PixelIcon name="workspace" size={0.9} color={PALETTE.cyan} />
+        <span class="t">{dockLabel}</span>
+      </span>
+      <svg
+        class="check"
+        width="13"
+        height="13"
+        viewBox="0 0 16 16"
+        fill={PALETTE.cyan}
+        aria-label="completed"
+        role="img"
+      >
+        <circle cx="8" cy="8" r="7" />
+        <path
+          d="M4.8 8.3l2.2 2.2 4.2-4.6"
+          stroke="#000"
+          stroke-width="1.8"
+          fill="none"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        />
+      </svg>
     {:else if state === 'empty' && !quiet}
       <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
     {:else}
@@ -159,7 +190,8 @@
   }
   /* #180 idle/empty states keep their 21 pt mascot; #183 reuses it working. */
   .moon,
-  .bell {
+  .bell,
+  .check {
     flex: none;
   }
   .bell {
@@ -209,6 +241,9 @@
     to {
       height: 10px;
     }
+  }
+  .check {
+    filter: drop-shadow(0 0 2px var(--cyan));
   }
   .thinkdots {
     display: inline-flex;

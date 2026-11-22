@@ -8,10 +8,17 @@
   import { GONE_NOTICE_MS } from './lib/approval';
   import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
+  import CompletionCard from './lib/components/CompletionCard.svelte';
   import Header from './lib/components/Header.svelte';
   import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
+  import {
+    COMPLETION_AUTO_COLLAPSE_MS,
+    CompletionGate,
+    completionKey,
+    shouldAutoOpen,
+  } from './lib/completion';
   import {
     COLLAPSED_SIZE,
     CLOSE_TRANSITION,
@@ -47,8 +54,8 @@
     type LyricLine,
     type Track,
   } from './lib/music';
-  import { MOTION, cssVariables } from './lib/tokens';
-  import type { CapabilityRow, Card, Decision, Session, Snapshot } from './lib/types';
+  import { MOTION, PALETTE, cssVariables } from './lib/tokens';
+  import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
 
   // B (floating pill) is the default: it clears the GNOME top bar. Variant A
   // covers the clock and is used only when a maintainer asks for ?variant=A.
@@ -73,6 +80,10 @@
   let hiddenIds = $state<number[]>([]);
   let gone = $state<{ card: Card }[]>([]);
   let hotkeySupported = $state(false);
+  // #191: the last finished turn. The shell has already decided (via the
+  // attention policy) whether it is a card, a glance or nothing at all.
+  let completion = $state<Completion | null>(null);
+  let seenCompletion = $state<string | null>(null);
   let expanded = $state(false);
   let closing = $state(false);
   let prehover = $state(false);
@@ -91,6 +102,7 @@
 
   const fit = new IslandFit();
   const collapseGate = new CollapseGate();
+  const completionGate = new CompletionGate();
   const quitGate = new QuitGate();
   const drag = new DragGate();
   let dragging = $state(false);
@@ -100,6 +112,7 @@
   let openTimer: ReturnType<typeof setTimeout>;
   let closeTimer: ReturnType<typeof setTimeout>;
   let quitTimer: ReturnType<typeof setTimeout>;
+  let completionTimer: ReturnType<typeof setTimeout> | undefined;
 
   // #197: the three scene facts, and which adapters can read them here.
   let ambient = $state<AmbientState>({ fullscreen: false, locked: false, quiet: false });
@@ -135,7 +148,9 @@
         (hiddenCount > 0 ? 20 : 0),
     ),
     height: COLLAPSED_SIZE.height,
-  });
+  });  let completionSession = $derived(
+    completion ? (sessions.find((s) => s.session_id === completion!.session_id) ?? null) : null,
+  );
   let lastCollapsedWidth = COLLAPSED_SIZE.width;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   const POLL_MS = 1000;
@@ -260,6 +275,8 @@
     clearTimeout(collapseTimer);
     clearTimeout(openTimer);
     clearTimeout(closeTimer);
+    clearTimeout(completionTimer);
+    completionTimer = undefined;
     if (fit.phase !== 'open') return;
     // Keep the OS window at the open size while the panel animates shut.
     fit.close();
@@ -278,6 +295,7 @@
     if (dragging) return;
     clearTimeout(collapseTimer);
     collapseGate.enter();
+    if (completionGate.active) completionGate.enter();
     if (fit.phase === 'collapsed') {
       prehover = true;
       clearTimeout(hoverTimer);
@@ -290,8 +308,15 @@
     clearTimeout(hoverTimer);
     prehover = false;
     collapseGate.leave(performance.now());
+    if (completionGate.active) completionGate.leave(performance.now());
     collapseTimer = setTimeout(() => {
-      if (collapseGate.shouldCollapse(performance.now(), visibleCards.length > 0)) closePanel();
+      // A held approval, or a completion card still waiting for its first
+      // pointer visit, blocks collapse (NotchPanelView.swift:1485).
+      const waitingForEntry =
+        completion !== null && completionGate.blocksCollapse(completionKey(completion));
+      if (collapseGate.shouldCollapse(performance.now(), visibleCards.length > 0 || waitingForEntry)) {
+        closePanel();
+      }
     }, COLLAPSE_DELAY_MS);
   }
 
@@ -485,6 +510,43 @@
     }, POLL_MS);
   }
 
+  // #191: macOS's completionAutoCollapseDelay. A card nobody touched goes
+  // away on its own; one the pointer visited waits for the pointer to leave.
+  function scheduleCompletionCollapse(key: string) {
+    clearTimeout(completionTimer);
+    completionTimer = setTimeout(() => {
+      completionTimer = undefined;
+      // Still unvisited: collapse now. Visited: wait for the pointer to leave.
+      if (completionGate.active && completionGate.blocksCollapse(key)) closePanel();
+    }, COMPLETION_AUTO_COLLAPSE_MS);
+  }
+
+  function acceptSnapshot(snapshot: Snapshot) {
+    sessions = snapshot.sessions;
+    cards = snapshot.permissions;
+    // A hidden request answered outside the panel drops off the feed;
+    // forget it so the collapsed bell stops with it (#186).
+    const pending = new Set(snapshot.permissions.map((card) => card.id));
+    hiddenIds = hiddenIds.filter((id) => pending.has(id));
+    const next = snapshot.completion;
+    completion = next;
+    if (!next) {
+      seenCompletion = null;
+      completionGate.end();
+      clearTimeout(completionTimer);
+      completionTimer = undefined;
+      return;
+    }
+    const key = completionKey(next);
+    if (!shouldAutoOpen(next, seenCompletion)) return;
+    seenCompletion = key;
+    completionGate.begin(key);
+    // Measure the reply's height only after its DOM exists, so the open path
+    // still makes exactly one tight-fit call before the animation.
+    void tick().then(() => openPanel());
+    scheduleCompletionCollapse(key);
+  }
+
   // The window, not the DOM, hides for a fullscreen app: the island keeps its
   // measured size so card rectangles and the tight-fit chain stay intact.
   $effect(() => {
@@ -494,14 +556,7 @@
 
   onMount(() => {
     const channel = new Channel<Snapshot>();
-    channel.onmessage = (snapshot) => {
-      sessions = snapshot.sessions;
-      cards = snapshot.permissions;
-      // A hidden request answered outside the panel drops off the feed;
-      // forget it so the collapsed bell stops with it.
-      const pending = new Set(snapshot.permissions.map((card) => card.id));
-      hiddenIds = hiddenIds.filter((id) => pending.has(id));
-    };
+    channel.onmessage = acceptSnapshot;
     invoke('subscribe', { channel });
     invoke<unknown>('settings_load')
       .then((stored) => {
@@ -522,6 +577,7 @@
       clearTimeout(openTimer);
       clearTimeout(closeTimer);
       clearTimeout(quitTimer);
+      clearTimeout(completionTimer);
       if (pollTimer !== undefined) clearTimeout(pollTimer);
       if (tickTimer !== undefined) clearInterval(tickTimer);
       if (refreshTimer !== undefined) clearInterval(refreshTimer);
@@ -566,7 +622,7 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}`;
+    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}|${completion ? completionKey(completion) : ''}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -613,6 +669,8 @@
         {active}
         hiddenApprovals={hiddenCount}
         {track}
+        glance={completion !== null && completion.presentation !== 'status_only'}
+        glanceLabel={completionSession?.cwd_name ?? ''}
       />
       <span class="grip" aria-hidden="true"></span>
     </button>
@@ -632,15 +690,23 @@
     />
     {#if tab === 'agents'}
       <div class="padded">
-        <SessionList
-          {sessions}
-          {filter}
-          {density}
-          approvals={liveCards}
-          onAnswer={answer}
-          onDelete={deleteSession}
-          onOpenSettings={openSettings}
-        />
+        {#if completion && completionSession && completion.presentation !== 'status_only'}
+          <CompletionCard
+            {completion}
+            session={completionSession}
+            sessionCount={sessions.length}
+          />
+        {:else}
+          <SessionList
+            {sessions}
+            {filter}
+            {density}
+            approvals={liveCards}
+            onAnswer={answer}
+            onDelete={deleteSession}
+            onOpenSettings={openSettings}
+          />
+        {/if}
       </div>
     {:else}
       <MusicDeck
