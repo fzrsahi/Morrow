@@ -3,7 +3,7 @@
   // the sessions, the permission requests and the window; this file draws
   // what it is sent, tells the shell when the OS window may be resized, and
   // passes on the user's Approve / Deny.
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { Channel, invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { GONE_NOTICE_MS } from './lib/approval';
@@ -16,7 +16,20 @@
   import PermissionCard from './lib/components/PermissionCard.svelte';
   import QuestionCard from './lib/components/QuestionCard.svelte';
   import VolumeHud from './lib/components/VolumeHud.svelte';
-  import { isQuestion, pickIndex } from './lib/question';
+  import {
+    answersOf,
+    canConfirm,
+    goBack,
+    goNext,
+    isQuestion,
+    pickIndex,
+    progressChip,
+    promptsOf,
+    putWizard,
+    togglePick,
+    wizardFor,
+    type WizardState,
+  } from './lib/question';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -93,6 +106,9 @@
   // #188: the option being answered, held while the shell writes the reply so
   // a click (or a number key) shows the canvas' selected row until it lands.
   let selected = $state<{ id: number; label: string } | null>(null);
+  // #190: each request id owns its wizard, so a pick can never leak into a
+  // different permission request (or a reused id after the old one is dropped).
+  let wizards = $state<Record<number, WizardState>>({});
   let hotkeySupported = $state(false);
   // #191: the last finished turn. The shell has already decided (via the
   // attention policy) whether it is a card, a glance or nothing at all.
@@ -163,6 +179,18 @@
     cards.filter((card) => !hiddenIds.includes(card.id) && !gone.some((g) => g.card.id === card.id)),
   );
   let visibleCards = $derived([...liveCards, ...gone.map((g) => g.card)]);
+  // #190: drop wizard state for requests no longer held. The effect depends on
+  // the id list only, so pruning never re-triggers itself through `wizards`.
+  $effect(() => {
+    const ids = liveCards.map((card) => card.id).join(',');
+    const current = untrack(() => wizards);
+    const live = new Set(ids ? ids.split(',').map(Number) : []);
+    const stale = Object.keys(current).filter((id) => !live.has(Number(id)));
+    if (stale.length === 0) return;
+    const next = { ...current };
+    for (const id of stale) delete next[Number(id)];
+    wizards = next;
+  });
   let hiddenCount = $derived(cards.filter((card) => hiddenIds.includes(card.id)).length);
   // #188: the bell is for approvals, the amber `?` for questions.
   let hiddenApprovals = $derived(
@@ -230,7 +258,56 @@
     return settle(id, () => invoke<boolean>('skip_question', { id }));
   }
 
+  // #190: the one place that binds a request id to its prompts and wizard.
+  // Looking both up by id keeps a pick from ever reaching another request.
+  function questionView(id: number) {
+    const card = cards.find((c) => c.id === id);
+    if (!card?.question) return null;
+    const prompts = promptsOf(card.question);
+    const wizard = wizardFor(wizards, id, prompts.length);
+    const prompt = prompts[wizard.step];
+    if (!prompt) return null;
+    return { card, prompts, wizard, prompt };
+  }
+
+  // A single-choice card keeps #188's in-flight selected row; a multi-select
+  // or wizard card shows the picks collected for its own request id.
+  function questionPicks(id: number, view: NonNullable<ReturnType<typeof questionView>>) {
+    if (!view.prompt.multi_select && view.prompts.length === 1) {
+      if (selected?.id !== id) return [];
+      const index = view.prompt.options.findIndex((o) => o.label === selected.label);
+      return index < 0 ? [] : [index];
+    }
+    return view.wizard.picks[view.wizard.step] ?? [];
+  }
+
+  function questionToggle(id: number, index: number) {
+    const view = questionView(id);
+    if (!view) return;
+    wizards = putWizard(wizards, id, togglePick(view.wizard, index, view.prompt.multi_select));
+  }
+
+  function questionBack(id: number) {
+    const view = questionView(id);
+    if (!view) return;
+    wizards = putWizard(wizards, id, goBack(view.wizard));
+  }
+
+  // Next on any but the last step; Confirm on the last sends one answer per
+  // question. The shell builds #188's `updatedInput.answers` from these strings.
+  function questionAdvance(id: number) {
+    const view = questionView(id);
+    if (!view || !canConfirm(view.wizard)) return;
+    if (view.wizard.step < view.prompts.length - 1) {
+      wizards = putWizard(wizards, id, goNext(view.wizard, view.prompts.length));
+      return;
+    }
+    const answers = answersOf(view.wizard, view.prompts);
+    return settle(id, () => invoke<boolean>('answer_questions', { id, answers }));
+  }
+
   // #question: 1–9 pick the first visible question while the panel is open.
+  // #190: for a multi-select or wizard card the key toggles the current row.
   function onKeyDown(event: KeyboardEvent) {
     if (!expanded || closing || event.ctrlKey || event.altKey || event.metaKey) return;
     const target = event.target as HTMLElement | null;
@@ -238,10 +315,15 @@
     const index = pickIndex(event.key);
     if (index === null) return;
     const card = liveCards.find(isQuestion);
-    const label = card?.question?.options[index]?.label;
-    if (!card || !label) return;
+    if (!card?.question) return;
+    const view = questionView(card.id);
+    if (!view || !view.prompt.options[index]) return;
     event.preventDefault();
-    void answerQuestion(card.id, label);
+    if (view.prompt.multi_select || view.prompts.length > 1) {
+      questionToggle(card.id, index);
+    } else {
+      void answerQuestion(card.id, view.prompt.options[index].label);
+    }
   }
 
   function hide(id: number) {
@@ -907,18 +989,29 @@
       <div class="padded cards">
         {#each visibleCards as card, i (card.id)}
           {#if isQuestion(card)}
-            <QuestionCard
-              {card}
-              session={sessions.find((s) => s.session_id === card.session_id) ?? null}
-              position={i + 1}
-              total={visibleCards.length}
-              {hotkeySupported}
-              selected={selected?.id === card.id ? selected.label : null}
-              gone={gone.some((g) => g.card.id === card.id)}
-              onPick={answerQuestion}
-              onSkip={skipQuestion}
-              onHide={hide}
-            />
+            {@const view = questionView(card.id)}
+            {#if view}
+              <QuestionCard
+                {card}
+                session={sessions.find((s) => s.session_id === card.session_id) ?? null}
+                position={i + 1}
+                total={visibleCards.length}
+                {hotkeySupported}
+                prompt={view.prompt}
+                chip={progressChip(view.wizard.step, view.prompts.length)}
+                picks={questionPicks(card.id, view)}
+                canBack={view.wizard.step > 0}
+                canAdvance={canConfirm(view.wizard)}
+                isLast={view.wizard.step === view.prompts.length - 1}
+                gone={gone.some((g) => g.card.id === card.id)}
+                onPick={answerQuestion}
+                onToggle={questionToggle}
+                onBack={questionBack}
+                onAdvance={questionAdvance}
+                onSkip={skipQuestion}
+                onHide={hide}
+              />
+            {/if}
           {:else}
             <PermissionCard
               {card}
