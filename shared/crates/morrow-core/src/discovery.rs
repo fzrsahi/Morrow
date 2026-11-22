@@ -993,3 +993,313 @@ mod opencode_tests {
         );
     }
 }
+
+/// The coordinator: several roots × several readers, one list of sessions
+/// (#260).
+///
+/// This is the half of `SessionDiscoveryCoordinator` that is not the watcher.
+/// What goes wrong without it is quiet: one account scanned twice because two
+/// roots are the same directory under different spellings, one session shown
+/// twice because two decoders saw it, and a tick that never returns because one
+/// store is enormous.
+pub mod scan {
+    use std::collections::HashSet;
+
+    use super::DiscoveryHit;
+    use crate::config_roots;
+    use crate::path_identity;
+
+    /// One decoder: the sessions of one agent, under one root.
+    ///
+    /// A trait rather than a function pointer so a reader can own state — the
+    /// incremental cache (#259) is per-reader, not per-scan — and so a test can
+    /// hand in a fake without a filesystem.
+    pub trait StoreReader {
+        /// The agent this reads, as `--source` spells it.
+        fn source(&self) -> &'static str;
+
+        /// Every session this root holds. A root the reader does not understand
+        /// answers an empty list, not an error: one unknown store must not lose
+        /// the others.
+        fn read(&self, root: &str) -> Vec<DiscoveryHit>;
+    }
+
+    /// What one scan produced.
+    #[derive(Debug, Default)]
+    pub struct ScanResult {
+        /// Deduped, ordered by the readers' own order.
+        pub hits: Vec<DiscoveryHit>,
+        /// Readers that were not reached before the budget ran out, as
+        /// `(source, root)`. Reported rather than dropped, so a scan that keeps
+        /// never finishing is visible instead of silently partial.
+        pub unfinished: Vec<(&'static str, String)>,
+        pub elapsed_ms: u64,
+    }
+
+    /// How long one scan may take before it gives the tick back.
+    ///
+    /// The panel redraws on a tick, so a scan is a latency budget, not a
+    /// throughput problem: it is better to report two sessions and a leftover
+    /// than to block the feed on a store nobody is looking at.
+    pub const DEFAULT_BUDGET_MS: u64 = 250;
+
+    /// The roots to scan: the primary plus the extras, with the same directory
+    /// under two spellings collapsed to one.
+    ///
+    /// This is the caller `path_identity` was built for (#256): a symlinked extra
+    /// directory that is the primary one must not be scanned twice, or its
+    /// sessions are counted twice and its hooks installed twice.
+    pub fn scan_roots(primary: &str, extras: &[&str]) -> Vec<String> {
+        config_roots::roots(primary, extras, path_identity::identity)
+    }
+
+    /// Run every reader over every root, within `budget_ms`.
+    ///
+    /// `now_ms` is injected so a test can drive the budget without sleeping.
+    ///
+    /// Dedup is by session id, and the **first** reader to return a session keeps
+    /// it: readers are given in precedence order, so an agent whose store is
+    /// authoritative for its own sessions comes before one that merely indexes
+    /// somebody else's. Keeping the first is deliberate — a later reader with a
+    /// thinner projection must not replace a fuller one.
+    pub fn run(
+        roots: &[String],
+        readers: &[&dyn StoreReader],
+        budget_ms: u64,
+        now_ms: impl Fn() -> u64,
+    ) -> ScanResult {
+        let started = now_ms();
+        let mut result = ScanResult::default();
+        let mut claimed: HashSet<String> = HashSet::new();
+        let mut exhausted = false;
+
+        for root in roots {
+            for reader in readers {
+                // Checked before starting a reader, never in the middle of one: a
+                // reader that begins inside the budget is allowed to finish, so a
+                // big store is not cut in half and reported as complete — and
+                // nothing new starts after the deadline, so the overrun is at most
+                // the one reader that was already running.
+                if !exhausted && now_ms().saturating_sub(started) > budget_ms {
+                    exhausted = true;
+                }
+                if exhausted {
+                    result.unfinished.push((reader.source(), root.clone()));
+                    continue;
+                }
+                for hit in reader.read(root) {
+                    if claimed.insert(hit.session_id.clone()) {
+                        result.hits.push(hit);
+                    }
+                }
+            }
+        }
+
+        result.elapsed_ms = now_ms().saturating_sub(started);
+        result
+    }
+}
+
+#[cfg(test)]
+mod scan_tests {
+    use super::DiscoveryHit;
+    use super::scan::{self, ScanResult, StoreReader};
+
+    fn hit(session_id: &str, source: &'static str, cwd: &str) -> DiscoveryHit {
+        DiscoveryHit {
+            session_id: session_id.to_owned(),
+            source,
+            cwd: cwd.to_owned(),
+            ..DiscoveryHit::default()
+        }
+    }
+
+    /// A reader that answers a fixed table per root, and counts its calls.
+    struct Fake {
+        source: &'static str,
+        table: Vec<(&'static str, Vec<DiscoveryHit>)>,
+        calls: std::cell::RefCell<Vec<String>>,
+    }
+
+    impl Fake {
+        fn new(source: &'static str, table: Vec<(&'static str, Vec<DiscoveryHit>)>) -> Self {
+            Self {
+                source,
+                table,
+                calls: std::cell::RefCell::new(Vec::new()),
+            }
+        }
+    }
+
+    impl StoreReader for Fake {
+        fn source(&self) -> &'static str {
+            self.source
+        }
+
+        fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+            self.calls.borrow_mut().push(root.to_owned());
+            self.table
+                .iter()
+                .filter(|(table_root, _)| *table_root == root)
+                .flat_map(|(_, hits)| hits.clone())
+                .collect()
+        }
+    }
+
+    fn ids(result: &ScanResult) -> Vec<&str> {
+        result
+            .hits
+            .iter()
+            .map(|hit| hit.session_id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn every_reader_reads_every_root() {
+        let claude = Fake::new(
+            "claude",
+            vec![
+                (r"/r1", vec![hit("a", "claude", "/w")]),
+                (r"/r2", vec![hit("b", "claude", "/w")]),
+            ],
+        );
+        let codex = Fake::new("codex", vec![(r"/r2", vec![hit("c", "codex", "/w")])]);
+
+        let readers: Vec<&dyn StoreReader> = vec![&claude, &codex];
+        let result = scan::run(
+            &[r"/r1".to_owned(), r"/r2".to_owned()],
+            &readers,
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
+
+        assert_eq!(ids(&result), vec!["a", "b", "c"]);
+        assert_eq!(*claude.calls.borrow(), vec![r"/r1", r"/r2"]);
+        assert_eq!(*codex.calls.borrow(), vec![r"/r1", r"/r2"]);
+        assert!(result.unfinished.is_empty());
+    }
+
+    /// One session seen by two decoders is one card. Which source it carries is
+    /// decided by the reader order, so the caller states precedence instead of
+    /// inheriting it from a scan order.
+    #[test]
+    fn a_session_two_decoders_see_appears_once_with_the_first_source() {
+        let authoritative = Fake::new("claude", vec![(r"/r", vec![hit("same", "claude", "/w")])]);
+        let index = Fake::new("codex", vec![(r"/r", vec![hit("same", "codex", "/w")])]);
+        let readers: Vec<&dyn StoreReader> = vec![&authoritative, &index];
+
+        let result = scan::run(&[r"/r".to_owned()], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+
+        assert_eq!(ids(&result), vec!["same"]);
+        assert_eq!(result.hits[0].source, "claude");
+    }
+
+    #[test]
+    fn the_other_reader_order_gives_the_other_source() {
+        // Not a tautology: it shows the outcome is the caller's decision, which
+        // is what makes "the right source" testable at all.
+        let first = Fake::new("codex", vec![(r"/r", vec![hit("same", "codex", "/w")])]);
+        let second = Fake::new("claude", vec![(r"/r", vec![hit("same", "claude", "/w")])]);
+        let readers: Vec<&dyn StoreReader> = vec![&first, &second];
+
+        let result = scan::run(&[r"/r".to_owned()], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+        assert_eq!(result.hits[0].source, "codex");
+    }
+
+    /// The budget gives the tick back: work not reached is reported, not lost
+    /// quietly. A scan that always times out is then visible as such.
+    #[test]
+    fn work_past_the_budget_is_reported_rather_than_dropped() {
+        // Zero for the first two reads (start + the first check), then past the
+        // budget: deterministic, no sleeps.
+        let clock = std::cell::Cell::new(0usize);
+        let first = Fake::new("claude", vec![(r"/r1", vec![hit("a", "claude", "/w")])]);
+        let second = Fake::new("codex", vec![(r"/r2", vec![hit("b", "codex", "/w")])]);
+        let readers: Vec<&dyn StoreReader> = vec![&first, &second];
+
+        let result = scan::run(
+            &[r"/r1".to_owned(), r"/r2".to_owned()],
+            &readers,
+            100,
+            || {
+                let call = clock.get();
+                clock.set(call + 1);
+                if call < 2 { 0 } else { 10_000 }
+            },
+        );
+
+        assert_eq!(ids(&result), vec!["a"]);
+        assert_eq!(
+            result.unfinished,
+            vec![
+                ("codex", r"/r1".to_owned()),
+                ("claude", r"/r2".to_owned()),
+                ("codex", r"/r2".to_owned()),
+            ],
+            "every reader that did not reach a root is named, not just the first"
+        );
+        // Nothing new was started once the deadline had passed.
+        assert_eq!(*second.calls.borrow(), Vec::<String>::new());
+    }
+
+    /// A reader that starts inside the budget is allowed to finish, so a big
+    /// store is never cut in half and reported as complete.
+    #[test]
+    fn a_reader_that_starts_within_the_budget_completes() {
+        let clock = std::cell::Cell::new(0u64);
+        let slow = Fake::new(
+            "claude",
+            vec![(
+                r"/r",
+                vec![hit("a", "claude", "/w"), hit("b", "claude", "/w")],
+            )],
+        );
+        let readers: Vec<&dyn StoreReader> = vec![&slow];
+
+        let result = scan::run(&[r"/r".to_owned()], &readers, 50, || {
+            let now = clock.get();
+            clock.set(now + 40);
+            now
+        });
+
+        assert_eq!(ids(&result), vec!["a", "b"]);
+        assert!(result.unfinished.is_empty());
+    }
+
+    #[test]
+    fn a_reader_that_answers_nothing_is_not_an_error() {
+        let empty = Fake::new("claude", vec![]);
+        let readers: Vec<&dyn StoreReader> = vec![&empty];
+        let result = scan::run(&[r"/r".to_owned()], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+        assert!(result.hits.is_empty());
+        assert!(result.unfinished.is_empty());
+    }
+
+    #[test]
+    fn an_empty_root_list_reads_nothing() {
+        let reader = Fake::new("claude", vec![(r"/r", vec![hit("a", "claude", "/w")])]);
+        let readers: Vec<&dyn StoreReader> = vec![&reader];
+        let result = scan::run(&[], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+        assert!(result.hits.is_empty());
+        assert!(reader.calls.borrow().is_empty());
+    }
+
+    /// The caller `path_identity` was built for (#256).
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_extra_root_is_scanned_once() {
+        let dir = std::env::temp_dir().join(format!("morrow-scan-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("primary")).expect("a directory");
+        std::os::unix::fs::symlink(dir.join("primary"), dir.join("alias")).expect("a symlink");
+
+        let primary = dir.join("primary").to_string_lossy().into_owned();
+        let alias = dir.join("alias").to_string_lossy().into_owned();
+        let other = dir.join("other").to_string_lossy().into_owned();
+
+        let roots = scan::scan_roots(&primary, &[&alias, &other]);
+        assert_eq!(roots, vec![primary, other]);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
