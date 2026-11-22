@@ -13,6 +13,7 @@
   import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
+  import VolumeHud from './lib/components/VolumeHud.svelte';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -56,6 +57,7 @@
     type Track,
   } from './lib/music';
   import { MOTION, PALETTE, cssVariables } from './lib/tokens';
+  import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
   import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
 
   // B (floating pill) is the default: it clears the GNOME top bar. Variant A
@@ -134,6 +136,16 @@
   let refreshTimer: ReturnType<typeof setInterval> | undefined;
   let deck = $derived(deckState(track));
   let enabled = $derived(controls(track));
+
+  // #195: `music_volume*` answers on the shell; the HUD only draws the reading
+  // and toggles mute on a click. A 1 s read is the price of showing the meter
+  // when the *system* (not this panel) changes the volume.
+  const VOLUME_POLL_MS = 1000;
+  let volume = $state<Volume>({ percent: 0, muted: false });
+  let volumeCapable = $state(false);
+  const volumeGate = new VolumeHudGate();
+  let hudUntil = $state(0);
+  let hudVisible = $state(false);
 
   let active = $derived(activeSession(sessions));
   let liveCards = $derived(
@@ -390,14 +402,57 @@
     }, 3000);
   }
 
-  async function onMute() {
+  // #195: seed=true records the first reading without popping the HUD on
+  // launch. Later readings that differ show it for VOLUME_HUD_MS.
+  async function readVolume(seed = false) {
     try {
-      await invoke('music_volume_mute');
-      muted = !muted;
+      const next = await invoke<Volume>('music_volume');
+      volume = next;
+      muted = next.muted;
+      const now = performance.now();
+      if (seed) volumeGate.observe(next, now);
+      else if (volumeGate.observe(next, now)) hudUntil = now + VOLUME_HUD_MS;
     } catch (error) {
       hooksError = String(error);
     }
   }
+
+  async function onMute() {
+    if (!volumeCapable) return;
+    // Show immediately: the follow-up read may be slow, or fail on a device
+    // that answered the mute command but cannot report its level.
+    const now = performance.now();
+    volumeGate.show(now);
+    hudUntil = now + VOLUME_HUD_MS;
+    try {
+      await invoke('music_volume_mute');
+      muted = !muted;
+      await readVolume();
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
+  // One timer per new dwell; a second change while the HUD is up restarts it.
+  $effect(() => {
+    const until = hudUntil;
+    if (until <= performance.now()) {
+      hudVisible = false;
+      return;
+    }
+    hudVisible = true;
+    const timer = setTimeout(() => (hudVisible = false), until - performance.now());
+    return () => clearTimeout(timer);
+  });
+
+  // Only a machine with a System volume adapter asks for the level. It keeps
+  // reading while the bar is collapsed: an OS-level change must raise the HUD.
+  $effect(() => {
+    if (!volumeCapable) return;
+    void readVolume();
+    const timer = setInterval(() => void readVolume(), VOLUME_POLL_MS);
+    return () => clearInterval(timer);
+  });
 
   // #193: one read asks the player, then the deck interpolates locally. The
   // generation guards against a slow lyrics answer landing on a newer track;
@@ -478,6 +533,8 @@
       };
       // #186: shortcut hints are only honest when a global hotkey can fire.
       hotkeySupported = supported('Global hotkey');
+      // #195: no HUD (and no volume poll) on a machine without the adapter.
+      volumeCapable = volumeSupported(rows);
       schedulePoll();
     } catch (error) {
       hooksError = String(error);
@@ -573,6 +630,8 @@
     // One seed read so the collapsed wing can show a track; the tab effect
     // owns every read after this, so a closed tab never polls.
     void readTrack();
+    // #195: the first volume reading is a baseline, not a change to announce.
+    void readVolume(true);
     lastCollapsedWidth = collapsed.width;
     reportFit(collapsed, false);
 
@@ -658,27 +717,40 @@
   role="presentation"
 >
   {#if !expanded && !closing}
-    <button
-      class="toggle"
-      onclick={onBarClick}
-      onpointerdown={onBarPointerDown}
-      onpointermove={onBarPointerMove}
-      onpointerup={onBarPointerUp}
-      onpointercancel={onBarPointerCancel}
-      aria-label="Open the Morrow panel"
-    >
-      <CollapsedBar
-        sessionCount={sessions.length}
-        {prehover}
-        quiet={view.quiet}
-        {active}
-        hiddenApprovals={hiddenCount}
-        {track}
-        glance={completion !== null && completion.presentation !== 'status_only'}
-        glanceLabel={completionSession?.cwd_name ?? ''}
+    {#if hudVisible && volumeCapable}
+      <!-- #195: for ~1.5 s after a change the meter takes the bar's place;
+           clicking it toggles mute through the shell's existing command. -->
+      <VolumeHud
+        {volume}
+        onToggle={onMute}
+        onpointerdown={onBarPointerDown}
+        onpointermove={onBarPointerMove}
+        onpointerup={onBarPointerUp}
+        onpointercancel={onBarPointerCancel}
       />
-      <span class="grip" aria-hidden="true"></span>
-    </button>
+    {:else}
+      <button
+        class="toggle"
+        onclick={onBarClick}
+        onpointerdown={onBarPointerDown}
+        onpointermove={onBarPointerMove}
+        onpointerup={onBarPointerUp}
+        onpointercancel={onBarPointerCancel}
+        aria-label="Open the Morrow panel"
+      >
+        <CollapsedBar
+          sessionCount={sessions.length}
+          {prehover}
+          quiet={view.quiet}
+          {active}
+          hiddenApprovals={hiddenCount}
+          {track}
+          glance={completion !== null && completion.presentation !== 'status_only'}
+          glanceLabel={completionSession?.cwd_name ?? ''}
+        />
+        <span class="grip" aria-hidden="true"></span>
+      </button>
+    {/if}
   {/if}
   <div class="panel-content" class:visible={expanded || closing} bind:this={panelContent}>
     <Header
@@ -814,6 +886,10 @@
   .island.locked :global(*) {
     animation: none !important;
     transition: none !important;
+  }
+  /* #195: the 30 pt HUD sits centred in the 34 pt collapsed pill. */
+  .island > :global([data-volume-hud]) {
+    margin: 2px auto;
   }
   .toggle {
     display: block;
