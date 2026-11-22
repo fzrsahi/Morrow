@@ -127,8 +127,7 @@ impl Sessions {
         let effects = reduce_event(&mut self.inner, &event, &ctx);
         for effect in &effects {
             if let SideEffect::RemoveSession { session_id } = effect {
-                self.inner.remove(session_id);
-                self.last_events.remove(session_id);
+                self.remove(session_id);
             }
         }
         let card_id = event.session_id.as_deref().unwrap_or("default");
@@ -137,6 +136,17 @@ impl Sessions {
                 .insert(card_id.to_owned(), event.event_name);
         }
         effects
+    }
+
+    /// Forget a session whose process is gone, including its last event.
+    pub fn remove(&mut self, session_id: &str) {
+        self.inner.remove(session_id);
+        self.last_events.remove(session_id);
+    }
+
+    /// No sessions left to watch.
+    pub fn is_empty(&self) -> bool {
+        self.inner.is_empty()
     }
 
     /// NEEDS YOU first, then working/thinking, then the rest; newest first
@@ -308,6 +318,20 @@ mod tests {
         );
         let snap = sessions.inner.get("a").expect("session a");
         assert_eq!(snap.status, AgentStatus::WaitingApproval);
+    }
+
+    #[test]
+    fn removing_a_session_drops_its_hook_history_too() {
+        let mut sessions = Sessions::default();
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"PreToolUse"}"#),
+            10,
+        );
+        sessions.remove("a");
+        assert!(sessions.snapshot().is_empty());
+        // A new session with the same id starts with no last event.
+        sessions.apply(&hook(r#"{"session_id":"a","hook_event_name":"Stop"}"#), 20);
+        assert_eq!(sessions.snapshot()[0].last_event, "Stop");
     }
 
     #[test]
