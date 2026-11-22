@@ -33,9 +33,15 @@
     snapOffset,
     type Offset,
     type PanelTab,
+    type SessionDensity,
     type SessionFilter,
     type Size,
   } from './lib/panel';
+  import {
+    SETTINGS_KEYS,
+    sessionDensityFromSettings,
+    sessionFilterFromSettings,
+  } from './lib/settings';
   import { activeSession, collapsedWidth } from './lib/session-cards';
   import { MOTION, PALETTE, cssVariables } from './lib/tokens';
   import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
@@ -68,6 +74,8 @@
   let openHeight = $state<number | null>(null);
   let tab = $state<PanelTab>('agents');
   let filter = $state<SessionFilter>('all');
+  // #185: #183's cards stay reachable; a fresh install uses compact rows.
+  let density = $state<SessionDensity>('compact');
   let muted = $state(false);
   let quitArmed = $state(false);
   // #199: settings no longer open inside the island; hooksError is still the
@@ -108,9 +116,26 @@
   }
 
   // #199 — Settings moved to its own window; the header gear only asks the
-  // shell to create or raise it, lazily on first use.
+  // shell to create or raise it, lazily on first use. #185's empty state uses
+  // the same call: SettingsApp opens on the Hooks page by default.
   function openSettings() {
     invoke('open_settings');
+  }
+
+  // #185 — the shell owns the session store, so removing one is an input, not
+  // local state. Drop it from the view at once; the next snapshot confirms.
+  function deleteSession(sessionId: string) {
+    sessions = sessions.filter((session) => session.session_id !== sessionId);
+    invoke('session_dismiss', { sessionId }).catch((error) => (hooksError = String(error)));
+  }
+
+  // The grouping choice lives in ~/.codeisland/settings.json with the other
+  // panel settings, so it survives a restart.
+  function setFilter(next: SessionFilter) {
+    filter = next;
+    invoke('settings_set', { key: SETTINGS_KEYS.sessionFilter, value: next }).catch(
+      (error) => (hooksError = String(error)),
+    );
   }
 
   // The E2E-1 seam: after every fit the shell prints the buttons' rectangles.
@@ -394,6 +419,12 @@
     const channel = new Channel<Snapshot>();
     channel.onmessage = acceptSnapshot;
     invoke('subscribe', { channel });
+    invoke<unknown>('settings_load')
+      .then((stored) => {
+        filter = sessionFilterFromSettings(stored);
+        density = sessionDensityFromSettings(stored);
+      })
+      .catch(() => {});
     loadCapabilities();
     lastCollapsedWidth = collapsed.width;
     reportFit(collapsed, false);
@@ -437,7 +468,7 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cards.length}|${tab}|${completion ? completionKey(completion) : ''}`;
+    const content = `${sessionContent}|${cards.length}|${tab}|${filter}|${density}|${completion ? completionKey(completion) : ''}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -492,7 +523,7 @@
       {quitArmed}
       {variant}
       onTab={(next) => (tab = next)}
-      onFilter={(next) => (filter = next)}
+      onFilter={setFilter}
       onMute={onMute}
       onSettings={openSettings}
       onQuit={onQuit}
@@ -506,7 +537,13 @@
             sessionCount={sessions.length}
           />
         {:else}
-          <SessionList {sessions} />
+          <SessionList
+            {sessions}
+            {filter}
+            {density}
+            onDelete={deleteSession}
+            onOpenSettings={openSettings}
+          />
         {/if}
       </div>
     {:else}

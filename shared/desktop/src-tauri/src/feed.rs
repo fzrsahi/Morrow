@@ -10,12 +10,14 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use morrow_core::attention::CompletionStyle;
 use morrow_core::reduce::SideEffect;
+use morrow_platform::process::Watch;
 use morrow_protocol::HookPayload;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
 use crate::completion::{self, SnapshotCompletion};
 use crate::permissions::{Card, Decision, Permissions};
+use crate::prune::{SessionProcess, Watches};
 use crate::sessions::{Session, Sessions};
 
 /// What the frontend receives (`Snapshot` in `src/App.svelte`).
@@ -32,16 +34,24 @@ pub struct Snapshot {
 /// One push per 1/60 s at most.
 const FRAME: Duration = Duration::from_micros(16_667);
 
+/// One liveness round per second: well inside the five seconds a dead CLI
+/// has to disappear from the panel (#198).
+const PRUNE_POLL: Duration = Duration::from_secs(1);
+
 #[derive(Default)]
 pub struct Feed {
     state: Mutex<State>,
     changed: Condvar,
+    /// Wakes the pruner when a session appears; separate from the pusher's
+    /// condvar so a single hook cannot wake only the wrong waiter.
+    prune_changed: Condvar,
 }
 
 struct State {
     sessions: Sessions,
     permissions: Permissions,
     completion: Option<SnapshotCompletion>,
+    watches: Watches,
     channel: Option<Channel<Snapshot>>,
     /// The frontend has not seen the latest snapshot.
     dirty: bool,
@@ -53,8 +63,19 @@ impl Default for State {
             sessions: Sessions::with_home(std::env::var("HOME").unwrap_or_default()),
             permissions: Permissions::default(),
             completion: None,
+            watches: Watches::default(),
             channel: None,
             dirty: false,
+        }
+    }
+}
+
+impl State {
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            sessions: self.sessions.snapshot(),
+            permissions: self.permissions.cards(),
+            completion: self.completion.clone(),
         }
     }
 }
@@ -70,6 +91,7 @@ impl Feed {
         for effect in &applied.effects {
             if let SideEffect::RemoveSession { session_id } = effect {
                 state.permissions.drop_session(session_id);
+                state.watches.forget(session_id);
             }
         }
         let event_name = payload
@@ -110,6 +132,7 @@ impl Feed {
         }
         state.dirty = true;
         self.changed.notify_one();
+        self.prune_changed.notify_one();
     }
 
     /// Holds `payload` as a permission card; its decision arrives on the
@@ -130,6 +153,15 @@ impl Feed {
         self.change(|state| state.permissions.drop_request(id));
     }
 
+    /// #185: the user removed a session from its card. Its held cards go too,
+    /// and the next snapshot carries the shorter list.
+    pub fn dismiss(&self, session_id: &str) {
+        self.change(|state| {
+            state.sessions.remove(session_id);
+            state.permissions.drop_session(session_id);
+        });
+    }
+
     fn change<T>(&self, f: impl FnOnce(&mut State) -> T) -> T {
         let mut state = self.lock();
         let result = f(&mut state);
@@ -145,6 +177,68 @@ impl Feed {
         state.channel = Some(channel);
         state.dirty = true;
         self.changed.notify_one();
+    }
+
+    /// One liveness round. The adapters are injected so the decision can be
+    /// exercised without real processes; `prune_dead` supplies the shell's.
+    fn prune_with(
+        &self,
+        capture: impl FnMut(i32) -> Option<Watch>,
+        alive: impl FnMut(Watch) -> bool,
+    ) {
+        let mut state = self.lock();
+        let processes: Vec<SessionProcess> = state
+            .sessions
+            .snapshot()
+            .into_iter()
+            .map(|s| SessionProcess {
+                session_id: s.session_id,
+                pid: s.cli_pid,
+            })
+            .collect();
+        let dead = state.watches.reconcile(&processes, capture, alive);
+        if dead.is_empty() {
+            return;
+        }
+        for id in &dead {
+            state.sessions.remove(id);
+            state.permissions.drop_session(id);
+            state.watches.forget(id);
+        }
+        state.dirty = true;
+        self.changed.notify_one();
+    }
+
+    /// Drop sessions whose CLI process is gone, with their cards.
+    pub fn prune_dead(&self) {
+        self.prune_with(
+            |pid| crate::adapters::process_watch(pid as i64),
+            crate::adapters::process_alive,
+        );
+    }
+
+    /// Poll liveness while there are sessions to watch, then park until a
+    /// hook creates another one: no adapters are called for an empty panel.
+    pub fn spawn_pruner(feed: Arc<Self>) {
+        thread::Builder::new()
+            .name("morrow-pruner".into())
+            .spawn(move || {
+                loop {
+                    {
+                        let state = feed.lock();
+                        if state.sessions.is_empty() {
+                            let _parked = feed
+                                .prune_changed
+                                .wait(state)
+                                .unwrap_or_else(PoisonError::into_inner);
+                            continue;
+                        }
+                    }
+                    feed.prune_dead();
+                    thread::sleep(PRUNE_POLL);
+                }
+            })
+            .expect("spawn the pruner thread");
     }
 
     /// Pushes snapshots forever: waits for a change, sends, waits a frame.
@@ -190,19 +284,10 @@ impl Feed {
     }
 }
 
-impl State {
-    fn snapshot(&self) -> Snapshot {
-        Snapshot {
-            sessions: self.sessions.snapshot(),
-            permissions: self.permissions.cards(),
-            completion: self.completion.clone(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use morrow_platform::process::Watch;
     use morrow_protocol::decode_payload;
 
     fn hook(json: &str) -> HookPayload {
@@ -238,5 +323,45 @@ mod tests {
             r#"{"session_id":"a","hook_event_name":"UserPromptSubmit","prompt":"again"}"#,
         ));
         assert!(feed.snapshot().completion.is_none());
+    }
+
+    fn a_dead_session_takes_its_cards_with_it() {
+        let feed = Feed::default();
+        for id in ["a", "b"] {
+            let _ = feed.hold(&hook(&format!(
+                r#"{{"session_id":"{id}","hook_event_name":"PermissionRequest","tool_name":"Bash"}}"#
+            )));
+            feed.record(&hook(&format!(
+                r#"{{"session_id":"{id}","hook_event_name":"SessionStart","_ppid":{}}}"#,
+                if id == "a" { 4242 } else { 9999 }
+            )));
+        }
+
+        // Only pid 9999 is alive; "a" and its approval card must go.
+        feed.prune_with(
+            |pid| {
+                Some(Watch {
+                    pid: pid as i64,
+                    start_time: 1,
+                })
+            },
+            |w| w.pid == 9999,
+        );
+
+        let snap = feed.lock().snapshot();
+        assert_eq!(
+            snap.sessions
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
+        assert_eq!(
+            snap.permissions
+                .iter()
+                .map(|c| c.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["b"]
+        );
     }
 }

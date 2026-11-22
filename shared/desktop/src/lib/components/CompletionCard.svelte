@@ -19,7 +19,13 @@
 </script>
 
 <div class="completion">
-  <SessionList sessions={[head]} />
+  <SessionList
+    sessions={[head]}
+    filter="all"
+    density="comfortable"
+    onDelete={() => {}}
+    onOpenSettings={() => {}}
+  />
   <div class="reply" class:failed={completion.turn_failed}>
     <MarkdownReply blocks={completion.blocks} />
   </div>
