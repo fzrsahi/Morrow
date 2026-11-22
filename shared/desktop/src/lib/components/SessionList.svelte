@@ -6,6 +6,7 @@
   import Mascot from './Mascot.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import PixelText from './PixelText.svelte';
+  import { displayName } from '../approval';
   import { MASCOT_SIZES } from '../mascots';
   import {
     STATUS_META,
@@ -26,7 +27,7 @@
   } from '../session-list';
   import type { SessionDensity, SessionFilter } from '../panel';
   import { PALETTE } from '../tokens';
-  import type { Session } from '../types';
+  import type { Card, Decision, Session } from '../types';
 
   type Props = {
     sessions: Session[];
@@ -34,6 +35,9 @@
     density?: SessionDensity;
     onDelete: (sessionId: string) => void;
     onOpenSettings: () => void;
+    /** Pending, non-hidden requests (#approval-queue: inline in the list). */
+    approvals?: Card[];
+    onAnswer?: (id: number, decision: Decision) => void;
   };
   let {
     sessions,
@@ -41,6 +45,8 @@
     density = 'compact',
     onDelete,
     onOpenSettings,
+    approvals = [],
+    onAnswer,
   }: Props = $props();
 
   const limit = $derived(
@@ -80,6 +86,7 @@
         {/if}
         {#each group.sessions as session (session.session_id)}
           {@const meta = STATUS_META[session.status]}
+          {@const approval = approvals.find((card) => card.session_id === session.session_id)}
           {@const branch = branchLabel(session.git_branch, session.git_is_worktree)}
           {#if density === 'compact'}
             <li class="crow" style="--sc:{meta.color}">
@@ -214,6 +221,24 @@
                     <span class="detail">{session.tool_description}</span>
                   </div>
                 {/if}
+                {#if approval}
+                  <div class="papp">
+                    <div class="r">
+                      <PixelText text="[!]" size={1.2} color={PALETTE.amber} />
+                      <PixelText text="APPROVAL REQUIRED:" size={1.1} color={PALETTE.amber} />
+                      <PixelText text={displayName(approval.tool_name)} size={1.1} color={PALETTE.textWhite} />
+                    </div>
+                    <div class="r">
+                      <button class="p16 acc" onclick={() => onAnswer?.(approval.id, 'allow')}>
+                        <PixelIcon name="checkmark" size={1} color="#000" />
+                        <PixelText text="APPROVE" size={1.05} color="#000" />
+                      </button>
+                      <button class="p16" onclick={() => onAnswer?.(approval.id, 'deny')}>
+                        <PixelText text="✕ DENY" size={1.05} color={PALETTE.deny} />
+                      </button>
+                    </div>
+                  </div>
+                {/if}
                 {#if session.last_user_prompt}
                   <div class="pline">
                     <b class="prompt">›</b><span>{session.last_user_prompt}</span>
@@ -243,7 +268,6 @@
     </button>
   {/if}
 {/if}
-
 <style>
   .list {
     display: flex;
@@ -544,7 +568,36 @@
     border-radius: 2.5px;
     background: rgba(255, 255, 255, 0.04);
     font: 500 calc(var(--f) * 0.77) ui-monospace, monospace;
-    color: var(--tm);
+  }
+  .papp {
+    align-self: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--amber) 8%, transparent);
+  }
+  .papp .r {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .p16 {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3.5px 7px;
+    border: 0;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    font: inherit;
+  }
+  .p16:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .p16.acc {
+    background: var(--cyan);
   }
   @media (prefers-reduced-motion: reduce) {
     .gauge i.cur {

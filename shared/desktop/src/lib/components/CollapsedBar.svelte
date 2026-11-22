@@ -15,8 +15,16 @@
     quiet?: boolean;
     /** First working/thinking session from the shell's ordered list. */
     active?: Session | null;
+    /** #186: approvals the user hid are still pending — the bell stays. */
+    hiddenApprovals?: number;
   };
-  let { sessionCount, prehover = false, quiet = false, active = null }: Props = $props();
+  let {
+    sessionCount,
+    prehover = false,
+    quiet = false,
+    active = null,
+    hiddenApprovals = 0,
+  }: Props = $props();
 
   let source = $derived(active?.source ?? 'claude');
   let status = $derived(active ? mascotStatus(active.status) : 'idle');
@@ -51,6 +59,25 @@
       <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
     {:else}
       <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
+    {/if}
+    {#if hiddenApprovals > 0}
+      <!-- #186: canvas #collapsed-attention — a request was hidden, not answered. -->
+      <svg
+        class="bell"
+        viewBox="0 0 16 16"
+        width="11"
+        height="11"
+        fill="none"
+        stroke="#FFB347"
+        stroke-width="1.5"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        role="img"
+        aria-label="{hiddenApprovals} hidden approvals waiting"
+      >
+        <path d="M4 11V7.5a4 4 0 0 1 8 0V11l1 1.2H3z" />
+        <path d="M6.8 13.6a1.3 1.3 0 0 0 2.4 0" />
+      </svg>
     {/if}
     {#if quiet}
       <!-- #197: canvas #collapsed-ambient, quiet frame. The moon is a line
@@ -100,8 +127,18 @@
     flex: 1 0 96px;
   }
   /* #180 idle/empty states keep their 21 pt mascot; #183 reuses it working. */
-  .moon {
+  .moon,
+  .bell {
     flex: none;
+  }
+  .bell {
+    animation: bell 1.2s ease-in-out infinite;
+  }
+  @keyframes bell {
+    50% {
+      opacity: 0.45;
+      transform: scale(0.88);
+    }
   }
   .thinkdots {
     display: inline-flex;
@@ -162,6 +199,9 @@
     .thinkdots i {
       animation: none;
       opacity: 1;
+    }
+    .bell {
+      animation: none;
     }
   }
 </style>
