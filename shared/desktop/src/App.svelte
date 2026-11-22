@@ -360,7 +360,7 @@
     sessions
       .map(
         (s) =>
-          `${s.session_id}:${s.status}:${s.current_tool}:${s.tool_description}:${s.last_user_prompt}:${s.last_assistant_message}:${s.updated_at}`,
+          `${s.session_id}:${s.status}:${s.current_tool}:${s.tool_description}:${s.last_user_prompt}:${s.last_assistant_message}:${s.live_reply}:${s.updated_at}`,
       )
       .join('|'),
   );

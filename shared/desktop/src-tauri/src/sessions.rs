@@ -11,6 +11,7 @@ use morrow_core::intake::SourceCatalog;
 use morrow_core::reduce::{
     AgentStatus, HookEvent, ReduceContext, SessionSnapshot, SideEffect, Timestamp, reduce_event,
 };
+use morrow_core::transcript::ScanDelta;
 use morrow_protocol::HookPayload;
 use serde::Serialize;
 
@@ -83,6 +84,10 @@ pub struct Session {
     pub tool_description: String,
     pub last_user_prompt: String,
     pub last_assistant_message: String,
+    /// Newest assistant text from the session's transcript tail (#192). The
+    /// frontend shows only this on the reply row; the hook fields above still
+    /// own card status, tier order and the collapsed bar.
+    pub live_reply: String,
     pub model: String,
     /// The full working directory; `cwd_name` is its last component.
     pub cwd: String,
@@ -95,6 +100,12 @@ pub struct Session {
 pub struct Sessions {
     inner: morrow_core::reduce::Sessions,
     last_events: HashMap<String, String>,
+    /// The transcript path a hook reported for each session. Kept here rather
+    /// than read from the reducer: `SessionStart` rebuilds its snapshot and
+    /// drops the core's copy of the field.
+    transcript_paths: HashMap<String, String>,
+    /// Live transcript replies, keyed by session id, newest text only.
+    live_replies: HashMap<String, String>,
     sources: SourceCatalog,
     home_directory: String,
 }
@@ -129,14 +140,67 @@ impl Sessions {
             if let SideEffect::RemoveSession { session_id } = effect {
                 self.inner.remove(session_id);
                 self.last_events.remove(session_id);
+                self.transcript_paths.remove(session_id);
+                self.live_replies.remove(session_id);
             }
         }
         let card_id = event.session_id.as_deref().unwrap_or("default");
         if self.inner.contains_key(card_id) {
             self.last_events
                 .insert(card_id.to_owned(), event.event_name);
+            if let Some(path) = payload
+                .as_object()
+                .get("transcript_path")
+                .and_then(serde_json::Value::as_str)
+                .filter(|path| !path.is_empty())
+            {
+                self.transcript_paths
+                    .insert(card_id.to_owned(), path.to_owned());
+            }
         }
         effects
+    }
+
+    /// The transcript paths the hooks reported, for the shell's tailer.
+    pub fn transcript_paths(&self) -> Vec<(String, String)> {
+        self.transcript_paths
+            .iter()
+            .map(|(id, path)| (id.clone(), path.clone()))
+            .collect()
+    }
+
+    /// Apply one parsed chunk of a session's transcript. Only the live reply
+    /// changes here: a streaming assistant line is not a finished turn, so
+    /// promoting it to `last_assistant_message` would move a working card to
+    /// DONE and break #183's tier order.
+    pub fn apply_transcript_delta(&mut self, session_id: &str, delta: &ScanDelta) -> bool {
+        if !self.inner.contains_key(session_id) {
+            return false;
+        }
+        let current = self.live_replies.get(session_id).cloned();
+        // A reply in this chunk is the newest word; a prompt without one starts
+        // a turn whose old reply is stale. Anything else leaves the card alone.
+        let next = match delta
+            .last_assistant_message
+            .as_deref()
+            .filter(|reply| !reply.trim().is_empty())
+        {
+            Some(reply) => Some(reply.to_owned()),
+            None if delta.last_user_prompt.is_some() => None,
+            None => current.clone(),
+        };
+        if next == current {
+            return false;
+        }
+        match next {
+            Some(reply) => {
+                self.live_replies.insert(session_id.to_owned(), reply);
+            }
+            None => {
+                self.live_replies.remove(session_id);
+            }
+        }
+        true
     }
 
     /// NEEDS YOU first, then working/thinking, then the rest; newest first
@@ -165,6 +229,11 @@ impl Sessions {
                 tool_description: or_empty(&snap.tool_description),
                 last_user_prompt: or_empty(&snap.last_user_prompt),
                 last_assistant_message: or_empty(&snap.last_assistant_message),
+                live_reply: self
+                    .live_replies
+                    .get(session_id)
+                    .cloned()
+                    .unwrap_or_default(),
                 model: or_empty(&snap.model),
                 cwd: or_empty(&snap.cwd),
                 term_app: or_empty(&snap.term_app),
@@ -227,6 +296,7 @@ mod tests {
                 tool_description: String::new(),
                 last_user_prompt: String::new(),
                 last_assistant_message: String::new(),
+                live_reply: String::new(),
                 model: String::new(),
                 cwd: "/home/u/proj/".into(),
                 term_app: String::new(),
@@ -378,6 +448,55 @@ mod tests {
     }
 
     #[test]
+    fn a_transcript_delta_carries_the_reply_without_changing_the_hook_card() {
+        use morrow_core::transcript::ScanDelta;
+
+        let mut sessions = Sessions::with_home("/home/u");
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"SessionStart","transcript_path":"/tmp/a.jsonl"}"#),
+            10,
+        );
+        assert_eq!(sessions.snapshot()[0].live_reply, "");
+
+        let mut delta = ScanDelta::default();
+        delta.last_user_prompt = Some("Add filters".into());
+        assert!(
+            !sessions.apply_transcript_delta("a", &delta),
+            "a prompt alone shows nothing"
+        );
+
+        delta.last_assistant_message = Some("Adding filters".into());
+        assert!(sessions.apply_transcript_delta("a", &delta));
+        let row = &sessions.snapshot()[0];
+        assert_eq!(row.live_reply, "Adding filters");
+        // #183 owns the hook-derived card: status, prompt, reply and time are
+        // untouched by tail progress, so tier ordering stays the same.
+        assert_eq!(row.status, CardStatus::Idle);
+        assert_eq!(row.last_user_prompt, "");
+        assert_eq!(row.last_assistant_message, "");
+        assert_eq!(row.updated_at, 10);
+        assert!(
+            !sessions.apply_transcript_delta("a", &delta),
+            "unchanged text is not a change"
+        );
+
+        delta.last_assistant_message = Some("Wired the bar".into());
+        sessions.apply_transcript_delta("a", &delta);
+        assert_eq!(sessions.snapshot()[0].live_reply, "Wired the bar");
+
+        // A new turn supersedes the old reply, and a gone session forgets it.
+        let mut next_turn = ScanDelta::default();
+        next_turn.last_user_prompt = Some("Ship it".into());
+        sessions.apply_transcript_delta("a", &next_turn);
+        assert_eq!(sessions.snapshot()[0].live_reply, "");
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"SessionEnd"}"#),
+            20,
+        );
+        assert!(sessions.snapshot().is_empty());
+    }
+
+    #[test]
     fn card_status_maps_every_agent_state_and_idle_reason() {
         let mut s = SessionSnapshot::new(Timestamp(1.0));
         s.status = AgentStatus::WaitingApproval;
@@ -412,7 +531,9 @@ mod tests {
             10,
         );
         sessions.apply(
-            &hook(r#"{"session_id":"thinking","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#),
+            &hook(
+                r#"{"session_id":"thinking","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#,
+            ),
             20,
         );
         sessions.apply(
@@ -423,7 +544,10 @@ mod tests {
             &hook(r#"{"session_id":"done","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#),
             31,
         );
-        sessions.apply(&hook(r#"{"session_id":"done","hook_event_name":"Stop"}"#), 32);
+        sessions.apply(
+            &hook(r#"{"session_id":"done","hook_event_name":"Stop"}"#),
+            32,
+        );
         sessions.apply(
             &hook(r#"{"session_id":"idle","hook_event_name":"SessionStart"}"#),
             40,

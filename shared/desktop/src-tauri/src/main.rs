@@ -16,6 +16,7 @@ mod sessions;
 mod settings;
 mod settings_window;
 mod tray;
+mod transcripts;
 #[cfg(windows)]
 mod windows_panel;
 

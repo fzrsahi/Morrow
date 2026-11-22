@@ -22,6 +22,8 @@ export type Session = {
   tool_description: string;
   last_user_prompt: string;
   last_assistant_message: string;
+  /** Newest text from the transcript tail; only the card's reply row shows it. */
+  live_reply: string;
   model: string;
   /** Full cwd; `cwd_name` is only its last component. */
   cwd: string;

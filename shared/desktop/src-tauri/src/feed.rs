@@ -3,6 +3,7 @@
 //! through the frontend's `Channel` at most once a frame (≤60 Hz), whatever
 //! the hook rate.
 
+use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -15,6 +16,7 @@ use tauri::ipc::Channel;
 
 use crate::permissions::{Card, Decision, Permissions};
 use crate::sessions::{Session, Sessions};
+use crate::transcripts::Tails;
 
 /// What the frontend receives (`Snapshot` in `src/App.svelte`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -26,6 +28,10 @@ pub struct Snapshot {
 
 /// One push per 1/60 s at most.
 const FRAME: Duration = Duration::from_micros(16_667);
+/// How often a visible panel looks for new transcript bytes. The feed still
+/// coalesces the resulting pushes to `FRAME`; a hidden panel does not wake at
+/// all (see the pusher below).
+const TAIL_POLL: Duration = Duration::from_millis(200);
 
 #[derive(Default)]
 pub struct Feed {
@@ -39,6 +45,10 @@ struct State {
     channel: Option<Channel<Snapshot>>,
     /// The frontend has not seen the latest snapshot.
     dirty: bool,
+    /// The island window is showing (#197 hides it for fullscreen/lock). Only
+    /// a visible panel tails transcripts.
+    visible: bool,
+    tails: Tails,
 }
 
 impl Default for State {
@@ -48,24 +58,73 @@ impl Default for State {
             permissions: Permissions::default(),
             channel: None,
             dirty: false,
+            visible: true,
+            tails: Tails::default(),
         }
     }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
 impl Feed {
     /// Reduces one hook into the sessions.
     pub fn record(&self, payload: &HookPayload) {
-        let now_ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+        let now = now_ms();
         let mut state = self.lock();
-        for effect in state.sessions.apply(payload, now_ms) {
+        for effect in state.sessions.apply(payload, now) {
             if let SideEffect::RemoveSession { session_id } = effect {
                 state.permissions.drop_session(&session_id);
+                state.tails.remove(&session_id);
             }
         }
         state.dirty = true;
         self.changed.notify_one();
+    }
+
+    /// The window was hidden or shown (#197). Hiding forgets every attachment
+    /// so showing backfills from the tail instead of replaying a stale offset.
+    pub fn set_visible(&self, visible: bool) {
+        let mut state = self.lock();
+        if state.visible == visible {
+            return;
+        }
+        state.visible = visible;
+        if visible {
+            state.dirty = true;
+        } else {
+            state.tails = Tails::default();
+        }
+        self.changed.notify_one();
+    }
+
+    /// Read whatever the visible panel's sessions have appended. Called by
+    /// the pusher on its timeout, never from a hidden panel; hooks still
+    /// arrive and are reduced regardless of visibility.
+    pub fn poll_transcripts(&self) {
+        let mut state = self.lock();
+        if !state.visible {
+            return;
+        }
+        let paths = state.sessions.transcript_paths();
+        let live: HashSet<String> = paths.iter().map(|(id, _)| id.clone()).collect();
+        let mut changed = false;
+        for (session_id, path) in paths {
+            if let Some(delta) = state.tails.attach(&session_id, &path) {
+                changed |= state.sessions.apply_transcript_delta(&session_id, &delta);
+            }
+            if let Some(delta) = state.tails.poll(&session_id) {
+                changed |= state.sessions.apply_transcript_delta(&session_id, &delta);
+            }
+        }
+        state.tails.retain(|session_id| live.contains(session_id));
+        if changed {
+            state.dirty = true;
+            self.changed.notify_one();
+        }
     }
 
     /// Holds `payload` as a permission card; its decision arrives on the
@@ -113,10 +172,26 @@ impl Feed {
                     let (snapshot, channel) = {
                         let mut state = feed.lock();
                         while !(state.dirty && state.channel.is_some()) {
-                            state = feed
-                                .changed
-                                .wait(state)
-                                .unwrap_or_else(PoisonError::into_inner);
+                            if state.visible {
+                                // Only a showing panel wakes on its own: that
+                                // wake is the transcript poll. A hidden one
+                                // waits for a hook or a subscribe instead.
+                                let (next, elapsed) = feed
+                                    .changed
+                                    .wait_timeout(state, TAIL_POLL)
+                                    .unwrap_or_else(PoisonError::into_inner);
+                                state = next;
+                                if elapsed.timed_out() {
+                                    drop(state);
+                                    feed.poll_transcripts();
+                                    state = feed.lock();
+                                }
+                            } else {
+                                state = feed
+                                    .changed
+                                    .wait(state)
+                                    .unwrap_or_else(PoisonError::into_inner);
+                            }
                         }
                         state.dirty = false;
                         let snapshot = Snapshot {
@@ -140,5 +215,100 @@ impl Feed {
 
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transcripts::Tails;
+    use morrow_protocol::decode_payload;
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const REPLY: &str =
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Adding filters"}]}}"#;
+    const NEXT_REPLY: &str =
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Wired the bar"}]}}"#;
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "morrow-feed-192-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir_all(&dir).expect("scratch dir");
+            Self(dir)
+        }
+        fn file(&self) -> PathBuf {
+            self.0.join("transcript.jsonl")
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn hook(json: &str) -> HookPayload {
+        decode_payload(json.as_bytes()).unwrap()
+    }
+
+    fn append(path: &Path, line: &str) {
+        writeln!(
+            OpenOptions::new().append(true).open(path).expect("open"),
+            "{line}"
+        )
+        .expect("append");
+    }
+
+    fn live_reply(feed: &Feed) -> String {
+        feed.lock().sessions.snapshot()[0].live_reply.clone()
+    }
+
+    #[test]
+    fn a_hidden_panel_does_not_tail_but_a_visible_one_does() {
+        let scratch = Scratch::new();
+        let path = scratch.file();
+        fs::write(&path, format!("{REPLY}\n")).expect("write transcript");
+        let feed = Feed::default();
+        feed.record(&hook(&format!(
+            r#"{{"session_id":"a","hook_event_name":"SessionStart","transcript_path":"{}"}}"#,
+            path.display()
+        )));
+        feed.set_visible(false);
+        append(&path, NEXT_REPLY);
+
+        feed.poll_transcripts();
+        assert_eq!(live_reply(&feed), "", "no reads while hidden");
+        assert!(!feed.lock().tails.has("a"), "hiding drops the attachment");
+
+        feed.set_visible(true);
+        feed.poll_transcripts();
+        assert_eq!(live_reply(&feed), "Wired the bar");
+
+        // Hiding and showing again picks up whatever was appended meanwhile.
+        feed.set_visible(false);
+        append(
+            &path,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Newest"}]}}"#,
+        );
+        feed.set_visible(true);
+        feed.poll_transcripts();
+        assert_eq!(live_reply(&feed), "Newest");
+
+        // The session's own end tears the tail down, even while visible.
+        feed.record(&hook(
+            r#"{"session_id":"a","hook_event_name":"SessionEnd"}"#,
+        ));
+        assert!(feed.lock().sessions.snapshot().is_empty());
+        assert!(!feed.lock().tails.has("a"));
     }
 }

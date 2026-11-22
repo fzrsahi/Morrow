@@ -6,7 +6,7 @@
   import PixelIcon from './PixelIcon.svelte';
   import PixelText from './PixelText.svelte';
   import { MASCOT_SIZES } from '../mascots';
-  import { STATUS_META, mascotStatus, timeLabel, toolLabel } from '../session-cards';
+  import { STATUS_META, liveReply, mascotStatus, timeLabel, toolLabel } from '../session-cards';
   import { PALETTE } from '../tokens';
   import type { Session } from '../types';
 
@@ -16,6 +16,7 @@
 <ul class="list">
   {#each sessions as session (session.session_id)}
     {@const meta = STATUS_META[session.status]}
+    {@const reply = liveReply(session)}
     <li class="pcard" style="--sc:{meta.color}">
       <div class="pslot">
         <Mascot
@@ -64,9 +65,9 @@
             <b class="prompt">›</b><span>{session.last_user_prompt}</span>
           </div>
         {/if}
-        {#if session.last_assistant_message}
+        {#if reply}
           <div class="pline reply">
-            <b style="color:{meta.color}">●</b><span>{session.last_assistant_message}</span>
+            <b style="color:{meta.color}">●</b><span>{reply}</span>
           </div>
         {/if}
       </div>
