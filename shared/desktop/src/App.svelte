@@ -11,7 +11,6 @@
   import PixelText from './lib/components/PixelText.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
-  import SettingsPanel from './lib/components/SettingsPanel.svelte';
   import {
     COLLAPSED_SIZE,
     CLOSE_TRANSITION,
@@ -28,19 +27,7 @@
     type Size,
   } from './lib/panel';
   import { MOTION, PALETTE, cssVariables } from './lib/tokens';
-  import type {
-    AutostartStatus,
-    CapabilityRow,
-    Card,
-    Decision,
-    HooksSnapshot,
-    KimiStatus,
-    OpencodeStatus,
-    Session,
-    Snapshot,
-    TargetStatus,
-    YamlStatus,
-  } from './lib/types';
+  import type { CapabilityRow, Card, Decision, Session, Snapshot } from './lib/types';
 
   // B (floating pill) is the default: it clears the GNOME top bar. Variant A
   // covers the clock and is used only when a maintainer asks for ?variant=A.
@@ -68,11 +55,8 @@
   let filter = $state<SessionFilter>('all');
   let muted = $state(false);
   let quitArmed = $state(false);
-  let settingsOpen = $state(false);
-  let hooks = $state<HooksSnapshot | null>(null);
-  let capabilities = $state<CapabilityRow[]>([]);
-  let autostart = $state<AutostartStatus | null>(null);
-  let hooksBusy = $state(false);
+  // #199: settings no longer open inside the island; hooksError is still the
+  // shell's error line for fits and ambient probes.
   let hooksError = $state<string | null>(null);
   let island: HTMLElement;
   let panelContent: HTMLElement;
@@ -95,6 +79,12 @@
 
   function answer(id: number, decision: Decision) {
     invoke('answer_permission', { id, decision });
+  }
+
+  // #199 — Settings moved to its own window; the header gear only asks the
+  // shell to create or raise it, lazily on first use.
+  function openSettings() {
+    invoke('open_settings');
   }
 
   // The E2E-1 seam: after every fit the shell prints the buttons' rectangles.
@@ -221,12 +211,11 @@
 
   async function loadCapabilities() {
     try {
-      capabilities = await invoke<CapabilityRow[]>('capabilities');
-      autostart = await invoke<AutostartStatus>('autostart_status');
+      // #199: the table itself lives in the Settings window; the island only
+      // needs to know which ambient adapters it may ask.
+      const rows = await invoke<CapabilityRow[]>('capabilities');
       const supported = (feature: string) =>
-        capabilities.some(
-          (row) => row.feature === feature && 'Supported' in row.capability,
-        );
+        rows.some((row) => row.feature === feature && 'Supported' in row.capability);
       support = {
         fullscreenDetection: supported('Fullscreen detection'),
         screenLock: supported('Screen lock'),
@@ -275,57 +264,6 @@
     invoke('island_visible', { visible: !hidden }).catch(() => {});
   });
 
-  async function toggleAutostart() {
-    await run(() => invoke('autostart_set', { enabled: !autostart?.installed }));
-  }
-
-  async function loadHooks() {
-    try {
-      hooks = await invoke<HooksSnapshot>('hooks_status');
-      hooksError = null;
-    } catch (error) {
-      hooksError = String(error);
-    }
-  }
-
-  async function runHooks(command: 'hooks_install' | 'hooks_uninstall') {
-    await run(() => invoke(command));
-  }
-
-  async function toggleTarget(row: TargetStatus) {
-    await run(() =>
-      invoke(row.installed ? 'target_uninstall' : 'target_install', { source: row.source }),
-    );
-  }
-
-  async function toggleOpencode(row: OpencodeStatus) {
-    await run(() =>
-      invoke(row.plugin_installed ? 'opencode_uninstall' : 'opencode_install'),
-    );
-  }
-
-  async function toggleKimi(row: KimiStatus) {
-    await run(() => invoke(row.installed ? 'kimi_uninstall' : 'kimi_install'));
-  }
-
-  async function toggleYaml(row: YamlStatus) {
-    await run(() =>
-      invoke(row.installed ? 'yaml_uninstall' : 'yaml_install', { source: row.source }),
-    );
-  }
-
-  async function run(action: () => Promise<unknown>) {
-    hooksBusy = true;
-    try {
-      await action();
-      await loadHooks();
-    } catch (error) {
-      hooksError = String(error);
-    } finally {
-      hooksBusy = false;
-    }
-  }
-
   onMount(() => {
     const channel = new Channel<Snapshot>();
     channel.onmessage = (snapshot) => {
@@ -333,7 +271,6 @@
       cards = snapshot.permissions;
     };
     invoke('subscribe', { channel });
-    loadHooks();
     loadCapabilities();
     reportFit(COLLAPSED_SIZE, false);
 
@@ -351,7 +288,7 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = sessions.length + cards.length + Number(settingsOpen) + tab.length;
+    const content = sessions.length + cards.length + tab.length;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -390,28 +327,11 @@
       onTab={(next) => (tab = next)}
       onFilter={(next) => (filter = next)}
       onMute={onMute}
-      onSettings={() => (settingsOpen = !settingsOpen)}
+      onSettings={openSettings}
       onQuit={onQuit}
     />
     {#if tab === 'agents'}
       <div class="padded"><SessionList {sessions} /></div>
-      {#if settingsOpen}
-        <div class="padded">
-          <SettingsPanel
-            {hooks}
-            {capabilities}
-            {autostart}
-            {hooksBusy}
-            {hooksError}
-            onRunHooks={runHooks}
-            onToggleTarget={toggleTarget}
-            onToggleOpencode={toggleOpencode}
-            onToggleKimi={toggleKimi}
-            onToggleYaml={toggleYaml}
-            onToggleAutostart={toggleAutostart}
-          />
-        </div>
-      {/if}
     {:else}
       <div class="music-placeholder"><PixelText text="MUSIC" size={1.3} color={PALETTE.cyan} /></div>
     {/if}
