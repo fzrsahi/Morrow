@@ -3,6 +3,7 @@
 //! tight-fit, nonactivating panel, which answers permission requests.
 
 mod adapters;
+mod cli;
 mod completion;
 mod feed;
 mod hooks;
@@ -92,6 +93,12 @@ fn session_dismiss(feed: State<'_, Arc<Feed>>, session_id: String) {
 }
 
 fn main() -> ExitCode {
+    // #243: `--hooks …` is the installer without the GUI, for a gate script and
+    // for anyone who would rather not click. Anything else starts the island.
+    if let Some(code) = cli::run(&std::env::args().collect::<Vec<_>>()) {
+        return code;
+    }
+
     let smoke = std::env::var("MORROW_SMOKE").is_ok_and(|v| v == "1");
 
     let endpoint = current_endpoint();
