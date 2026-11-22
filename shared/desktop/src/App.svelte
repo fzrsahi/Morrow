@@ -31,6 +31,7 @@
     wizardFor,
     type WizardState,
   } from './lib/question';
+  import { FollowUpReminders, type ReminderRoom } from './lib/reminders';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -138,6 +139,9 @@
   const completionGate = new CompletionGate();
   const quitGate = new QuitGate();
   const drag = new DragGate();
+  // #201: pure timing/decision state; this component only arms the timer and
+  // calls the shell.
+  const reminders = new FollowUpReminders();
   let dragging = $state(false);
   let suppressClick = false;
   let hoverTimer: ReturnType<typeof setTimeout>;
@@ -151,6 +155,10 @@
   let ambient = $state<AmbientState>({ fullscreen: false, locked: false, quiet: false });
   let support = $state<AmbientSupport>({ fullscreenDetection: false, screenLock: false });
   let view = $derived(ambientView(ambient, support));
+  // #201: no reminder on a machine without notify-send; ids whose follow-up
+  // went out keep the collapsed bar's bell until the request leaves the feed.
+  let notificationsCapable = $state(false);
+  let reminderIds = $state<number[]>([]);
 
   // #193: the shell reads MPRIS/SMTC; the deck ticks from an anchor on this
   // webview's clock. No player probe is scheduled while the Music tab is shut.
@@ -194,13 +202,15 @@
     for (const id of stale) delete next[Number(id)];
     wizards = next;
   });
-  let hiddenCount = $derived(cards.filter((card) => hiddenIds.includes(card.id)).length);
-  // #188: the bell is for approvals, the amber `?` for questions.
-  let hiddenApprovals = $derived(
-    cards.filter((card) => !isQuestion(card) && hiddenIds.includes(card.id)).length,
-  );
-  let hiddenQuestions = $derived(
-    cards.filter((card) => isQuestion(card) && hiddenIds.includes(card.id)).length,
+  // #201: the collapsed bell (and the amber `?`) marks a request still waiting
+  // — hidden by the user (#186/#188) or followed up by an OS notification.
+  // Reconciled with the feed, so an answered card drops out of the hint and
+  // out of the tight-fit width.
+  let hintedIds = $derived([...new Set([...hiddenIds, ...reminderIds])]);
+  let hintedApprovals = $derived(
+    cards.filter((card) => !isQuestion(card) && hintedIds.includes(card.id)).length,  );
+  let hintedQuestions = $derived(
+    cards.filter((card) => isQuestion(card) && hintedIds.includes(card.id)).length,
   );
   // #186 bell + #193 music wing both need room in the tight-fit pill.
   // Idle music is the canvas' 292 pt frame; a working bar keeps its wider size.
@@ -210,7 +220,7 @@
       (track === null
         ? collapsedWidth(active)
         : Math.max(COLLAPSED_MUSIC_WIDTH, collapsedWidth(active) + 16)) +
-        (hiddenCount > 0 ? 20 : 0),
+        (hintedIds.length > 0 ? 20 : 0),
     ),
     height: COLLAPSED_SIZE.height,
   });  let completionSession = $derived(
@@ -717,6 +727,8 @@
         fullscreenDetection: supported('Fullscreen detection'),
         screenLock: supported('Screen lock'),
       };
+      // #201: a machine without notify-send must not claim to remind.
+      notificationsCapable = supported('Notifications');
       // #186: shortcut hints are only honest when a global hotkey can fire.
       hotkeySupported = supported('Global hotkey');
       // #195: no HUD (and no volume poll) on a machine without the adapter.
@@ -805,6 +817,37 @@
   $effect(() => {
     const hidden = view.hidden;
     invoke('island_visible', { visible: !hidden }).catch(() => {});
+  });
+
+  // #201: arm one wake-up for the earliest due follow-up. The pure scheduler
+  // owns the timeout and the once-per-request rule; this effect only arms and
+  // cancels the timer and calls the shell. It shares #197's ambient gate: a
+  // locked screen or quiet hours arms no timer at all, and the first eligible
+  // pass catches a held-back reminder up. Answering or dropping the request
+  // re-syncs, leaving nothing left to schedule.
+  $effect(() => {
+    const room: ReminderRoom = {
+      capable: notificationsCapable,
+      locked: ambient.locked,
+      quiet: ambient.quiet,
+    };
+    // Reading `cards` (not the scheduler's private map) is what re-arms the
+    // wake-up on every feed push: a new request starts its clock, an answered
+    // or dropped one leaves the map and takes its bell with it.
+    reminders.sync(cards, performance.now());
+    const at = reminders.nextDue(performance.now(), room);
+    reminderIds = reminders.hinted();
+    if (at === null) return;
+    const timer = setTimeout(() => {
+      const due = reminders.collect(performance.now(), room);
+      reminderIds = reminders.hinted();
+      for (const reminder of due) {
+        invoke('notify_send', { title: reminder.title, body: reminder.body }).catch(
+          (error) => (hooksError = String(error)),
+        );
+      }
+    }, Math.max(0, at - performance.now()));
+    return () => clearTimeout(timer);
   });
 
   onMount(() => {
@@ -957,8 +1000,8 @@
           {prehover}
           quiet={view.quiet}
           {active}
-          {hiddenApprovals}
-          {hiddenQuestions}
+          {hintedApprovals}
+          {hintedQuestions}
           {track}
           glance={completion !== null && completion.presentation !== 'status_only'}
           glanceLabel={completionSession?.cwd_name ?? ''}
