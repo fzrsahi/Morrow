@@ -123,7 +123,7 @@ Hari ini path socket tersebar di Swift, Python, dan empat plugin JS/TS, dan **su
 |---|---|---|
 | macOS | `MORROW_SOCKET_PATH` ?? `CODEISLAND_SOCKET_PATH` ?? `/tmp/morrow-<uid>.sock` (fallback legacy `/tmp/codeisland-<uid>.sock` bila hanya itu yang ada) — `SocketPath.swift:5-15` | `lstat` pemilik + `getpeereid` (sudah ada) |
 | Linux | `MORROW_SOCKET_PATH` ?? `$XDG_RUNTIME_DIR/morrow/island.sock` ?? `/tmp/morrow-<uid>.sock` | `lstat` pemilik + parent dir `0700`; `SO_PEERCRED` setelah connect; probe-connect sebelum unlink socket basi |
-| Windows | `\\.\pipe\morrow-<SID>` (format `windows/Morrow.Ipc/PipeEndpoint.cs:14`) | server: `first_pipe_instance(true)` + `reject_remote_clients(true)` + DACL hanya user ini; client: `GetNamedPipeServerProcessId` → token → bandingkan SID |
+| Windows | `\\.\pipe\morrow-<SID>` (format yang dulu di `windows/Morrow.Ipc/PipeEndpoint.cs:14`, dihapus di #110) | server: `first_pipe_instance(true)` + `reject_remote_clients(true)` + DACL hanya user ini; client: `GetNamedPipeServerProcessId` → token → bandingkan SID |
 
 Catatan keamanan: `PipeEndpoint.CreateServer` di C# tidak memakai `PipeSecurity`/`CurrentUserOnly` dan client tidak memverifikasi server. Nama pipe bisa ditebak, jadi pipe bisa di-*squat* — ancaman yang sama yang dijaga `SocketPath.Holder` di macOS. Implementasi Rust wajib menutupnya.
 
@@ -151,7 +151,7 @@ shared/
     morrow-bridge/         # bin
   desktop/                 # app Tauri v2 (src-tauri/ + src/ Svelte 5) — Windows + Linux
 linux/                     # packaging deb/rpm/AppImage, .desktop, skrip CI Linux
-windows/                   # packaging NSIS, signing; C# lama → windows/legacy-dotnet/ sampai Fase 6
+windows/                   # packaging NSIS, signing, lane kompilasi (ci/check.sh); C# lama sudah dihapus (#110)
 companions/                # ios/, android-watch/, hardware/ (opsional; boleh tetap di root)
 deploy/  docs/  .woodpecker.yaml  .githooks/
 ```
@@ -313,7 +313,7 @@ Sama persis dengan "Urutan Implementasi" di [#33](https://github.com/fzrsahi/Mor
 | 3 | Linux lengkap | Linux X11 | L3, L4, L6, L7 |
 | 4 | Windows | Windows | W1, W3, W4, W5, W7 |
 | 5 | Wayland | Linux | L5 |
-| 6 | Hapus core C# | Windows | W6 |
+| 6 | Hapus core C# — **selesai (#110)** | — | — |
 
 ### Fase 0 — Bekukan kontrak (tanpa Rust)
 
@@ -366,9 +366,11 @@ Window plumbing Win32 (§6), adapter WinRT, named pipe dengan verifikasi peer (�
 
 Patch layer-shell (§6.4), input region, XDG Portal, degradasi eksplisit di GNOME. Gate: jalan di Sway/Hyprland/KDE; GNOME menyatakan "anchoring tidak tersedia".
 
-### Fase 6 — Migrasi C#, lalu hapus (1 minggu, **butuh izin maintainer**)
+### Fase 6 — Migrasi C#, lalu hapus (**selesai, #110**)
 
-`windows/` masuk sebagai commit squashed `31116ab` oleh kontributor luar yang menyebut dirinya *"not an official Windows release"*. Gate: test Windows hijau; sesi Cursor tidak dobel.
+`windows/` masuk sebagai commit squashed `31116ab` oleh kontributor luar yang menyebut dirinya *"not an official Windows release"*. Izin maintainer diberikan di #110; seluruh solusi .NET (10 proyek: `Morrow.Core`, `Morrow.Ipc`, `Morrow.Bridge`, `Morrow.Hooks`, `Morrow.Bluetooth`, `Morrow.Protocol`, `Morrow.Windows` + test-nya) dihapus, dan `windows/` kini hanya berisi lane kompilasi `ci/check.sh`.
+
+Alasan penghapusan bisa dipertanggungjawabkan tanpa gate W-*: pohon itu sudah mati jauh sebelum dihapus — tidak ada job CI yang membangunnya, `global.json` memaku SDK 8.0.101 yang tidak terpasang di mesin mana pun, dan `Morrow.Windows` (`net8.0-windows`) tidak bisa dibangun di macOS. Riwayatnya tetap ada di `git log -- windows/` dan di `docs/archive/windows-dotnet-*.md`.
 
 ### Ringkasan gate end-to-end
 

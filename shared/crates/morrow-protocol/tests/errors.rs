@@ -153,7 +153,7 @@ fn envelope_needs_its_fields_and_no_others() {
         decode_envelope(br#"{"hook_event_name":"Stop"}"#),
         Err(ProtocolError::NotAnEnvelope)
     ));
-    // The C# port's envelope (`windows/Morrow.Protocol`) is not the contract's.
+    // The removed Windows .NET port's envelope is not the contract's (#110).
     assert!(matches!(
         decode_envelope(br#"{"protocolVersion":1,"event":{}}"#),
         Err(ProtocolError::NotAnEnvelope)
