@@ -7,6 +7,7 @@
   import PixelIcon from './PixelIcon.svelte';
   import { COLLAPSED, PALETTE } from '../tokens';
   import { mascotStatus, middleTruncate, toolColor, toolLabel } from '../session-cards';
+  import type { Track } from '../music';
   import type { Session } from '../types';
 
   type Props = {
@@ -17,6 +18,8 @@
     active?: Session | null;
     /** #186: approvals the user hid are still pending — the bell stays. */
     hiddenApprovals?: number;
+    /** #193: currently playing track; null leaves the #183 bar untouched. */
+    track?: Track | null;
   };
   let {
     sessionCount,
@@ -24,8 +27,14 @@
     quiet = false,
     active = null,
     hiddenApprovals = 0,
+    track = null,
   }: Props = $props();
 
+  // #193: canvas #collapsed-ambient fixes the wing's place — note + title on
+  // the left, spectrum on the right. CyberMusicWingView fixes the behaviour:
+  // the spectrum rests when paused and animates only while playing.
+  let music = $derived(track !== null);
+  let song = $derived(track ? `${track.title} · ${track.artist}`.trim() : '');
   let source = $derived(active?.source ?? 'claude');
   let status = $derived(active ? mascotStatus(active.status) : 'idle');
   let toolName = $derived(active?.current_tool ?? '');
@@ -37,9 +46,20 @@
   );
 </script>
 
-<div class="col" class:pre={prehover} data-state={state} aria-label="Morrow island, {state}">
+<div
+  class="col"
+  class:pre={prehover}
+  class:tight={music && active !== null}
+  data-state={state}
+  data-music={music}
+  aria-label="Morrow island, {state}"
+>
   <span class="wing">
     <Mascot {source} {status} size={COLLAPSED.mascot} />
+    {#if music}
+      <span class="note"><PixelIcon name="music" size={1.1} color={PALETTE.cyan} /></span>
+      <span class="song" class:compact={active !== null}>{song}</span>
+    {/if}
     {#if state === 'thinking'}
       <span class="thinkdots"><i></i><i></i><i></i></span>
       <PixelText text="THINKING" size={1.3} color={PALETTE.cyan} />
@@ -50,7 +70,13 @@
   </span>
   <span class="gap"></span>
   <span class="wing">
-    {#if state === 'thinking' || state === 'tool'}
+    {#if music}
+      <span class="spec" class:still={track?.status !== 'Playing'} aria-label="music visualizer">
+        {#each Array.from({ length: 5 }) as _, i}
+          <i style="animation-delay:-{(i * 0.18).toFixed(2)}s"></i>
+        {/each}
+      </span>
+    {:else if state === 'thinking' || state === 'tool'}
       <span class="dock">
         <PixelIcon name="workspace" size={0.9} color={PALETTE.cyan} />
         <span class="t">{dockLabel}</span>
@@ -126,6 +152,11 @@
   .gap {
     flex: 1 0 96px;
   }
+  /* The music wing shares the bar with a #183 working label: give the
+     spectrum the room it needs instead of the idle 96 pt spacer. */
+  .col.tight .gap {
+    flex-basis: 8px;
+  }
   /* #180 idle/empty states keep their 21 pt mascot; #183 reuses it working. */
   .moon,
   .bell {
@@ -138,6 +169,45 @@
     50% {
       opacity: 0.45;
       transform: scale(0.88);
+    }
+  }
+  /* #193: the right wing of canvas #collapsed-ambient. The note stands in for
+     Swift's album thumbnail; the 5-bar spectrum rests while paused. */
+  .note {
+    display: inline-flex;
+  }
+  .song {
+    font: 9px ui-monospace, monospace;
+    color: rgba(255, 255, 255, 0.7);
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .song.compact {
+    max-width: 100px;
+  }
+  .spec {
+    display: inline-flex;
+    gap: 1.5px;
+    align-items: flex-end;
+    height: 10px;
+  }
+  .spec i {
+    width: 2px;
+    background: var(--cyan);
+    animation: eq 0.9s ease-in-out infinite alternate;
+  }
+  .spec.still i {
+    animation: none;
+    height: 2px;
+  }
+  @keyframes eq {
+    from {
+      height: 2px;
+    }
+    to {
+      height: 10px;
     }
   }
   .thinkdots {

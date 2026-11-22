@@ -9,7 +9,7 @@
   import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
   import Header from './lib/components/Header.svelte';
-  import PixelText from './lib/components/PixelText.svelte';
+  import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
   import {
@@ -37,7 +37,17 @@
     sessionFilterFromSettings,
   } from './lib/settings';
   import { activeSession, collapsedWidth } from './lib/session-cards';
-  import { MOTION, PALETTE, cssVariables } from './lib/tokens';
+  import {
+    COLLAPSED_MUSIC_WIDTH,
+    controls,
+    deckState,
+    localPosition,
+    refreshPlan,
+    seekOffsetUs,
+    type LyricLine,
+    type Track,
+  } from './lib/music';
+  import { MOTION, cssVariables } from './lib/tokens';
   import type { CapabilityRow, Card, Decision, Session, Snapshot } from './lib/types';
 
   // B (floating pill) is the default: it clears the GNOME top bar. Variant A
@@ -95,15 +105,35 @@
   let ambient = $state<AmbientState>({ fullscreen: false, locked: false, quiet: false });
   let support = $state<AmbientSupport>({ fullscreenDetection: false, screenLock: false });
   let view = $derived(ambientView(ambient, support));
+
+  // #193: the shell reads MPRIS/SMTC; the deck ticks from an anchor on this
+  // webview's clock. No player probe is scheduled while the Music tab is shut.
+  let track = $state<Track | null>(null);
+  let lyrics = $state<LyricLine[] | null>(null);
+  let positionUs = $state(0);
+  let anchorMs = 0;
+  let generation = 0;
+  let tickTimer: ReturnType<typeof setInterval> | undefined;
+  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let deck = $derived(deckState(track));
+  let enabled = $derived(controls(track));
+
   let active = $derived(activeSession(sessions));
   let liveCards = $derived(
     cards.filter((card) => !hiddenIds.includes(card.id) && !gone.some((g) => g.card.id === card.id)),
   );
   let visibleCards = $derived([...liveCards, ...gone.map((g) => g.card)]);
   let hiddenCount = $derived(cards.filter((card) => hiddenIds.includes(card.id)).length);
-  // The bell needs room in the tight-fit pill (#collapsed-attention).
+  // #186 bell + #193 music wing both need room in the tight-fit pill.
+  // Idle music is the canvas' 292 pt frame; a working bar keeps its wider size.
   let collapsed = $derived({
-    width: Math.min(460, collapsedWidth(active) + (hiddenCount > 0 ? 20 : 0)),
+    width: Math.min(
+      460,
+      (track === null
+        ? collapsedWidth(active)
+        : Math.max(COLLAPSED_MUSIC_WIDTH, collapsedWidth(active) + 16)) +
+        (hiddenCount > 0 ? 20 : 0),
+    ),
     height: COLLAPSED_SIZE.height,
   });
   let lastCollapsedWidth = COLLAPSED_SIZE.width;
@@ -206,7 +236,11 @@
   function settleOpen() {
     if (fit.phase !== 'opening') return;
     fit.opened();
-    for (const size of fit.layout(measure())) reportFit(size, true);
+    const size = measure();
+    // A tab switched during the opening animation reaches us here, not in the
+    // content effect: the DOM box must catch up with the size we report.
+    openHeight = size.height;
+    for (const fitSize of fit.layout(size)) reportFit(fitSize, true);
   }
 
   function openPanel() {
@@ -336,6 +370,71 @@
     }
   }
 
+  // #193: one read asks the player, then the deck interpolates locally. The
+  // generation guards against a slow lyrics answer landing on a newer track.
+  async function readTrack() {
+    const mine = ++generation;
+    try {
+      const next = await invoke<Track | null>('music_track');
+      if (mine !== generation) return;
+      const changed = (next?.title ?? '') !== (track?.title ?? '') ||
+        (next?.artist ?? '') !== (track?.artist ?? '') ||
+        (next?.player ?? '') !== (track?.player ?? '');
+      track = next;
+      anchorMs = performance.now();
+      positionUs = next?.position_us ?? 0;
+      // A refresh of the same track keeps the old lines until the answer
+      // lands; only a new track clears them.
+      if (changed) lyrics = null;
+      if (next) {
+        const lines = await invoke<LyricLine[] | null>('music_lyrics', { track: next });
+        if (mine === generation) lyrics = lines;
+      }
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
+  async function command(name: string, args?: Record<string, unknown>) {
+    try {
+      await invoke(name, args);
+      await readTrack();
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
+  function onSeek(fraction: number) {
+    if (!track || !enabled.seek || track.length_us === null) return;
+    return command('music_seek', {
+      offset_us: seekOffsetUs(track, positionUs, fraction),
+    });
+  }
+
+  // Only the open Music tab schedules work: a position tick and a slow player
+  // re-read. Both timers die on tab switch, collapse, lock or unmount.
+  $effect(() => {
+    const plan = refreshPlan(tab, expanded && !view.suspended);
+    if (!plan.active) return;
+    void readTrack();
+    tickTimer = setInterval(() => {
+      positionUs = localPosition(
+        track?.position_us ?? 0,
+        track?.status ?? 'Stopped',
+        track?.length_us ?? null,
+        anchorMs,
+        performance.now(),
+      );
+    }, 250);
+    refreshTimer = setInterval(() => void readTrack(), plan.intervalMs);
+    return () => {
+      if (tickTimer !== undefined) clearInterval(tickTimer);
+      if (refreshTimer !== undefined) clearInterval(refreshTimer);
+      tickTimer = undefined;
+      refreshTimer = undefined;
+    };
+  });
+
   async function loadCapabilities() {
     try {
       // #199: the table itself lives in the Settings window; the island only
@@ -411,6 +510,9 @@
       })
       .catch(() => {});
     loadCapabilities();
+    // One seed read so the collapsed wing can show a track; the tab effect
+    // owns every read after this, so a closed tab never polls.
+    void readTrack();
     lastCollapsedWidth = collapsed.width;
     reportFit(collapsed, false);
 
@@ -421,7 +523,11 @@
       clearTimeout(closeTimer);
       clearTimeout(quitTimer);
       if (pollTimer !== undefined) clearTimeout(pollTimer);
+      if (tickTimer !== undefined) clearInterval(tickTimer);
+      if (refreshTimer !== undefined) clearInterval(refreshTimer);
       pollTimer = undefined;
+      tickTimer = undefined;
+      refreshTimer = undefined;
     };
   });
 
@@ -460,12 +566,16 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}`;
+    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
       if (fit.phase !== 'open') return;
-      for (const size of fit.layout(measure())) reportFit(size, true);
+      const size = measure();
+      // The deck (and any other tall tab) can be taller than the tab the
+      // panel opened on: keep the DOM box in step with the reported OS size.
+      openHeight = size.height;
+      for (const fitSize of fit.layout(size)) reportFit(fitSize, true);
     });
   });
 </script>
@@ -479,7 +589,7 @@
   data-variant={variant}
   data-phase={fit.phase}
   {style}
-  style:width={expanded || closing ? undefined : `${collapsed.width}px`}
+  style:width={expanded ? undefined : `${collapsed.width}px`}
   style:height={openHeight === null ? undefined : `${openHeight}px`}
   bind:this={island}
   onpointerenter={onPointerEnter}
@@ -502,6 +612,7 @@
         quiet={view.quiet}
         {active}
         hiddenApprovals={hiddenCount}
+        {track}
       />
       <span class="grip" aria-hidden="true"></span>
     </button>
@@ -532,7 +643,17 @@
         />
       </div>
     {:else}
-      <div class="music-placeholder"><PixelText text="MUSIC" size={1.3} color={PALETTE.cyan} /></div>
+      <MusicDeck
+        {track}
+        state={deck}
+        {lyrics}
+        {positionUs}
+        {enabled}
+        onPlayPause={() => command('music_play_pause')}
+        onNext={() => command('music_next')}
+        onPrevious={() => command('music_previous')}
+        onSeek={onSeek}
+      />
     {/if}
     {#if visibleCards.length > 0}
       <div class="padded cards">
@@ -684,11 +805,6 @@
   .cards {
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     margin-top: 4px;
-  }
-  .music-placeholder {
-    display: grid;
-    place-items: center;
-    height: 90px;
   }
   :focus-visible {
     outline: 2px solid var(--cyan);
