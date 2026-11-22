@@ -1374,18 +1374,14 @@ struct NotchPanelView: View {
                     .frame(maxWidth: .infinity, alignment: .center)
                     .opacity(isToastOnly ? 0 : 1)
                     .blur(radius: isToastOnly ? 3 : 0)
-                    .offset(y: isToastOnly ? -7 : 0)
+                    .scaleEffect(isToastOnly ? 0.92 : 1.0)
                     .allowsHitTesting(!isToastOnly)
-                    .animation(
-                        isToastOnly
-                            ? .easeOut(duration: 0.12)
-                            : .easeOut(duration: 0.20).delay(0.14),
-                        value: isToastOnly
-                    )
+                    .animation(.easeInOut(duration: 0.19), value: isToastOnly)
 
                     // Below-notch expanded content
                     if shouldShowExpanded || isToastOnly || signals.showChargingBanner {
                         belowNotchContent
+                            .frame(maxWidth: .infinity)
                             .clipped()
                     }
                 }
@@ -1404,26 +1400,11 @@ struct NotchPanelView: View {
                             minHeight: effectiveNotchHeight
                         )))
             )
-            .animation(
-                isToastOnly
-                    ? .spring(response: 0.36, dampingFraction: 0.84)
-                    : .spring(response: 0.34, dampingFraction: 1.0).delay(0.05),
-                value: panelWidth
-            )
+            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: panelWidth)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: shouldShowExpanded)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: displayMode)
-            .animation(
-                signals.showMiniPeekBanner
-                    ? .spring(response: 0.36, dampingFraction: 0.84)
-                    : .spring(response: 0.34, dampingFraction: 1.0).delay(0.05),
-                value: signals.showMiniPeekBanner
-            )
-            .animation(
-                signals.showChargingBanner
-                    ? .spring(response: 0.36, dampingFraction: 0.84)
-                    : .spring(response: 0.34, dampingFraction: 1.0).delay(0.05),
-                value: signals.showChargingBanner
-            )
+            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: signals.showMiniPeekBanner)
+            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: signals.showChargingBanner)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: mailManager.showMailArrivalAnimation)
             .animation(.spring(response: 0.38, dampingFraction: 0.82), value: expandedTab)
             .offset(y: curtainOffset)
@@ -1479,6 +1460,14 @@ struct NotchPanelView: View {
                 // reminders count as "reading this card" — whatever the
                 // hover then does to the surface below.
                 appState.followUps.pointerOverIsland = hovering
+                // Toast banners (charging / prayer mini-peek) own their own hover-hold;
+                // never auto-expand into the full session list while a toast is visible.
+                if isToastOnly {
+                    hoverTimer?.invalidate()
+                    hoverTimer = nil
+                    isHovered = hovering
+                    return
+                }
                 // Idle indicator hover — delay un-hover to prevent oscillation when
                 // the animated width change crosses the mouse position (#52).
                 if showIdleIndicator && !appState.surface.isExpanded {
@@ -1725,16 +1714,7 @@ struct NotchPanelView: View {
     // MARK: - Below-Notch Dynamic Island Banners & Expanded Cards
 
     private var toastBannerTransition: AnyTransition {
-        .asymmetric(
-            insertion: .blurFade
-                .combined(with: .scale(scale: 0.93, anchor: .top))
-                .combined(with: .offset(y: -6))
-                .animation(.spring(response: 0.30, dampingFraction: 0.86).delay(0.07)),
-            removal: .blurFade
-                .combined(with: .scale(scale: 0.94, anchor: .top))
-                .combined(with: .offset(y: -4))
-                .animation(.easeIn(duration: 0.10))
-        )
+        .blurFade.combined(with: .offset(y: -10))
     }
 
     @ViewBuilder
@@ -1746,7 +1726,6 @@ struct NotchPanelView: View {
                     sys.dismissChargingBanner()
                 }
             }
-            .frame(width: 380)
             .transition(toastBannerTransition)
         } else if signals.showMiniPeekBanner && !appState.surface.isExpanded {
             // PRAYER MINI PEEK BANNER: Sun-Arc compact notification at prayer entry (T-0m)
@@ -1756,7 +1735,6 @@ struct NotchPanelView: View {
                     appState.surface = .sessionList
                 }
             }
-            .frame(width: 500)
             .transition(toastBannerTransition)
         } else {
             expandedSurfaceContent

@@ -177,11 +177,16 @@ public struct MagSafeChargingBanner: View {
                     .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.58))
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(0)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
             PixelText(text: "\(displayedPercent)%", color: .white, pixelSize: 2.2)
+                .fixedSize()
+                .layoutPriority(2)
         }
         .padding(.horizontal, displayMode == .dynamicIsland ? 20 : 16)
         .padding(.vertical, displayMode == .dynamicIsland ? 12 : 10)
@@ -226,15 +231,20 @@ public struct MagSafeChargingBanner: View {
                     .font(.system(size: 12, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.white.opacity(0.56))
                     .lineLimit(1)
+                    .truncationMode(.tail)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+            .layoutPriority(0)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 4)
 
             Text("\(displayedPercent)%")
                 .font(.system(size: 23, weight: .regular, design: .rounded))
                 .monospacedDigit()
                 .foregroundStyle(.white)
                 .contentTransition(.numericText())
+                .fixedSize()
+                .layoutPriority(2)
         }
         .padding(.horizontal, displayMode == .dynamicIsland ? 20 : 16)
         .padding(.vertical, displayMode == .dynamicIsland ? 12 : 10)

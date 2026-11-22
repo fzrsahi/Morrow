@@ -472,12 +472,15 @@ public final class PrayerTimeManager: ObservableObject {
     private var bannerDismissWorkItem: DispatchWorkItem?
     private var isMiniPeekBannerHovered: Bool = false
 
+    private var miniPeekBannerDeadline: Date?
+
     public func dismissMiniPeekBanner() {
         bannerDismissWorkItem?.cancel()
         bannerDismissWorkItem = nil
         bannerDismissTask?.cancel()
         bannerDismissTask = nil
         isMiniPeekBannerHovered = false
+        miniPeekBannerDeadline = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             self.showMiniPeekBanner = false
         }
@@ -495,11 +498,17 @@ public final class PrayerTimeManager: ObservableObject {
             bannerDismissTask?.cancel()
             bannerDismissTask = nil
         } else if isMiniPeekBannerHovered {
-            dismissMiniPeekBanner()
+            isMiniPeekBannerHovered = false
+            let remaining = miniPeekBannerDeadline?.timeIntervalSinceNow ?? 0
+            if remaining > 0 {
+                scheduleBannerAutoDismiss(after: remaining)
+            } else {
+                dismissMiniPeekBanner()
+            }
         }
     }
 
-    private func scheduleBannerAutoDismiss() {
+    private func scheduleBannerAutoDismiss(after delay: TimeInterval = 3.0) {
         bannerDismissWorkItem?.cancel()
         bannerDismissTask?.cancel()
         guard !isMiniPeekBannerHovered else { return }
@@ -508,9 +517,10 @@ public final class PrayerTimeManager: ObservableObject {
             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                 self.showMiniPeekBanner = false
             }
+            self.miniPeekBannerDeadline = nil
         }
         bannerDismissWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// Evaluates if banner should pop up, deferring if an agent approval or question dialog is currently visible.
@@ -610,6 +620,7 @@ public final class PrayerTimeManager: ObservableObject {
     private func presentBanner(title: String, subtitle: String) {
         SystemMonitorManager.shared.dismissChargingBanner()
         isMiniPeekBannerHovered = false
+        miniPeekBannerDeadline = Date().addingTimeInterval(3.0)
         if let appState, appState.surface.isExpanded {
             appState.surface = .collapsed
         }

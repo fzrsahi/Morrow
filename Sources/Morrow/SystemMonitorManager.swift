@@ -70,11 +70,13 @@ public final class SystemMonitorManager: ObservableObject {
     @Published public private(set) var activeBannerBatteryLevel: Int = 100
     private var chargingDismissWorkItem: DispatchWorkItem?
     private var isChargingBannerHovered: Bool = false
+    private var chargingBannerDeadline: Date?
 
     public func dismissChargingBanner() {
         chargingDismissWorkItem?.cancel()
         chargingDismissWorkItem = nil
         isChargingBannerHovered = false
+        chargingBannerDeadline = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             self.showChargingBanner = false
         }
@@ -90,28 +92,40 @@ public final class SystemMonitorManager: ObservableObject {
             chargingDismissWorkItem?.cancel()
             chargingDismissWorkItem = nil
         } else if isChargingBannerHovered {
-            dismissChargingBanner()
+            isChargingBannerHovered = false
+            let remaining = chargingBannerDeadline?.timeIntervalSinceNow ?? 0
+            if remaining > 0 {
+                scheduleChargingAutoDismiss(after: remaining)
+            } else {
+                dismissChargingBanner()
+            }
         }
     }
 
-    public func triggerChargingBanner(previewState: PowerBannerState? = nil, previewBatteryLevel: Int? = nil) {
-        PrayerTimeManager.shared.dismissMiniPeekBanner()
-        isChargingBannerHovered = false
-        activeBannerState = previewState ?? metrics.powerBannerState
-        activeBannerBatteryLevel = previewBatteryLevel ?? metrics.batteryLevel
-        withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
-            showChargingBanner = true
-        }
-        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+    private func scheduleChargingAutoDismiss(after delay: TimeInterval) {
         chargingDismissWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self, !self.isChargingBannerHovered else { return }
             withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                 self.showChargingBanner = false
             }
+            self.chargingBannerDeadline = nil
         }
         chargingDismissWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: item)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+    }
+
+    public func triggerChargingBanner(previewState: PowerBannerState? = nil, previewBatteryLevel: Int? = nil) {
+        PrayerTimeManager.shared.dismissMiniPeekBanner()
+        isChargingBannerHovered = false
+        chargingBannerDeadline = Date().addingTimeInterval(3.0)
+        activeBannerState = previewState ?? metrics.powerBannerState
+        activeBannerBatteryLevel = previewBatteryLevel ?? metrics.batteryLevel
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
+            showChargingBanner = true
+        }
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+        scheduleChargingAutoDismiss(after: 3.0)
     }
 
     private var monitorTimer: Timer?
