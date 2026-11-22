@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (kelima) — tujuh slice remediasi (#249–#257). Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (keenam) — sebelas slice remediasi (#249–#265). #247 dan #248 selesai; sisa #232 adalah #244, #246 dan reader yang belum terpasang. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -126,6 +126,16 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (keenam) — #247 dan #248 selesai, dan panel tidak lagi kosong setelah restart
+
+- **Sudah:** empat slice lagi. **#258 → PR #262** tangga `resolve` lengkap (`is_live_config_dir` + `probe_entry`), jadi installer dan discovery menunjuk folder yang sama; `~/.claude` yang hanya berisi `settings.json` buatan kita tidak lagi bisa mengalahkan config dir asli. **#259 → PR #263** `scan_policy` (`is_interesting`, `ScanThrottle` leading+trailing, `ScanCache` + `read_if_changed`). **#260 → PR #264** koordinator `scan::run` — root × reader, dedupe, budget, `scan_roots` yang akhirnya memberi `path_identity` pemanggil produksi. **#261 → PR #265** backfill: `insert_discovered`, `Feed::backfill` dipanggil dari `subscribe`, dan reader transkrip Claude asli (tail 64 KB yang sama dengan tailer).
+- **Aturan yang membuat backfill aman:** `insert_discovered` menolak sesi yang sudah ada. Baris hasil scan selalu saksi yang lebih tua, jadi menimpanya akan mengembalikan kartu WORKING ke DONE dan mengambil tempat permission prompt di tier order.
+- **Bukti:** `cargo test --workspace` 753 lulus (703 sebelum empat slice ini); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **AC #247 yang ditolak:** "walk direktori punya batas kedalaman" — `Discovery/` di macOS hanya memanggil `contentsOfDirectory`, tidak pernah rekursif. Port dari tidak-apa-apa.
+- **AC #248 yang baru sebagian:** policy belum disambungkan ke `ambient.ts` (scan hanya saat attach), dan sesi hasil backfill belum bisa dipangkas sampai #246 memberi mereka `pid`.
+- **Berikutnya:** #246 (`AgentProcessFinder`) — ia yang memberi `pid` pada sesi discovery, sehingga prune bekerja dan `process_watch` (#103) berguna. Lalu #244, #264-#248 sisa reader (opencode/cursor/gemini cukup didaftarkan di `scan_once`), dan watcher berbasis `scan_policy`.
+- **Blocker:** gate hardware tidak berubah.
 
 ### 2026-11-22 (kelima) — store SQLite, dan guard yang ternyata mati
 
