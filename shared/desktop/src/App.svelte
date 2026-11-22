@@ -8,7 +8,7 @@
   import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
   import Header from './lib/components/Header.svelte';
-  import PixelText from './lib/components/PixelText.svelte';
+  import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
   import SettingsPanel from './lib/components/SettingsPanel.svelte';
@@ -27,7 +27,17 @@
     type SessionFilter,
     type Size,
   } from './lib/panel';
-  import { MOTION, PALETTE, cssVariables } from './lib/tokens';
+  import {
+    collapsedWidth,
+    controls,
+    deckState,
+    localPosition,
+    refreshPlan,
+    seekOffsetUs,
+    type LyricLine,
+    type Track,
+  } from './lib/music';
+  import { MOTION, cssVariables } from './lib/tokens';
   import type {
     AutostartStatus,
     CapabilityRow,
@@ -93,6 +103,20 @@
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   const POLL_MS = 1000;
 
+  // #193: the shell reads MPRIS/SMTC; the deck ticks from an anchor on this
+  // webview's clock. No player probe is scheduled while the Music tab is shut.
+  let track = $state<Track | null>(null);
+  let lyrics = $state<LyricLine[] | null>(null);
+  let positionUs = $state(0);
+  let anchorMs = 0;
+  let generation = 0;
+  let lastCollapsedWidth: number | null = null;
+  let tickTimer: ReturnType<typeof setInterval> | undefined;
+  let refreshTimer: ReturnType<typeof setInterval> | undefined;
+  let deck = $derived(deckState(track));
+  let enabled = $derived(controls(track));
+  let barWidth = $derived(collapsedWidth(track));
+
   function answer(id: number, decision: Decision) {
     invoke('answer_permission', { id, decision });
   }
@@ -137,6 +161,14 @@
       .catch((error) => (hooksError = String(error)));
   }
 
+  // The music wing widens the collapsed window from 240 to 292 pt. Report that
+  // only when it actually changes, so the #182 single-fit path stays intact.
+  function reportCollapsedFit() {
+    if (lastCollapsedWidth === barWidth) return;
+    lastCollapsedWidth = barWidth;
+    reportFit({ width: barWidth, height: COLLAPSED_SIZE.height }, false);
+  }
+
   function measure(): Size {
     // The content is laid out at the fixed 680 pt width even while the island
     // is collapsed, so the final size is known before the animation starts.
@@ -146,7 +178,11 @@
   function settleOpen() {
     if (fit.phase !== 'opening') return;
     fit.opened();
-    for (const size of fit.layout(measure())) reportFit(size, true);
+    const size = measure();
+    // A tab switched during the opening animation reaches us here, not in the
+    // content effect: the DOM box must catch up with the size we report.
+    openHeight = size.height;
+    for (const fitSize of fit.layout(size)) reportFit(fitSize, true);
   }
 
   function openPanel() {
@@ -174,7 +210,11 @@
     closeTimer = setTimeout(() => {
       closing = false;
       openHeight = null;
-      for (const size of fit.closed(COLLAPSED_SIZE)) reportFit(size, false);
+      const collapsed = { width: barWidth, height: COLLAPSED_SIZE.height };
+      for (const size of fit.closed(collapsed)) {
+        lastCollapsedWidth = size.width;
+        reportFit(size, false);
+      }
     }, CLOSE_TRANSITION.durationMs + 40);
   }
 
@@ -218,6 +258,78 @@
       hooksError = String(error);
     }
   }
+
+  // #193: one read asks the player, then the deck interpolates locally. The
+  // generation guards against a slow lyrics answer landing on a newer track.
+  async function readTrack() {
+    const mine = ++generation;
+    try {
+      const next = await invoke<Track | null>('music_track');
+      if (mine !== generation) return;
+      const changed = (next?.title ?? '') !== (track?.title ?? '') ||
+        (next?.artist ?? '') !== (track?.artist ?? '') ||
+        (next?.player ?? '') !== (track?.player ?? '');
+      track = next;
+      anchorMs = performance.now();
+      positionUs = next?.position_us ?? 0;
+      // A refresh of the same track keeps the old lines until the answer
+      // lands; only a new track clears them.
+      if (changed) lyrics = null;
+      if (next) {
+        const lines = await invoke<LyricLine[] | null>('music_lyrics', { track: next });
+        if (mine === generation) lyrics = lines;
+      }
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
+  async function command(name: string, args?: Record<string, unknown>) {
+    try {
+      await invoke(name, args);
+      await readTrack();
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
+  function onSeek(fraction: number) {
+    if (!track || !enabled.seek || track.length_us === null) return;
+    return command('music_seek', {
+      offset_us: seekOffsetUs(track, positionUs, fraction),
+    });
+  }
+
+  // Only the open Music tab schedules work: a position tick and a slow player
+  // re-read. Both timers die on tab switch, collapse, lock or unmount.
+  $effect(() => {
+    const plan = refreshPlan(tab, expanded && !view.suspended);
+    if (!plan.active) return;
+    void readTrack();
+    tickTimer = setInterval(() => {
+      positionUs = localPosition(
+        track?.position_us ?? 0,
+        track?.status ?? 'Stopped',
+        track?.length_us ?? null,
+        anchorMs,
+        performance.now(),
+      );
+    }, 250);
+    refreshTimer = setInterval(() => void readTrack(), plan.intervalMs);
+    return () => {
+      if (tickTimer !== undefined) clearInterval(tickTimer);
+      if (refreshTimer !== undefined) clearInterval(refreshTimer);
+      tickTimer = undefined;
+      refreshTimer = undefined;
+    };
+  });
+
+  // Report the 240 ↔ 292 pt transition without adding a fit to the open path.
+  $effect(() => {
+    void barWidth;
+    if (expanded || closing) return;
+    reportCollapsedFit();
+  });
 
   async function loadCapabilities() {
     try {
@@ -335,7 +447,10 @@
     invoke('subscribe', { channel });
     loadHooks();
     loadCapabilities();
-    reportFit(COLLAPSED_SIZE, false);
+    // One seed read so the collapsed wing can show a track; the tab effect
+    // owns every read after this, so a closed tab never polls.
+    void readTrack();
+    reportCollapsedFit();
 
     return () => {
       clearTimeout(hoverTimer);
@@ -344,19 +459,29 @@
       clearTimeout(closeTimer);
       clearTimeout(quitTimer);
       if (pollTimer !== undefined) clearTimeout(pollTimer);
+      if (tickTimer !== undefined) clearInterval(tickTimer);
+      if (refreshTimer !== undefined) clearInterval(refreshTimer);
       pollTimer = undefined;
+      tickTimer = undefined;
+      refreshTimer = undefined;
     };
   });
 
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = sessions.length + cards.length + Number(settingsOpen) + tab.length;
+    const content =
+      sessions.length + cards.length + Number(settingsOpen) + tab.length +
+      (track ? 1 : 0) + (lyrics?.length ?? 0);
     if (!expanded) return;
     void content;
     void tick().then(() => {
       if (fit.phase !== 'open') return;
-      for (const size of fit.layout(measure())) reportFit(size, true);
+      const size = measure();
+      // The deck (and the Settings panel) can be taller than the tab the
+      // panel opened on: keep the DOM box in step with the reported OS size.
+      openHeight = size.height;
+      for (const fitSize of fit.layout(size)) reportFit(fitSize, true);
     });
   });
 </script>
@@ -369,6 +494,7 @@
   data-variant={variant}
   data-phase={fit.phase}
   {style}
+  style:width={expanded ? undefined : `${barWidth}px`}
   style:height={openHeight === null ? undefined : `${openHeight}px`}
   bind:this={island}
   onpointerenter={onPointerEnter}
@@ -377,7 +503,7 @@
 >
   {#if !expanded && !closing}
     <button class="toggle" onclick={openPanel} aria-label="Open the Morrow panel">
-      <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} />
+      <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} {track} />
     </button>
   {/if}
   <div class="panel-content" class:visible={expanded || closing} bind:this={panelContent}>
@@ -413,7 +539,17 @@
         </div>
       {/if}
     {:else}
-      <div class="music-placeholder"><PixelText text="MUSIC" size={1.3} color={PALETTE.cyan} /></div>
+      <MusicDeck
+        {track}
+        state={deck}
+        {lyrics}
+        {positionUs}
+        {enabled}
+        onPlayPause={() => command('music_play_pause')}
+        onNext={() => command('music_next')}
+        onPrevious={() => command('music_previous')}
+        onSeek={onSeek}
+      />
     {/if}
     {#if cards.length > 0}
       <div class="padded cards">
@@ -530,11 +666,6 @@
   .cards {
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     margin-top: 4px;
-  }
-  .music-placeholder {
-    display: grid;
-    place-items: center;
-    height: 90px;
   }
   :focus-visible {
     outline: 2px solid var(--cyan);

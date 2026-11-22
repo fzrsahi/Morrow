@@ -6,38 +6,56 @@
   import PixelText from './PixelText.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import { COLLAPSED, PALETTE } from '../tokens';
+  import type { Track } from '../music';
 
-  type Props = { sessionCount: number; prehover?: boolean; quiet?: boolean };
-  let { sessionCount, prehover = false, quiet = false }: Props = $props();
+  type Props = { sessionCount: number; prehover?: boolean; quiet?: boolean; track?: Track | null };
+  let { sessionCount, prehover = false, quiet = false, track = null }: Props = $props();
 
   let state = $derived(sessionCount > 0 ? 'idle' : 'empty');
+  // #193: canvas #collapsed-ambient fixes the wing's place — title on the
+  // left next to the mascot, spectrum on the right. CyberMusicWingView fixes
+  // the behaviour: a still spectrum when paused, animated only while playing.
+  let music = $derived(track !== null);
+  let song = $derived(track ? `${track.title} · ${track.artist}`.trim() : '');
 </script>
 
-<div class="col" class:pre={prehover} data-state={state} aria-label="Morrow island, {state}">
+<div class="col" class:pre={prehover} data-state={state} data-music={music} aria-label="Morrow island, {state}">
   <span class="wing">
     <Mascot source="claude" status="idle" size={COLLAPSED.mascot} />
+    {#if music}
+      <span class="note"><PixelIcon name="music" size={1.1} color={PALETTE.cyan} /></span>
+      <span class="song">{song}</span>
+    {/if}
   </span>
   <span class="gap"></span>
   <span class="wing">
-    {#if state === 'empty' && !quiet}
-      <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
+    {#if music}
+      <span class="spec" class:still={track?.status !== 'Playing'} aria-label="music visualizer">
+        {#each Array.from({ length: 5 }) as _, i}
+          <i style="animation-delay:-{(i * 0.18).toFixed(2)}s"></i>
+        {/each}
+      </span>
     {:else}
-      <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
-    {/if}
-    {#if quiet}
-      <!-- #197: canvas #collapsed-ambient, quiet frame. The moon is a line
-           icon (no bitmap in pixel-icons.json), coloured with the #180 token. -->
-      <svg
-        class="moon"
-        viewBox="0 0 16 16"
-        width="10"
-        height="10"
-        fill={PALETTE.textMuted}
-        aria-label="quiet hours"
-        role="img"
-      >
-        <path d="M12.5 10.5A5 5 0 0 1 6 3.8a5 5 0 1 0 6.5 6.7z" />
-      </svg>
+      {#if state === 'empty' && !quiet}
+        <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
+      {:else}
+        <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
+      {/if}
+      {#if quiet}
+        <!-- #197: canvas #collapsed-ambient, quiet frame. The moon is a line
+             icon (no bitmap in pixel-icons.json), coloured with the #180 token. -->
+        <svg
+          class="moon"
+          viewBox="0 0 16 16"
+          width="10"
+          height="10"
+          fill={PALETTE.textMuted}
+          aria-label="quiet hours"
+          role="img"
+        >
+          <path d="M12.5 10.5A5 5 0 0 1 6 3.8a5 5 0 1 0 6.5 6.7z" />
+        </svg>
+      {/if}
     {/if}
   </span>
 </div>
@@ -74,6 +92,42 @@
   /* #197 quiet-hours moon (the GIF/zz stand-in was replaced by Mascot in #181). */
   .moon {
     flex: none;
+  }
+  /* #193: the right wing of canvas #collapsed-ambient. The note stands in for
+     Swift's album thumbnail; the 5-bar spectrum rests while paused. */
+  .note {
+    display: inline-flex;
+  }
+  .song {
+    font: 9px ui-monospace, monospace;
+    color: rgba(255, 255, 255, 0.7);
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .spec {
+    display: inline-flex;
+    gap: 1.5px;
+    align-items: flex-end;
+    height: 10px;
+  }
+  .spec i {
+    width: 2px;
+    background: var(--cyan);
+    animation: eq 0.9s ease-in-out infinite alternate;
+  }
+  .spec.still i {
+    animation: none;
+    height: 2px;
+  }
+  @keyframes eq {
+    from {
+      height: 2px;
+    }
+    to {
+      height: 10px;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     .col {
