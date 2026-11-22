@@ -1,12 +1,14 @@
 <script lang="ts">
-  // #188 — the single-choice Question card of sections #question /
-  // #collapsed-attention. The shell holds the hook and writes the answer;
-  // this component only draws the options and forwards the pick / Skip / Hide.
+  // #188/#189 — the Question card of sections #question / #question-multi.
+  // The shell holds the hook and writes the answer; this component draws the
+  // options (or the typed field) and forwards the pick / Skip / Hide.
+  import { tick } from 'svelte';
   import Mascot from './Mascot.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import { GONE_NOTICE, SHORTCUTS, queueLabel, shortcutHint } from '../approval';
   import { MASCOT_SIZES } from '../mascots';
   import { PALETTE } from '../tokens';
+  import { canSubmitTyped, OTHER_LABEL, questionInput } from '../question';
   import type { QuestionCardView } from '../question';
   import type { Session } from '../types';
 
@@ -23,6 +25,8 @@
     onPick: (id: number, label: string) => void;
     onSkip: (id: number) => void;
     onHide: (id: number) => void;
+    /** #189: the field was clicked; the panel asks the island for keyboard focus. */
+    onFieldFocus: (id: number) => void;
   };
   let {
     card,
@@ -35,12 +39,56 @@
     onPick,
     onSkip,
     onHide,
+    onFieldFocus,
   }: Props = $props();
 
   let hovered = $state(-1);
+  let draft = $state('');
+  let showOther = $state(false);
+  let inputEl: HTMLInputElement;
   let queue = $derived(queueLabel(position, total));
   let hideKey = $derived(shortcutHint(SHORTCUTS.hide, hotkeySupported));
+  let typed = $derived(questionInput(card));
+  let canSubmit = $derived(canSubmitTyped(draft) && !gone && selected === null);
+
+  // The Other row reveals the field and focuses it; the input's onfocus is
+  // the one place that asks the shell to make the island keyboard-accessible.
+  async function revealOther() {
+    if (gone || selected !== null) return;
+    showOther = true;
+    await tick();
+    inputEl?.focus();
+  }
+
+  function submit() {
+    if (!canSubmit) return;
+    onPick(card.id, draft);
+  }
+
+  function onFieldKeydown(event: KeyboardEvent) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    submit();
+  }
 </script>
+
+{#snippet answerField()}
+  <!-- #189: a real input; the blue :focus-within ring is the canvas' .ans.focus. -->
+  <div class="ans">
+    <b aria-hidden="true">&gt;</b>
+    <input
+      bind:this={inputEl}
+      class="field"
+      type="text"
+      placeholder="Type your answer..."
+      aria-label="Your answer"
+      bind:value={draft}
+      disabled={gone || selected !== null}
+      onfocus={() => onFieldFocus(card.id)}
+      onkeydown={onFieldKeydown}
+    />
+  </div>
+{/snippet}
 
 <!-- data-card is the E2E-1 seam, shared with the approval card. -->
 <section class="card" class:dim={gone} data-card={card.id} aria-label="Question">
@@ -69,31 +117,54 @@
     {#if card.question.header}<span class="tagq">{card.question.header}</span>{/if}
     <span class="qt">{card.question.question}</span>
   </div>
-  <div class="opts">
-    {#each card.question.options as option, i (i)}
+  {#if typed === 'free'}
+    {@render answerField()}
+  {:else}
+    <div class="opts">
+      {#each card.question.options as option, i (i)}
+        <button
+          class="opt"
+          class:hov={hovered === i}
+          class:sel={selected === option.label}
+          disabled={gone || selected !== null}
+          onpointerenter={() => (hovered = i)}
+          onpointerleave={() => (hovered = -1)}
+          onclick={() => onPick(card.id, option.label)}
+        >
+          <span class="mk">▸</span>
+          <span class="ix">{i + 1}.</span>
+          <span class="body">
+            <span class="ol">{option.label}</span>
+            {#if option.description}<span class="od">{option.description}</span>{/if}
+          </span>
+        </button>
+      {/each}
       <button
         class="opt"
-        class:hov={hovered === i}
-        class:sel={selected === option.label}
+        class:hov={hovered === -2}
+        class:sel={showOther}
         disabled={gone || selected !== null}
-        onpointerenter={() => (hovered = i)}
+        onpointerenter={() => (hovered = -2)}
         onpointerleave={() => (hovered = -1)}
-        onclick={() => onPick(card.id, option.label)}
+        onclick={revealOther}
       >
         <span class="mk">▸</span>
-        <span class="ix">{i + 1}.</span>
-        <span class="body">
-          <span class="ol">{option.label}</span>
-          {#if option.description}<span class="od">{option.description}</span>{/if}
-        </span>
+        <span class="ix">…</span>
+        <span class="body"><span class="ol">{OTHER_LABEL}</span></span>
       </button>
-    {/each}
-  </div>
+    </div>
+    {#if showOther}
+      {@render answerField()}
+    {/if}
+  {/if}
   <div class="acts">
     <span class="sp"></span>
     <button class="btn q" disabled={gone} onclick={() => onHide(card.id)}
       >Hide{#if hideKey}<kbd>{hideKey}</kbd>{/if}</button>
     <button class="btn s" disabled={gone} onclick={() => onSkip(card.id)}>Skip</button>
+    {#if typed === 'free' || showOther}
+      <button class="btn p" disabled={!canSubmit} onclick={submit}>Submit</button>
+    {/if}
   </div>
 </section>
 
@@ -230,6 +301,40 @@
     font: var(--f-cap) system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.58);
   }
+  /* #189 — canvas .ans: padding 6 × 10, white 0.05 fill, white 0.10 stroke. */
+  .ans {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.05);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+    font: var(--f-link) system-ui, sans-serif;
+  }
+  .ans:focus-within {
+    box-shadow: inset 0 0 0 1px rgba(102, 179, 255, 0.55);
+  }
+  .ans b {
+    color: var(--green);
+    font: 700 var(--f-sec) ui-monospace, monospace;
+  }
+  .field {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    outline: 0;
+    background: none;
+    color: #fff;
+    font: inherit;
+  }
+  .field::placeholder {
+    color: rgba(255, 255, 255, 0.4);
+  }
+  .field:disabled {
+    cursor: default;
+  }
   .acts {
     display: flex;
     align-items: center;
@@ -271,6 +376,21 @@
   }
   .s:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.08);
+  }
+  .p {
+    padding: 6px 14px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--allow);
+  }
+  .p:hover:not(:disabled) {
+    /* canvas --allow-h / PALETTE.allowHover */
+    background: #2b8742;
+  }
+  .p:disabled {
+    background: rgba(41, 128, 61, 0.22);
+    color: rgba(255, 255, 255, 0.35);
+    cursor: default;
   }
   kbd {
     padding: 1px 4px;

@@ -16,7 +16,7 @@
   import PermissionCard from './lib/components/PermissionCard.svelte';
   import QuestionCard from './lib/components/QuestionCard.svelte';
   import VolumeHud from './lib/components/VolumeHud.svelte';
-  import { isQuestion, pickIndex } from './lib/question';
+  import { isQuestion, pickIndex, QuestionFocusGate } from './lib/question';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -90,6 +90,8 @@
   // a click (or a number key) shows the canvas' selected row until it lands.
   let selected = $state<{ id: number; label: string } | null>(null);
   let hotkeySupported = $state(false);
+  // #189: the typed field that borrowed the island's keyboard focus.
+  const questionFocus = new QuestionFocusGate();
   // #191: the last finished turn. The shell has already decided (via the
   // attention policy) whether it is a card, a glance or nothing at all.
   let completion = $state<Completion | null>(null);
@@ -204,6 +206,7 @@
       hooksError = String(error);
     } finally {
       if (selected?.id === id) selected = null;
+      releaseQuestionFocus(id);
     }
   }
 
@@ -226,6 +229,25 @@
     return settle(id, () => invoke<boolean>('skip_question', { id }));
   }
 
+  // #189: the panel is focusable(false), so a typed field must ask the shell
+  // to make the island accept keys while it is open, and give them back when
+  // the field, its card or the panel goes away. The gate keeps this to one
+  // call each way even with several cards on screen.
+  function focusQuestionField(id: number) {
+    const change = questionFocus.focus(id);
+    if (change) {
+      invoke('island_question_focus', change).catch((error) => (hooksError = String(error)));
+    }
+  }
+
+  function releaseQuestionFocus(id?: number) {
+    if (id !== undefined && questionFocus.ownerId !== id) return;
+    const change = questionFocus.release();
+    if (change) {
+      invoke('island_question_focus', change).catch((error) => (hooksError = String(error)));
+    }
+  }
+
   // #question: 1–9 pick the first visible question while the panel is open.
   function onKeyDown(event: KeyboardEvent) {
     if (!expanded || closing || event.ctrlKey || event.altKey || event.metaKey) return;
@@ -242,6 +264,7 @@
 
   function hide(id: number) {
     if (!hiddenIds.includes(id)) hiddenIds = [...hiddenIds, id];
+    releaseQuestionFocus(id);
   }
 
   // #199 — Settings moved to its own window; the header gear only asks the
@@ -348,6 +371,7 @@
     clearTimeout(completionTimer);
     completionTimer = undefined;
     if (fit.phase !== 'open') return;
+    releaseQuestionFocus();
     // Keep the OS window at the open size while the panel animates shut.
     fit.close();
     expanded = false;
@@ -644,6 +668,11 @@
   function acceptSnapshot(snapshot: Snapshot) {
     sessions = snapshot.sessions;
     cards = snapshot.permissions;
+    // #189: a field whose card was answered or dropped elsewhere must not
+    // leave the island holding keys meant for the app underneath.
+    if (questionFocus.ownerId !== null && !cards.some((c) => c.id === questionFocus.ownerId)) {
+      releaseQuestionFocus();
+    }
     // A hidden request answered outside the panel drops off the feed;
     // forget it so the collapsed bell stops with it (#186).
     const pending = new Set(snapshot.permissions.map((card) => card.id));
@@ -705,6 +734,7 @@
 
     return () => {
       unlisten?.();
+      releaseQuestionFocus();
       clearTimeout(hoverTimer);
       clearTimeout(collapseTimer);
       clearTimeout(openTimer);
@@ -897,6 +927,7 @@
               onPick={answerQuestion}
               onSkip={skipQuestion}
               onHide={hide}
+              onFieldFocus={focusQuestionField}
             />
           {:else}
             <PermissionCard
