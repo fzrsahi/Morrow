@@ -2,7 +2,7 @@
 // pages of the #settings canvas; the settings themselves live in the existing
 // ~/.codeisland/settings.json, read and written by the shell's settings_* commands.
 
-import type { SessionDensity, SessionFilter } from './panel';
+import type { DisplayMode, SessionDensity, SessionFilter } from './panel';
 import type { CapabilityRow } from './types';
 
 /** #202 — the shell emits the settings document to both webviews after a write. */
@@ -63,6 +63,8 @@ export const SETTINGS_KEYS = {
   accent: 'accent',
   animationSpeed: 'animationSpeed',
   islandShape: 'islandShape',
+  /** Same key and raw values as Swift `SettingsKey.islandDisplayMode`. */
+  displayMode: 'islandDisplayMode',
   position: 'position',
   expandOnHover: 'expandOnHover',
   collapseOnLeave: 'collapseOnLeave',
@@ -76,7 +78,9 @@ export type AppearanceSettings = {
   fontSize: 11 | 12 | 14 | 16;
   accent: string;
   animationSpeed: number;
+  /** Legacy #199 key, kept readable for existing settings documents. */
   islandShape: 'edge-tab' | 'floating-pill';
+  displayMode: DisplayMode;
   position: string;
   expandOnHover: boolean;
   collapseOnLeave: boolean;
@@ -87,7 +91,9 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   fontSize: 11,
   accent: 'cyan',
   animationSpeed: 1,
-  islandShape: 'edge-tab',
+  islandShape: 'floating-pill',
+  // No hardware notch on Windows/Linux: match Swift's non-notch island.
+  displayMode: 'dynamicIsland',
   position: 'Top centre · primary monitor',
   expandOnHover: false,
   collapseOnLeave: false,
@@ -113,6 +119,17 @@ function chosen<T extends string>(value: unknown, allowed: readonly T[], fallbac
   return allowed.includes(value as T) ? (value as T) : fallback;
 }
 
+/// The Swift display mode, migrated from the legacy #199 islandShape key when
+/// the user has not written an islandDisplayMode yet.
+export function displayModeFromSettings(stored: Record<string, unknown>): DisplayMode {
+  const raw = stored[SETTINGS_KEYS.displayMode];
+  if (raw === 'notch' || raw === 'dynamicIsland') return raw;
+  const legacy = stored[SETTINGS_KEYS.islandShape];
+  if (legacy === 'floating-pill') return 'dynamicIsland';
+  if (legacy === 'edge-tab') return 'notch';
+  return DEFAULT_APPEARANCE.displayMode;
+}
+
 /// Read the appearance values from the user's settings document. Unknown or
 /// malformed values fall back to defaults instead of breaking the window.
 export function appearanceFromSettings(value: unknown): AppearanceSettings {
@@ -135,6 +152,7 @@ export function appearanceFromSettings(value: unknown): AppearanceSettings {
       shape === 'edge-tab' || shape === 'floating-pill'
         ? shape
         : DEFAULT_APPEARANCE.islandShape,
+    displayMode: displayModeFromSettings(stored),
     position: text(stored[SETTINGS_KEYS.position], DEFAULT_APPEARANCE.position),
     expandOnHover: flag(stored[SETTINGS_KEYS.expandOnHover], DEFAULT_APPEARANCE.expandOnHover),
     collapseOnLeave: flag(

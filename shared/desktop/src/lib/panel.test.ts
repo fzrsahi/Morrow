@@ -15,6 +15,7 @@ import {
   containsPoint,
   islandShape,
   resolveVariant,
+  variantFromDisplayMode,
   snapOffset,
   springTransition,
 } from './panel';
@@ -24,13 +25,19 @@ const OPEN = { width: 680, height: 400 };
 const COLLAPSED = { width: 240, height: 34 };
 
 describe('attachment variant (#motion)', () => {
-  test('defaults to the floating pill so the GNOME clock stays visible', () => {
+  test('the default maps to Swift Dynamic Island (floating pill)', () => {
     expect(resolveVariant(null)).toBe('B');
     expect(resolveVariant('desk=gnome')).toBe('B');
+    expect(variantFromDisplayMode('dynamicIsland')).toBe('B');
   });
 
-  test('variant A is only used when explicitly chosen', () => {
-    expect(resolveVariant('variant=A')).toBe('A');
+  test('Swift Notch maps to the shoulder tab, and the two Swift raw values are the only modes', () => {
+    expect(variantFromDisplayMode('notch')).toBe('C');
+    expect(resolveVariant(null, 'notch')).toBe('C');
+  });
+
+  test('the canvas A edge tab has no Swift counterpart and is not selectable', () => {
+    expect(resolveVariant('variant=A')).toBe('B');
     expect(resolveVariant('variant=B')).toBe('B');
     expect(resolveVariant('variant=C')).toBe('C');
   });
@@ -48,7 +55,7 @@ describe('hit-test shape sent with the size', () => {
     });
   });
 
-  test('the collapsed bar keeps the 12 pt bottom of variant A', () => {
+  test('the legacy edge tab keeps its 12 pt bottom corners', () => {
     const shape = islandShape('A', false, COLLAPSED.width, COLLAPSED.height);
     expect(shape.bottomLeft).toBe(12);
     expect(shape.bottomRight).toBe(12);

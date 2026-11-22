@@ -43,11 +43,11 @@
 </div>
 <div class="grp">
   <div>
-    <span class="n">Island shape</span>
+    <span class="n">Display mode</span>
     <span class="s">
       <span class="seg2">
-        <button class:on={appearance.islandShape === 'edge-tab'} aria-pressed={appearance.islandShape === 'edge-tab'} onclick={() => onChange(SETTINGS_KEYS.islandShape, 'edge-tab')}>Edge tab</button>
-        <button class:on={appearance.islandShape === 'floating-pill'} aria-pressed={appearance.islandShape === 'floating-pill'} onclick={() => onChange(SETTINGS_KEYS.islandShape, 'floating-pill')}>Floating pill</button>
+        <button class:on={appearance.displayMode === 'notch'} aria-pressed={appearance.displayMode === 'notch'} onclick={() => onChange(SETTINGS_KEYS.displayMode, 'notch')}>Notch</button>
+        <button class:on={appearance.displayMode === 'dynamicIsland'} aria-pressed={appearance.displayMode === 'dynamicIsland'} onclick={() => onChange(SETTINGS_KEYS.displayMode, 'dynamicIsland')}>Dynamic Island</button>
       </span>
     </span>
   </div>
