@@ -2,6 +2,7 @@
 // pages of the #settings canvas; the settings themselves live in the existing
 // ~/.codeisland/settings.json, read and written by the shell's settings_* commands.
 
+import type { SessionDensity, SessionFilter } from './panel';
 import type { CapabilityRow } from './types';
 
 export type SettingsPageId =
@@ -62,6 +63,9 @@ export const SETTINGS_KEYS = {
   position: 'position',
   expandOnHover: 'expandOnHover',
   collapseOnLeave: 'collapseOnLeave',
+  /** #185: the filter choice and row density live in the same document. */
+  sessionFilter: 'sessionFilter',
+  sessionDensity: 'sessionDensity',
 } as const;
 
 export type AppearanceSettings = {
@@ -102,6 +106,10 @@ function flag(value: unknown, fallback: boolean): boolean {
   return typeof value === 'boolean' ? value : fallback;
 }
 
+function chosen<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+  return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
 /// Read the appearance values from the user's settings document. Unknown or
 /// malformed values fall back to defaults instead of breaking the window.
 export function appearanceFromSettings(value: unknown): AppearanceSettings {
@@ -131,6 +139,21 @@ export function appearanceFromSettings(value: unknown): AppearanceSettings {
       DEFAULT_APPEARANCE.collapseOnLeave,
     ),
   };
+}
+
+const FILTERS = ['all', 'sta', 'agt'] as const;
+const DENSITIES = ['compact', 'comfortable'] as const;
+
+/// #185: the ALL/STA/AGT choice survives a restart; a bad value is ignored
+/// rather than leaving the header with no selected filter.
+export function sessionFilterFromSettings(value: unknown): SessionFilter {
+  return chosen((object(value) ?? {})[SETTINGS_KEYS.sessionFilter], FILTERS, 'all');
+}
+
+/// #185: comfortable keeps #183's card rendering reachable for the tickets
+/// that build on it; a fresh install uses the 34 pt compact rows.
+export function sessionDensityFromSettings(value: unknown): SessionDensity {
+  return chosen((object(value) ?? {})[SETTINGS_KEYS.sessionDensity], DENSITIES, 'compact');
 }
 
 export type DescribedCapability = {

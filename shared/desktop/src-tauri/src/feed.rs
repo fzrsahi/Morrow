@@ -108,6 +108,15 @@ impl Feed {
         self.change(|state| state.permissions.drop_request(id));
     }
 
+    /// #185: the user removed a session from its card. Its held cards go too,
+    /// and the next snapshot carries the shorter list.
+    pub fn dismiss(&self, session_id: &str) {
+        self.change(|state| {
+            state.sessions.remove(session_id);
+            state.permissions.drop_session(session_id);
+        });
+    }
+
     fn change<T>(&self, f: impl FnOnce(&mut State) -> T) -> T {
         let mut state = self.lock();
         let result = f(&mut state);

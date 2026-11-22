@@ -7,6 +7,8 @@ import { MOTION } from './tokens';
 export type PanelVariant = 'A' | 'B' | 'C';
 export type PanelTab = 'agents' | 'music';
 export type SessionFilter = 'all' | 'sta' | 'agt';
+/** #185 keeps #183's comfortable cards reachable; compact is the default. */
+export type SessionDensity = 'compact' | 'comfortable';
 export type Size = { width: number; height: number };
 
 export type IslandShape = Size & {

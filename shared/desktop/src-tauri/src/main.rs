@@ -54,6 +54,12 @@ fn answer_permission(feed: State<'_, Arc<Feed>>, id: u64, decision: Decision) ->
     feed.answer(id, decision)
 }
 
+/// #185: the ✕ on a session card removes it from the shell's store.
+#[tauri::command]
+fn session_dismiss(feed: State<'_, Arc<Feed>>, session_id: String) {
+    feed.dismiss(&session_id);
+}
+
 fn main() -> ExitCode {
     let smoke = std::env::var("MORROW_SMOKE").is_ok_and(|v| v == "1");
 
@@ -93,6 +99,7 @@ fn main() -> ExitCode {
         .invoke_handler(tauri::generate_handler![
             subscribe,
             answer_permission,
+            session_dismiss,
             island::set_island_size,
             island::move_island,
             island::commit_island_position,

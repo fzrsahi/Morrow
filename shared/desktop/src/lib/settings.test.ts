@@ -3,6 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   appearanceFromSettings,
   describeCapability,
+  sessionDensityFromSettings,
+  sessionFilterFromSettings,
   SETTINGS_KEYS,
   SETTINGS_NAV,
 } from './settings';
@@ -90,6 +92,31 @@ describe('appearance settings', () => {
     expect(SETTINGS_KEYS.theme).toBe('theme');
     expect(SETTINGS_KEYS.fontSize).toBe('fontSize');
     expect(SETTINGS_KEYS.islandShape).toBe('islandShape');
+  });
+
+  test('the session filter is a top-level key written by the panel', () => {
+    expect(SETTINGS_KEYS.sessionFilter).toBe('sessionFilter');
+    expect(SETTINGS_KEYS.sessionDensity).toBe('sessionDensity');
+  });
+
+  test('a fresh install groups nothing and uses compact rows', () => {
+    expect(sessionFilterFromSettings(null)).toBe('all');
+    expect(sessionDensityFromSettings(null)).toBe('compact');
+  });
+
+  test('the stored filter and density survive a reload', () => {
+    expect(sessionFilterFromSettings({ sessionFilter: 'sta', sessionDensity: 'comfortable' })).toBe(
+      'sta',
+    );
+    expect(sessionDensityFromSettings({ sessionFilter: 'sta', sessionDensity: 'comfortable' })).toBe(
+      'comfortable',
+    );
+    expect(sessionFilterFromSettings({ sessionFilter: 'agt' })).toBe('agt');
+  });
+
+  test('malformed stored values fall back instead of breaking the panel', () => {
+    expect(sessionFilterFromSettings({ sessionFilter: 'unknown' })).toBe('all');
+    expect(sessionDensityFromSettings({ sessionDensity: 42 })).toBe('compact');
   });
 
   test('the port-only pages are reachable from the sidebar', () => {

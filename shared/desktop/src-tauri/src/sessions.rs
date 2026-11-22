@@ -138,7 +138,8 @@ impl Sessions {
         effects
     }
 
-    /// Forget a session whose process is gone, including its last event.
+    /// Forget a session: the ✕ on its card (#185) or a process that is gone
+    /// (#198). Its last event goes with it so no stale label survives.
     pub fn remove(&mut self, session_id: &str) {
         self.inner.remove(session_id);
         self.last_events.remove(session_id);
@@ -211,6 +212,24 @@ mod tests {
 
     fn hook(json: &str) -> HookPayload {
         decode_payload(json.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn removing_a_session_keeps_the_others_and_their_order() {
+        let mut sessions = Sessions::default();
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"SessionStart","cwd":"/home/u/a"}"#),
+            10,
+        );
+        sessions.apply(
+            &hook(r#"{"session_id":"b","hook_event_name":"PreToolUse","cwd":"/home/u/b"}"#),
+            20,
+        );
+        sessions.remove("a");
+        let rows = sessions.snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "b");
+        assert_eq!(rows[0].last_event, "PreToolUse");
     }
 
     #[test]
