@@ -51,7 +51,7 @@ if [ -n "$OVERSIZED" ]; then
 fi
 
 # 3. Guardrail: Protect CI/CD configurations from unauthorized modification
-RESTRICTED_FILES=$(echo "$TARGET_FILES" | grep -E "^(\.woodpecker\.yaml|\.github/workflows/)" || true)
+RESTRICTED_FILES=$(echo "$TARGET_FILES" | grep -E "^(\.woodpecker|\.github/workflows/)" || true)
 if [ -n "$RESTRICTED_FILES" ]; then
     # If a merge is in progress, ignore restricted files whose staged content matches MERGE_HEAD
     # (i.e. brought in cleanly from the merged branch such as origin/main without local alteration)

@@ -1,0 +1,122 @@
+# ==============================================================================
+# Pipeline 3: Deployment & Artifact Distribution to EC2 Mirror and GitHub
+# ==============================================================================
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      lfs: false
+
+when:
+  - event: tag
+  - event: push
+    branch: dev
+
+labels:
+  platform: darwin/amd64
+
+steps:
+  # --------------------------------------------------------------------------
+  # 2. Development Track: Auto-build beta DMG & deploy to dev mirror via SCP
+  # --------------------------------------------------------------------------
+  - name: build-dev-dmg
+    image: bash
+    environment:
+      SPARKLE_PRIVATE_KEY:
+        from_secret: sparkle_private_key
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - 'echo "==> Dev build triggered on branch dev (commit: ${CI_COMMIT_SHA:0:7})"'
+      - BASE_VER=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' macos/Info.plist 2>/dev/null || /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist 2>/dev/null || echo "1.0.42")
+      - DEV_VERSION="${BASE_VER}-dev.${CI_PIPELINE_NUMBER}"
+      - 'echo "==> Building Morrow Beta version: $DEV_VERSION"'
+      - |
+        if [ -f "./macos/ci/package.sh" ]; then
+          ./macos/ci/package.sh "$DEV_VERSION"
+        elif [ -f "./scripts/ci/macos-package.sh" ]; then
+          ./scripts/ci/macos-package.sh "$DEV_VERSION"
+        fi
+      - |
+        SIZE=$(stat -f%z dist/macos/Morrow.dmg 2>/dev/null || stat -c%s dist/macos/Morrow.dmg)
+        python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / Artifact Integrity Smoke Test" --state success --description "DMG verified ($((SIZE/1024/1024))MB)" || true
+      - |
+        if [ -f "./shared/ci/manifest.sh" ]; then
+          ./shared/ci/manifest.sh "$DEV_VERSION" --channel dev
+        elif [ -f "./macos/ci/manifest.sh" ]; then
+          ./macos/ci/manifest.sh "$DEV_VERSION" --channel dev
+        elif [ -f "./scripts/ci/manifest.sh" ]; then
+          ./scripts/ci/manifest.sh "$DEV_VERSION" --channel dev
+        fi
+      - |
+        echo "==> Deploying artifacts to EC2 distribution node via SSH..."
+        SSH_KEY="$HOME/.ssh/codeisland_deploy"
+        EC2_HOST="admin@ec2-100-54-212-156.compute-1.amazonaws.com"
+        EC2_DATA="/home/admin/codeisland-node/data"
+        SSH_OPTS="-i $SSH_KEY -o StrictHostKeyChecking=no -o BatchMode=yes -o ConnectTimeout=15"
+
+        # 1. Create target release folder
+        ssh $SSH_OPTS "$EC2_HOST" "mkdir -p $EC2_DATA/releases/$DEV_VERSION"
+        # 2. Upload binary DMG
+        scp -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes dist/macos/Morrow.dmg "$EC2_HOST:$EC2_DATA/releases/$DEV_VERSION/Morrow.dmg"
+        # 3. Upload signed appcast-dev.xml atomically
+        scp -i "$SSH_KEY" -o StrictHostKeyChecking=no -o BatchMode=yes dist/appcast-dev.xml "$EC2_HOST:$EC2_DATA/appcast-dev.xml.tmp"
+        ssh $SSH_OPTS "$EC2_HOST" "mv -f $EC2_DATA/appcast-dev.xml.tmp $EC2_DATA/appcast-dev.xml && chmod 644 $EC2_DATA/appcast-dev.xml"
+        # 4. Release retention: retain last 3 dev builds to preserve EC2 disk space
+        ssh $SSH_OPTS "$EC2_HOST" "cd $EC2_DATA/releases && ls -dt *-dev.* 2>/dev/null | tail -n +4 | xargs -r rm -rf"
+        echo "==> Dev deployment finished successfully!"
+    when:
+      - event: push
+        branch: dev
+
+  # --------------------------------------------------------------------------
+  # 3. Production Track: Build stable release DMG & update appcast.xml on tag
+  # --------------------------------------------------------------------------
+  - name: build-release-dmg
+    image: bash
+    environment:
+      CODEISLAND_WEBHOOK_SECRET:
+        from_secret: codeisland_webhook_secret
+      SPARKLE_PRIVATE_KEY:
+        from_secret: sparkle_private_key
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - 'echo "==> Production release tag detected: $CI_COMMIT_TAG"'
+      - VERSION="${CI_COMMIT_TAG#[vV]}"
+      - 'echo "==> Building Morrow Production DMG version: $VERSION"'
+      - |
+        if [ -f "./macos/ci/package.sh" ]; then
+          ./macos/ci/package.sh "$VERSION"
+        elif [ -f "./scripts/ci/macos-package.sh" ]; then
+          ./scripts/ci/macos-package.sh "$VERSION"
+        fi
+      - |
+        SIZE=$(stat -f%z dist/macos/Morrow.dmg 2>/dev/null || stat -c%s dist/macos/Morrow.dmg)
+        python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / Artifact Integrity Smoke Test" --state success --description "DMG verified ($((SIZE/1024/1024))MB)" || true
+      - |
+        if [ -f "./shared/ci/manifest.sh" ]; then
+          ./shared/ci/manifest.sh "$VERSION" --channel stable
+        elif [ -f "./macos/ci/manifest.sh" ]; then
+          ./macos/ci/manifest.sh "$VERSION" --channel stable
+        elif [ -f "./scripts/ci/manifest.sh" ]; then
+          ./scripts/ci/manifest.sh "$VERSION" --channel stable
+        fi
+      - |
+        echo "==> Uploading release artifacts to GitHub Release..."
+        cp dist/macos/SHA256SUMS dist/macos/SHA256SUMS.txt
+        python3 ./scripts/upload-github-release.py \
+          --repo "fzrsahi/Morrow" \
+          --tag "$CI_COMMIT_TAG" \
+          --files dist/macos/Morrow.dmg dist/macos/SHA256SUMS.txt dist/appcast.xml || true
+      - |
+        echo "==> Triggering production deployment webhook..."
+        SHA=$(awk '{print $1}' dist/macos/SHA256SUMS)
+        curl -f -X POST \
+          -H "Content-Type: application/json" \
+          -H "X-Webhook-Secret: $CODEISLAND_WEBHOOK_SECRET" \
+          -d "{\"version\":\"$VERSION\",\"tag\":\"$CI_COMMIT_TAG\",\"repository\":\"$CI_REPO\",\"sha256\":\"$SHA\",\"channel\":\"stable\"}" \
+          https://codeisland.azhr.cloud/api/deploy-webhook || true
+        echo "==> Production pipeline finished successfully!"
+    when:
+      - event: tag

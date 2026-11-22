@@ -25,7 +25,8 @@ final class CoreContractTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .deletingLastPathComponent()
-            .appendingPathComponent("fixtures/core", isDirectory: true)
+            .deletingLastPathComponent()
+            .appendingPathComponent("shared/contract/fixtures/core", isDirectory: true)
         let documents = try CoreContractJSONExporter.documents()
         XCTAssertEqual(
             try FileManager.default.contentsOfDirectory(atPath: coreDir.path).filter { $0.hasSuffix(".json") }.sorted(),
