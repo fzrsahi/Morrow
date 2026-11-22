@@ -1,7 +1,7 @@
 //! The panel's shape (#106): which points are island and which are window-only,
 //! because the corners are round and the window is not.
 
-use morrow_platform::panel::{Panel, Rect, contains_rounded};
+use morrow_platform::panel::{Panel, Radii, Rect, contains_rounded, contains_shape};
 
 fn pill() -> Rect {
     // The collapsed island: 240 × 34, radius half the height.
@@ -56,7 +56,8 @@ fn a_panel_offset_in_its_window_maps_the_point() {
     let panel = Panel {
         window: Rect::new(100, 200, 240, 34),
         island: Rect::new(0, 0, 240, 34),
-        radius: 17,
+        radii: Radii::uniform(17),
+        shoulders: 0,
     };
     assert!(panel.is_island(120, 17), "island coordinates");
     assert!(!panel.is_island(0, 0), "the window's corner");
@@ -68,7 +69,8 @@ fn an_island_smaller_than_its_window_leaves_a_margin() {
     let panel = Panel {
         window: Rect::new(100, 200, 400, 200),
         island: Rect::new(20, 10, 360, 180),
-        radius: 12,
+        radii: Radii::uniform(12),
+        shoulders: 0,
     };
     assert!(panel.is_island(300, 100), "on the card");
     assert!(!panel.is_island(5, 5), "in the shadow margin");
@@ -76,4 +78,53 @@ fn an_island_smaller_than_its_window_leaves_a_margin() {
         !panel.is_island(395, 100),
         "past the card, inside the window"
     );
+}
+
+// #182: the old single `h / 2` radius clamps to 200 pt on a 680 × 400 panel,
+// so a click in a top corner fell through to the app underneath. The frontend
+// now sends the real shape with the size.
+
+#[test]
+fn the_open_panel_has_a_square_top_and_24pt_bottom() {
+    let rect = Rect::new(0, 0, 680, 400);
+    let radii = Radii::new(0, 0, 24, 24);
+    assert!(contains_shape(rect, radii, 0, 0, 0), "top-left corner");
+    assert!(contains_shape(rect, radii, 0, 679, 0), "top-right corner");
+    assert!(contains_shape(rect, radii, 0, 0, 375), "bottom-left arc");
+    assert!(
+        contains_shape(rect, radii, 0, 679, 375),
+        "bottom-right arc"
+    );
+    assert!(contains_shape(rect, radii, 0, 340, 399), "bottom edge");
+    assert!(!contains_shape(rect, radii, 0, 0, 399), "outside the arc");
+    assert!(
+        !contains_shape(rect, radii, 0, 679, 399),
+        "outside the other arc"
+    );
+    assert!(!contains_shape(rect, radii, 0, -1, 20), "outside the window");
+}
+
+#[test]
+fn the_shoulder_variant_excludes_its_cutouts() {
+    let rect = Rect::new(0, 0, 680, 400);
+    let radii = Radii::new(0, 0, 24, 24);
+    assert!(!contains_shape(rect, radii, 14, 2, 2), "left shoulder cut-out");
+    assert!(
+        !contains_shape(rect, radii, 14, 677, 2),
+        "right shoulder cut-out"
+    );
+    assert!(contains_shape(rect, radii, 14, 20, 2), "between shoulders");
+}
+
+#[test]
+fn the_shape_travels_with_the_size_in_the_panel() {
+    let panel = Panel {
+        window: Rect::new(100, 200, 680, 400),
+        island: Rect::new(0, 0, 680, 400),
+        radii: Radii::new(0, 0, 24, 24),
+        shoulders: 0,
+    };
+    assert!(panel.is_island(0, 0));
+    assert!(panel.is_island(679, 0));
+    assert!(!panel.is_island(0, 399));
 }

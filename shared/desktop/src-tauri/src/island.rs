@@ -50,7 +50,15 @@ pub fn create(app: &App) -> tauri::Result<()> {
         .inner_size(COLLAPSED.0, COLLAPSED.1)
         .visible(false)
         .build()?;
-    fit(&window, COLLAPSED.0, COLLAPSED.1, app.state::<Smoke>().0)?;
+    // Until the frontend reports the chosen shape, start with the old pill.
+    fit(
+        &window,
+        COLLAPSED.0,
+        COLLAPSED.1,
+        morrow_platform::panel::Radii::uniform((COLLAPSED.1 / 2.0).round() as i32),
+        0,
+        app.state::<Smoke>().0,
+    )?;
     // A panel without its Windows hooks still shows; it only behaves like an
     // ordinary window, which is worth a log line rather than no island at all.
     // Where the island lives on this desktop, said once at startup so a log
@@ -66,18 +74,46 @@ pub fn create(app: &App) -> tauri::Result<()> {
 }
 
 /// The frontend's measure of the island, in logical pixels: the window
-/// takes that size and is centred again.
+/// takes that size and is centred again. `radii` is the real hit-test shape
+/// (square top, 24 pt bottom for the edge tab) sent with the size, so Windows
+/// never answers with the old single `h / 2` radius. `shoulders` is variant C's
+/// cut-out width. Both are optional for older callers, which keep the pill.
 #[tauri::command]
 pub fn set_island_size(
     window: WebviewWindow,
     smoke: State<'_, Smoke>,
     width: f64,
     height: f64,
+    radii: Option<morrow_platform::panel::Radii>,
+    shoulders: Option<i32>,
 ) -> Result<(), String> {
     if !(width.is_finite() && height.is_finite() && width >= 1.0 && height >= 1.0) {
         return Err(format!("not an island size: {width}×{height}"));
     }
-    fit(&window, width, height, smoke.0).map_err(|e| e.to_string())
+    let radii = radii.unwrap_or_else(|| {
+        morrow_platform::panel::Radii::uniform((height / 2.0).round().clamp(0.0, i32::MAX as f64) as i32)
+    });
+    fit(
+        &window,
+        width,
+        height,
+        radii,
+        shoulders.unwrap_or(0),
+        smoke.0,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Hide the island while a fullscreen app is in front, show it again after
+/// (#197). The tight-fit window owns the visibility; the DOM stays laid out so
+/// `set_island_size` and the card rectangles keep their meaning.
+#[tauri::command]
+pub fn island_visible(window: WebviewWindow, visible: bool) -> Result<(), String> {
+    if visible {
+        window.show().map_err(|e| e.to_string())
+    } else {
+        window.hide().map_err(|e| e.to_string())
+    }
 }
 
 /// A rectangle in the window, in logical pixels.
@@ -101,6 +137,13 @@ pub fn island_question_focus(window: WebviewWindow, open: bool) -> Result<(), St
         let _ = (window, open);
         Ok(())
     }
+}
+
+/// The header's second power click within three seconds (#182). The frontend
+/// owns the confirmation; this command only performs the exit.
+#[tauri::command]
+pub fn quit(app: tauri::AppHandle) {
+    app.exit(0);
 }
 
 /// The frontend laid out card `id` and fitted the window to it. Smoke mode
@@ -136,6 +179,8 @@ fn fit<R: Runtime>(
     window: &WebviewWindow<R>,
     width: f64,
     height: f64,
+    radii: morrow_platform::panel::Radii,
+    shoulders: i32,
     smoke: bool,
 ) -> tauri::Result<()> {
     let monitor = match window.primary_monitor()? {
@@ -162,25 +207,39 @@ fn fit<R: Runtime>(
     })?;
     window.set_size(PhysicalSize::new(w, h))?;
     window.set_position(PhysicalPosition::new(x, y))?;
-    // Windows hit-tests the rounded shape itself (#106); the island fills the
-    // window here, and the two numbers travel together so a click can never be
-    // answered with a stale rectangle.
+    // Windows hit-tests the shape itself (#106, #182); the island fills the
+    // window here, and its size and shape travel together so a click can never
+    // be answered with a stale rectangle. Logical radii are scaled with the
+    // monitor, like the window size, before they become physical pixels.
     #[cfg(windows)]
-    crate::windows_panel::set_panel(morrow_platform::panel::Panel {
-        window: morrow_platform::panel::Rect::new(
-            x,
-            y,
-            i32::try_from(w).unwrap_or(i32::MAX),
-            i32::try_from(h).unwrap_or(i32::MAX),
-        ),
-        island: morrow_platform::panel::Rect::new(
-            0,
-            0,
-            i32::try_from(w).unwrap_or(i32::MAX),
-            i32::try_from(h).unwrap_or(i32::MAX),
-        ),
-        radius: i32::try_from(h / 2).unwrap_or(i32::MAX),
-    });
+    {
+        let px = |logical: i32| i32::try_from(((logical as f64) * scale).ceil() as u32)
+            .unwrap_or(i32::MAX)
+            .min(i32::try_from(w).unwrap_or(i32::MAX));
+        crate::windows_panel::set_panel(morrow_platform::panel::Panel {
+            window: morrow_platform::panel::Rect::new(
+                x,
+                y,
+                i32::try_from(w).unwrap_or(i32::MAX),
+                i32::try_from(h).unwrap_or(i32::MAX),
+            ),
+            island: morrow_platform::panel::Rect::new(
+                0,
+                0,
+                i32::try_from(w).unwrap_or(i32::MAX),
+                i32::try_from(h).unwrap_or(i32::MAX),
+            ),
+            radii: morrow_platform::panel::Radii::new(
+                px(radii.top_left),
+                px(radii.top_right),
+                px(radii.bottom_left),
+                px(radii.bottom_right),
+            ),
+            shoulders: px(shoulders),
+        });
+    }
+    #[cfg(not(windows))]
+    let _ = (radii, shoulders);
     if smoke {
         println!("morrow-smoke: fit x={x} y={y} w={w} h={h}");
     }

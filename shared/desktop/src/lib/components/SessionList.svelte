@@ -1,4 +1,8 @@
 <script lang="ts">
+  // #181 — each session card carries its own source mascot at 28 pt. The
+  // layout stays minimal until #183 fills in status/tool/prompt/reply.
+  import Mascot from './Mascot.svelte';
+  import { MASCOT_SIZES } from '../mascots';
   import type { Session } from '../types';
 
   let { sessions }: { sessions: Session[] } = $props();
@@ -6,10 +10,13 @@
 
 <ul class="list">
   {#each sessions as session (session.session_id)}
-    <li>
-      <span class="source">{session.source}</span>
-      <span class="cwd">{session.cwd_name || session.session_id}</span>
-      <span class="event">{session.last_event}</span>
+    <li class="card">
+      <Mascot source={session.source} status="working" size={MASCOT_SIZES.card} />
+      <div class="body">
+        <div class="source">{session.source}</div>
+        <div class="cwd">{session.cwd_name || session.session_id}</div>
+        <div class="event">{session.last_event}</div>
+      </div>
     </li>
   {:else}
     <li class="empty">No sessions</li>
@@ -22,12 +29,16 @@
     margin: 0;
     padding: 0;
   }
-  .list li {
-    display: grid;
-    grid-template-columns: 70px 1fr auto;
+  .card {
+    display: flex;
+    align-items: center;
     gap: 8px;
     padding: 6px 0;
     border-top: 1px solid #222;
+  }
+  .body {
+    min-width: 0;
+    flex: 1;
   }
   .source {
     color: #d0d0d0;
