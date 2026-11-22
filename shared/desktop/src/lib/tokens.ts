@@ -1,5 +1,6 @@
 // Design tokens for the Windows/Linux island. Values come from the SwiftUI
-// sources via the prototype canvas (§ #tokens); keep them in sync with
+// sources via the prototype canvas (§ #tokens). The canvas was removed before
+// the merge to main; read it at commit 1b04687,
 // shared/desktop/prototype/island-states/canvas.css.
 
 export const PALETTE = {
