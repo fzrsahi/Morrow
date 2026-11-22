@@ -49,7 +49,8 @@ describe('appearance settings', () => {
       fontSize: 11,
       accent: 'cyan',
       animationSpeed: 1,
-      islandShape: 'edge-tab',
+      islandShape: 'floating-pill',
+      displayMode: 'dynamicIsland',
       position: 'Top centre · primary monitor',
       expandOnHover: false,
       collapseOnLeave: false,
@@ -61,12 +62,14 @@ describe('appearance settings', () => {
       theme: 'modern',
       fontSize: 14,
       islandShape: 'floating-pill',
+      islandDisplayMode: 'notch',
       expandOnHover: true,
       sound: '8bit',
     });
     expect(appearance.theme).toBe('modern');
     expect(appearance.fontSize).toBe(14);
     expect(appearance.islandShape).toBe('floating-pill');
+    expect(appearance.displayMode).toBe('notch');
     expect(appearance.expandOnHover).toBe(true);
     expect(appearance.accent).toBe('cyan');
   });
@@ -84,7 +87,8 @@ describe('appearance settings', () => {
     expect(appearance.fontSize).toBe(11);
     expect(appearance.accent).toBe('cyan');
     expect(appearance.animationSpeed).toBe(1);
-    expect(appearance.islandShape).toBe('edge-tab');
+    expect(appearance.islandShape).toBe('floating-pill');
+    expect(appearance.displayMode).toBe('dynamicIsland');
     expect(appearance.expandOnHover).toBe(false);
   });
 
@@ -92,6 +96,15 @@ describe('appearance settings', () => {
     expect(SETTINGS_KEYS.theme).toBe('theme');
     expect(SETTINGS_KEYS.fontSize).toBe('fontSize');
     expect(SETTINGS_KEYS.islandShape).toBe('islandShape');
+    // Mirrors Swift SettingsKey.islandDisplayMode / IslandDisplayMode.rawValue.
+    expect(SETTINGS_KEYS.displayMode).toBe('islandDisplayMode');
+  });
+
+  test('a pre-existing islandShape setting migrates to the Swift mode names', () => {
+    expect(appearanceFromSettings({ islandShape: 'floating-pill' }).displayMode).toBe(
+      'dynamicIsland',
+    );
+    expect(appearanceFromSettings({ islandShape: 'edge-tab' }).displayMode).toBe('notch');
   });
 
   test('the session filter is a top-level key written by the panel', () => {

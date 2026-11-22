@@ -5,6 +5,8 @@
 import { MOTION } from './tokens';
 
 export type PanelVariant = 'A' | 'B' | 'C';
+/** The two Swift `IslandDisplayMode` raw values, and nothing else. */
+export type DisplayMode = 'notch' | 'dynamicIsland';
 export type PanelTab = 'agents' | 'music';
 export type SessionFilter = 'all' | 'sta' | 'agt';
 /** #185 keeps #183's comfortable cards reachable; compact is the default. */
@@ -33,10 +35,27 @@ export const DRAG_THRESHOLD_PX = 4;
 /** #196: an island returned within this radius of home is top-centre again. */
 export const SNAP_HOME_PX = 24;
 
-/** B clears the GNOME top bar; A is the only variant that covers the clock. */
-export function resolveVariant(query: string | null | undefined): PanelVariant {
+/**
+ * Swift has two island presentations (`IslandDisplayMode.swift`): `.notch` is
+ * a docked shell with concave upper ears, `.dynamicIsland` is a detached
+ * floating pill. Canvas C is the former, canvas B the latter. Canvas A (edge
+ * tab) is the legacy Svelte shell and has no Swift counterpart, so it is not
+ * selectable as a display mode.
+ */
+export function variantFromDisplayMode(mode: DisplayMode): PanelVariant {
+  return mode === 'notch' ? 'C' : 'B';
+}
+
+/** An explicit `?variant=` is a maintainer debug override; otherwise the saved
+ *  Swift display mode decides. Windows/Linux have no hardware notch, so the
+ *  default is Dynamic Island (B), which also clears the GNOME top bar. */
+export function resolveVariant(
+  query: string | null | undefined,
+  mode: DisplayMode = 'dynamicIsland',
+): PanelVariant {
   const value = new URLSearchParams(query ?? '').get('variant');
-  return value === 'A' || value === 'B' || value === 'C' ? value : 'B';
+  if (value === 'B' || value === 'C') return value;
+  return variantFromDisplayMode(mode);
 }
 
 /** The Windows hit-test shape travels with the size in one `set_island_size`. */

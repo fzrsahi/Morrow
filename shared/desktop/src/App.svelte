@@ -58,6 +58,7 @@
     islandShape,
     resolveVariant,
     snapOffset,
+    type DisplayMode,
     type Offset,
     type PanelTab,
     type SessionDensity,
@@ -88,9 +89,12 @@
   import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
   import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
 
-  // B (floating pill) is the default: it clears the GNOME top bar. Variant A
-  // covers the clock and is used only when a maintainer asks for ?variant=A.
-  const variant = resolveVariant(window.location.search);
+  // The display mode mirrors Swift's IslandDisplayMode: `.dynamicIsland` is
+  // canvas B (floating pill, default — no hardware notch on Windows/Linux),
+  // `.notch` is canvas C (docked shell with shoulder cut-outs). Both can be
+  // chosen in Settings → Appearance. ?variant=B|C stays a maintainer override.
+  let displayMode = $state<DisplayMode>('dynamicIsland');
+  let variant = $derived(resolveVariant(window.location.search, displayMode));
   // #202: the theme is a view state, not a URL flag. It loads from the same
   // settings document as the filter and changes live when Settings writes it.
   let theme = $state<Theme>('pixel');
@@ -868,7 +872,9 @@
       .then((stored) => {
         filter = sessionFilterFromSettings(stored);
         density = sessionDensityFromSettings(stored);
-        theme = appearanceFromSettings(stored).theme;
+        const appearance = appearanceFromSettings(stored);
+        theme = appearance.theme;
+        displayMode = appearance.displayMode;
       })
       .catch(() => {});
     // #202: Settings lives in another webview. The shell emits one event after
@@ -876,7 +882,9 @@
     // not touch the fit/reportCards chain.
     let unlisten: (() => void) | undefined;
     void listen<unknown>(SETTINGS_CHANGED_EVENT, (event) => {
-      theme = appearanceFromSettings(event.payload).theme;
+      const appearance = appearanceFromSettings(event.payload);
+      theme = appearance.theme;
+      displayMode = appearance.displayMode;
     })
       .then((off) => (unlisten = off))
       .catch(() => {});
