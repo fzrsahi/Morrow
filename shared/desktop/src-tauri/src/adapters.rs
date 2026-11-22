@@ -23,24 +23,47 @@ pub fn terminal_activate(
     app: Option<String>,
     tty: Option<String>,
     cwd: Option<String>,
+    pid: Option<i64>,
 ) -> Outcome {
     let _ = &site;
     // Windows has no app-id protocol to focus by: the window is found through
-    // the session's process chain, so that path names the pid instead.
+    // the session's process chain, so that path names the pid instead (#187).
     #[cfg(windows)]
     {
-        let _ = (site, app, tty, cwd);
-        Outcome::NotPossible(
-            "a window on Windows is found through the session's process, not its app id".to_owned(),
-        )
+        let _ = app;
+        let Some(pid) = pid.and_then(|pid| u32::try_from(pid).ok()) else {
+            return Outcome::NotPossible("this session has no local process to follow".to_owned());
+        };
+        let (parents, names) = match morrow_platform::windows::process::table() {
+            Ok(table) => table,
+            Err(reason) => return Outcome::NotPossible(reason),
+        };
+        match morrow_platform::windows::terminal::activate(&parents, pid, &names) {
+            Ok(()) => Outcome::Focused,
+            Err(reason) => {
+                // L-009's floor: a click that cannot raise a window still hands
+                // over the working directory instead of doing nothing.
+                if let Some(text) = cwd.as_deref().or(tty.as_deref()) {
+                    match morrow_platform::windows::clipboard::copy(text) {
+                        Ok(()) => Outcome::Copied(text.to_owned()),
+                        Err(failure) => Outcome::NotPossible(format!("{reason}; {failure}")),
+                    }
+                } else {
+                    Outcome::NotPossible(reason)
+                }
+            }
+        }
     }
     #[cfg(unix)]
     {
+        let _ = pid;
         let target = Target {
             app,
             tty,
             cwd: cwd.map(PathBuf::from),
         };
+        // X11/Wayland focus a window, never a pane; `terminal::activate` tries
+        // the compositor's window API before the clipboard fallback.
         morrow_platform::terminal::activate(&morrow_platform::runner::SystemRunner, &target)
     }
 }

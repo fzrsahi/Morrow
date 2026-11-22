@@ -11,6 +11,30 @@ use std::collections::BTreeMap;
 /// `CreateToolhelp32Snapshot` gives them.
 pub type Parents = BTreeMap<u32, u32>;
 
+/// Process names whose window a jump may raise (W-007): Windows Terminal and
+/// its console, plus the two editors that host an integrated terminal — VS
+/// Code and IntelliJ. Kept here, not in the Win32 module, so the chain is
+/// tested on any machine.
+pub const TERMINAL_HOSTS: &[&str] = &[
+    "windows terminal",
+    "windowsterminal",
+    "conhost",
+    "wezterm",
+    "alacritty",
+    "kitty",
+    "code.exe",
+    "code - insiders.exe",
+    "idea64.exe",
+    "idea.exe",
+    "intellij",
+];
+
+/// The host list, as a function so the OS module and the portable tests read
+/// the same one.
+pub const fn terminal_hosts() -> &'static [&'static str] {
+    TERMINAL_HOSTS
+}
+
 /// The pid whose window a session should raise: the outermost ancestor that is
 /// a terminal host, or the session's own pid when the chain names none.
 ///
