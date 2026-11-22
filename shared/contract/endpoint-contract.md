@@ -180,7 +180,7 @@ normalize(sid) = sid with every character outside [A-Za-z0-9] replaced by "-"
 - `sid` is the string form of the current user's SID (`S-1-5-21-…`). Real
   SIDs are ASCII letters, digits and `-`, so for them `normalize` is the
   identity. Case is preserved.
-- The rule is ASCII-only. `windows/Morrow.Ipc/PipeEndpoint.cs` uses
+- The rule is ASCII-only. The removed C# endpoint (`windows/Morrow.Ipc/PipeEndpoint.cs`, #110) used
   `char.IsLetterOrDigit`, which also keeps non-ASCII letters; for real SIDs
   both give the same name. The case `windows-sid-non-ascii-letter-becomes-dash`
   fixes the ASCII rule.
