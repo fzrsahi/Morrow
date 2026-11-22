@@ -12,6 +12,7 @@ mod music;
 mod permissions;
 mod peek_window;
 mod position;
+mod prune;
 mod sessions;
 mod settings;
 mod settings_window;
@@ -76,6 +77,7 @@ fn main() -> ExitCode {
     let position = position::Store::new(&hooks_site.paths.codeisland_dir);
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
+    Feed::spawn_pruner(Arc::clone(&feed));
     Feed::spawn_pusher(Arc::clone(&feed), move |sessions, cards| {
         if smoke {
             println!("morrow-smoke: pushed sessions={sessions} cards={cards}");
