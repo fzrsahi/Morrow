@@ -7,9 +7,13 @@
 
 use std::collections::HashMap;
 
+use morrow_core::attention::{
+    AttentionIntents, AttentionMoment, AttentionSubject, intents as attention_intents,
+};
 use morrow_core::intake::SourceCatalog;
 use morrow_core::reduce::{
-    AgentStatus, HookEvent, ReduceContext, SessionSnapshot, SideEffect, Timestamp, reduce_event,
+    AgentStatus, HookEvent, ReduceContext, SessionSnapshot, SideEffect, Timestamp,
+    reduce_hook_event,
 };
 use morrow_protocol::HookPayload;
 use serde::Serialize;
@@ -91,6 +95,15 @@ pub struct Session {
     pub cli_pid: Option<i32>,
 }
 
+/// What one hook did: its effects and the attention policy's intents.
+/// A shell that settles the policy itself (the completion card's style and
+/// Smart Suppress) needs both, as `reduce_hook_event`'s docs prescribe.
+#[derive(Default)]
+pub struct Applied {
+    pub effects: Vec<SideEffect>,
+    pub intents: AttentionIntents,
+}
+
 #[derive(Debug, Default)]
 pub struct Sessions {
     inner: morrow_core::reduce::Sessions,
@@ -110,11 +123,10 @@ impl Sessions {
     }
 
     /// Reduces `payload` at `now_ms`, applying `RemoveSession` effects locally
-    /// and returning all emitted `SideEffect`s for the shell — the policy's
-    /// `PlaySound` and `EnqueueCompletion` among them.
-    pub fn apply(&mut self, payload: &HookPayload, now_ms: u64) -> Vec<SideEffect> {
+    /// and returning the effects and the attention intents together.
+    pub fn apply_with_intents(&mut self, payload: &HookPayload, now_ms: u64) -> Applied {
         let Some(event) = HookEvent::new(payload.as_object().clone(), &self.sources) else {
-            return Vec::new();
+            return Applied::default();
         };
         let clock = || Timestamp(now_ms as f64 / 1000.0);
         let ctx = ReduceContext {
@@ -124,19 +136,51 @@ impl Sessions {
             max_history: 50,
             reply_complete_placeholder: "Reply complete",
         };
-        let effects = reduce_event(&mut self.inner, &event, &ctx);
+        let reduction = reduce_hook_event(&mut self.inner, &event, &ctx);
+        let session_id = event.session_id.as_deref().unwrap_or("default");
+        let intents = attention_intents(
+            &AttentionMoment::HookEvent(reduction.facts),
+            AttentionSubject::from_session(self.inner.get(session_id)),
+        );
+        // The same placements as `reduce_event`: the sound (later in the
+        // list) first, so the completion keeps its reducer-provided slot.
+        let mut effects = reduction.effects;
+        if let Some(sound) = &intents.sound {
+            let at = reduction.slots.sound.unwrap_or(effects.len()).min(effects.len());
+            effects.insert(at, SideEffect::PlaySound(sound.clone()));
+        }
+        if intents.completion.is_some() {
+            let at = reduction
+                .slots
+                .completion
+                .unwrap_or(effects.len())
+                .min(effects.len());
+            effects.insert(
+                at,
+                SideEffect::EnqueueCompletion {
+                    session_id: session_id.to_owned(),
+                },
+            );
+        }
         for effect in &effects {
             if let SideEffect::RemoveSession { session_id } = effect {
                 self.inner.remove(session_id);
                 self.last_events.remove(session_id);
             }
         }
-        let card_id = event.session_id.as_deref().unwrap_or("default");
-        if self.inner.contains_key(card_id) {
+        if self.inner.contains_key(session_id) {
             self.last_events
-                .insert(card_id.to_owned(), event.event_name);
+                .insert(session_id.to_owned(), event.event_name);
         }
-        effects
+        Applied { effects, intents }
+    }
+
+    /// All emitted `SideEffect`s for the shell — the policy's `PlaySound` and
+    /// `EnqueueCompletion` among them. Kept for the session tests; the feed
+    /// uses `apply_with_intents` so it can settle the completion policy.
+    #[cfg(test)]
+    pub fn apply(&mut self, payload: &HookPayload, now_ms: u64) -> Vec<SideEffect> {
+        self.apply_with_intents(payload, now_ms).effects
     }
 
     /// NEEDS YOU first, then working/thinking, then the rest; newest first

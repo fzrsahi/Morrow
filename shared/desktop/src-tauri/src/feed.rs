@@ -8,11 +8,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use morrow_core::attention::CompletionStyle;
 use morrow_core::reduce::SideEffect;
 use morrow_protocol::HookPayload;
 use serde::Serialize;
 use tauri::ipc::Channel;
 
+use crate::completion::{self, SnapshotCompletion};
 use crate::permissions::{Card, Decision, Permissions};
 use crate::sessions::{Session, Sessions};
 
@@ -22,6 +24,9 @@ pub struct Snapshot {
     pub sessions: Vec<Session>,
     /// Held permission requests, oldest first.
     pub permissions: Vec<Card>,
+    /// The last finished turn's reply, parsed into Markdown blocks by the
+    /// core, and its settled presentation. `None` after the next prompt.
+    pub completion: Option<SnapshotCompletion>,
 }
 
 /// One push per 1/60 s at most.
@@ -36,6 +41,7 @@ pub struct Feed {
 struct State {
     sessions: Sessions,
     permissions: Permissions,
+    completion: Option<SnapshotCompletion>,
     channel: Option<Channel<Snapshot>>,
     /// The frontend has not seen the latest snapshot.
     dirty: bool,
@@ -46,6 +52,7 @@ impl Default for State {
         Self {
             sessions: Sessions::with_home(std::env::var("HOME").unwrap_or_default()),
             permissions: Permissions::default(),
+            completion: None,
             channel: None,
             dirty: false,
         }
@@ -59,9 +66,46 @@ impl Feed {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
         let mut state = self.lock();
-        for effect in state.sessions.apply(payload, now_ms) {
+        let applied = state.sessions.apply_with_intents(payload, now_ms);
+        for effect in &applied.effects {
             if let SideEffect::RemoveSession { session_id } = effect {
-                state.permissions.drop_session(&session_id);
+                state.permissions.drop_session(session_id);
+            }
+        }
+        let event_name = payload
+            .as_object()
+            .get("hook_event_name")
+            .and_then(|value| value.as_str())
+            .unwrap_or_default();
+        // A new turn retires the old card; a turn end offers a new one. The
+        // policy's intent (not the raw event name) decides whether it exists.
+        if event_name == "UserPromptSubmit" || event_name == "SessionStart" {
+            state.completion = None;
+        } else if let Some(completion) = applied.intents.completion.as_ref() {
+            let session_id = payload
+                .as_object()
+                .get("session_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or("default");
+            if let Some(session) = state
+                .sessions
+                .snapshot()
+                .into_iter()
+                .find(|s| s.session_id == session_id)
+            {
+                state.completion = Some(SnapshotCompletion {
+                    session_id: session.session_id,
+                    updated_at: session.updated_at,
+                    turn_failed: completion.turn_failed,
+                    // No completion-style setting or terminal-frontmost probe
+                    // in this shell yet: the macOS default is `.expand`.
+                    presentation: completion::presentation(
+                        Some(completion),
+                        CompletionStyle::Expand,
+                        false,
+                    ),
+                    blocks: completion::blocks(&session.last_assistant_message),
+                });
             }
         }
         state.dirty = true;
@@ -119,10 +163,7 @@ impl Feed {
                                 .unwrap_or_else(PoisonError::into_inner);
                         }
                         state.dirty = false;
-                        let snapshot = Snapshot {
-                            sessions: state.sessions.snapshot(),
-                            permissions: state.permissions.cards(),
-                        };
+                        let snapshot = state.snapshot();
                         (snapshot, state.channel.clone())
                     };
                     let counts = (snapshot.sessions.len(), snapshot.permissions.len());
@@ -138,7 +179,64 @@ impl Feed {
             .expect("spawn the feed thread");
     }
 
+    /// The current snapshot (the pusher uses `State::snapshot` directly).
+    #[cfg(test)]
+    pub fn snapshot(&self) -> Snapshot {
+        self.lock().snapshot()
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl State {
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            sessions: self.sessions.snapshot(),
+            permissions: self.permissions.cards(),
+            completion: self.completion.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use morrow_protocol::decode_payload;
+
+    fn hook(json: &str) -> HookPayload {
+        decode_payload(json.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn a_finished_turn_pushes_its_reply_as_core_blocks() {
+        let feed = Feed::default();
+        feed.record(&hook(
+            r#"{"session_id":"a","hook_event_name":"Stop","last_assistant_message":"Done\n====\nAll tests pass."}"#,
+        ));
+        let snapshot = feed.snapshot();
+        let completion = snapshot.completion.expect("completion");
+        assert_eq!(completion.session_id, "a");
+        assert_eq!(completion.updated_at, snapshot.sessions[0].updated_at);
+        assert_eq!(completion.presentation, crate::completion::Presentation::Card);
+        assert_eq!(completion.blocks.len(), 2);
+        assert_eq!(
+            serde_json::to_value(&completion.blocks[0]).unwrap()["kind"].as_str(),
+            Some("heading")
+        );
+    }
+
+    #[test]
+    fn a_new_prompt_clears_the_last_completion() {
+        let feed = Feed::default();
+        feed.record(&hook(
+            r#"{"session_id":"a","hook_event_name":"Stop","last_assistant_message":"Done."}"#,
+        ));
+        assert!(feed.snapshot().completion.is_some());
+        feed.record(&hook(
+            r#"{"session_id":"a","hook_event_name":"UserPromptSubmit","prompt":"again"}"#,
+        ));
+        assert!(feed.snapshot().completion.is_none());
     }
 }

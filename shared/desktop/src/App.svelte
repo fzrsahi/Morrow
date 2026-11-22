@@ -7,10 +7,17 @@
   import { Channel, invoke } from '@tauri-apps/api/core';
   import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
+  import CompletionCard from './lib/components/CompletionCard.svelte';
   import Header from './lib/components/Header.svelte';
   import PixelText from './lib/components/PixelText.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
+  import {
+    COMPLETION_AUTO_COLLAPSE_MS,
+    CompletionGate,
+    completionKey,
+    shouldAutoOpen,
+  } from './lib/completion';
   import {
     COLLAPSED_SIZE,
     CLOSE_TRANSITION,
@@ -31,7 +38,7 @@
   } from './lib/panel';
   import { activeSession, collapsedWidth } from './lib/session-cards';
   import { MOTION, PALETTE, cssVariables } from './lib/tokens';
-  import type { CapabilityRow, Card, Decision, Session, Snapshot } from './lib/types';
+  import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
 
   // B (floating pill) is the default: it clears the GNOME top bar. Variant A
   // covers the clock and is used only when a maintainer asks for ?variant=A.
@@ -51,6 +58,10 @@
 
   let sessions = $state<Session[]>([]);
   let cards = $state<Card[]>([]);
+  // #191: the last finished turn. The shell has already decided (via the
+  // attention policy) whether it is a card, a glance or nothing at all.
+  let completion = $state<Completion | null>(null);
+  let seenCompletion = $state<string | null>(null);
   let expanded = $state(false);
   let closing = $state(false);
   let prehover = $state(false);
@@ -67,6 +78,7 @@
 
   const fit = new IslandFit();
   const collapseGate = new CollapseGate();
+  const completionGate = new CompletionGate();
   const quitGate = new QuitGate();
   const drag = new DragGate();
   let dragging = $state(false);
@@ -76,12 +88,16 @@
   let openTimer: ReturnType<typeof setTimeout>;
   let closeTimer: ReturnType<typeof setTimeout>;
   let quitTimer: ReturnType<typeof setTimeout>;
+  let completionTimer: ReturnType<typeof setTimeout> | undefined;
 
   // #197: the three scene facts, and which adapters can read them here.
   let ambient = $state<AmbientState>({ fullscreen: false, locked: false, quiet: false });
   let support = $state<AmbientSupport>({ fullscreenDetection: false, screenLock: false });
   let view = $derived(ambientView(ambient, support));
   let active = $derived(activeSession(sessions));
+  let completionSession = $derived(
+    completion ? (sessions.find((s) => s.session_id === completion!.session_id) ?? null) : null,
+  );
   let collapsed = $derived({ width: collapsedWidth(active), height: COLLAPSED_SIZE.height });
   let lastCollapsedWidth = COLLAPSED_SIZE.width;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
@@ -166,6 +182,8 @@
     clearTimeout(collapseTimer);
     clearTimeout(openTimer);
     clearTimeout(closeTimer);
+    clearTimeout(completionTimer);
+    completionTimer = undefined;
     if (fit.phase !== 'open') return;
     // Keep the OS window at the open size while the panel animates shut.
     fit.close();
@@ -184,6 +202,7 @@
     if (dragging) return;
     clearTimeout(collapseTimer);
     collapseGate.enter();
+    if (completionGate.active) completionGate.enter();
     if (fit.phase === 'collapsed') {
       prehover = true;
       clearTimeout(hoverTimer);
@@ -196,8 +215,15 @@
     clearTimeout(hoverTimer);
     prehover = false;
     collapseGate.leave(performance.now());
+    if (completionGate.active) completionGate.leave(performance.now());
     collapseTimer = setTimeout(() => {
-      if (collapseGate.shouldCollapse(performance.now(), cards.length > 0)) closePanel();
+      // Notionally "blocked": a held approval, or a completion card that is
+      // still waiting for its first pointer visit (NotchPanelView.swift:1485).
+      const waitingForEntry =
+        completion !== null && completionGate.blocksCollapse(completionKey(completion));
+      if (collapseGate.shouldCollapse(performance.now(), cards.length > 0 || waitingForEntry)) {
+        closePanel();
+      }
     }, COLLAPSE_DELAY_MS);
   }
 
@@ -324,6 +350,39 @@
     }, POLL_MS);
   }
 
+  // #191: macOS's completionAutoCollapseDelay. A card nobody touched goes
+  // away on its own; one the pointer visited waits for the pointer to leave.
+  function scheduleCompletionCollapse(key: string) {
+    clearTimeout(completionTimer);
+    completionTimer = setTimeout(() => {
+      completionTimer = undefined;
+      // Still unvisited: collapse now. Visited: wait for the pointer to leave.
+      if (completionGate.active && completionGate.blocksCollapse(key)) closePanel();
+    }, COMPLETION_AUTO_COLLAPSE_MS);
+  }
+
+  function acceptSnapshot(snapshot: Snapshot) {
+    sessions = snapshot.sessions;
+    cards = snapshot.permissions;
+    const next = snapshot.completion;
+    completion = next;
+    if (!next) {
+      seenCompletion = null;
+      completionGate.end();
+      clearTimeout(completionTimer);
+      completionTimer = undefined;
+      return;
+    }
+    const key = completionKey(next);
+    if (!shouldAutoOpen(next, seenCompletion)) return;
+    seenCompletion = key;
+    completionGate.begin(key);
+    // Measure the reply's height only after its DOM exists, so the open path
+    // still makes exactly one tight-fit call before the animation.
+    void tick().then(() => openPanel());
+    scheduleCompletionCollapse(key);
+  }
+
   // The window, not the DOM, hides for a fullscreen app: the island keeps its
   // measured size so card rectangles and the tight-fit chain stay intact.
   $effect(() => {
@@ -333,10 +392,7 @@
 
   onMount(() => {
     const channel = new Channel<Snapshot>();
-    channel.onmessage = (snapshot) => {
-      sessions = snapshot.sessions;
-      cards = snapshot.permissions;
-    };
+    channel.onmessage = acceptSnapshot;
     invoke('subscribe', { channel });
     loadCapabilities();
     lastCollapsedWidth = collapsed.width;
@@ -348,6 +404,7 @@
       clearTimeout(openTimer);
       clearTimeout(closeTimer);
       clearTimeout(quitTimer);
+      clearTimeout(completionTimer);
       if (pollTimer !== undefined) clearTimeout(pollTimer);
       pollTimer = undefined;
     };
@@ -380,7 +437,7 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cards.length}|${tab}`;
+    const content = `${sessionContent}|${cards.length}|${tab}|${completion ? completionKey(completion) : ''}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -416,7 +473,14 @@
       onpointercancel={onBarPointerCancel}
       aria-label="Open the Morrow panel"
     >
-      <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} {active} />
+      <CollapsedBar
+        sessionCount={sessions.length}
+        {prehover}
+        quiet={view.quiet}
+        {active}
+        glance={completion !== null && completion.presentation !== 'status_only'}
+        glanceLabel={completionSession?.cwd_name ?? ''}
+      />
       <span class="grip" aria-hidden="true"></span>
     </button>
   {/if}
@@ -434,7 +498,17 @@
       onQuit={onQuit}
     />
     {#if tab === 'agents'}
-      <div class="padded"><SessionList {sessions} /></div>
+      <div class="padded">
+        {#if completion && completionSession && completion.presentation !== 'status_only'}
+          <CompletionCard
+            {completion}
+            session={completionSession}
+            sessionCount={sessions.length}
+          />
+        {:else}
+          <SessionList {sessions} />
+        {/if}
+      </div>
     {:else}
       <div class="music-placeholder"><PixelText text="MUSIC" size={1.3} color={PALETTE.cyan} /></div>
     {/if}
