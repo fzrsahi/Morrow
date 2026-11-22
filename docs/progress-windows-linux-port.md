@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 — audit #240 dan dua slice remediasi pertama. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan delapan sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (ketiga) — lima slice remediasi (#249, #250, #251, #253, #254, #255). Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -126,6 +126,13 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (ketiga) — discovery: seam pembaca, seam config-root, dan `~` yang ditulis literal
+
+- **Sudah:** tiga slice discovery. **#243 → PR #253** gate E2E-2 (lihat entri di bawah). **#245 → PR #254** seam `morrow-core::discovery`: `DiscoveryHit`, `ProjectDirEncoding`, tiga pembaca murni (model [CC], transkrip Cursor, file sesi Gemini) dengan fixture yang **diekspor dari Swift**, bukan diketik tangan. **#247 → PR #255** seam `morrow-core::config_roots`, dan bug yang ia temukan: `CLAUDE_CONFIG_DIR` dibaca mentah oleh installer, jadi `CLAUDE_CONFIG_DIR=~/work/claude` menulis `settings.json` ke folder bernama literal `~` sambil melaporkan sukses — [CC] membaca hook-nya dari tempat lain dan tidak melihat apa pun.
+- **Bukti:** `cargo test --workspace` 666 lulus (647 sebelum dua slice ini); `cargo test -p morrow-core --lib config_roots` 7 lulus; `swift test --filter DiscoveryFixtureExporter` lulus (fixture di disk memang keluaran Swift); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11 (installer tetap byte-for-byte).
+- **Berikutnya:** #247b (`ConfigPathIdentity`: `realpath`, symlink, `writeTarget`), #247c (walk + `SQLiteReader`), #247d (tangga `resolve` sebagai perubahan perilaku installer), lalu #246 (`AgentProcessFinder`), #248 (policy + backfill), #244.
+- **Blocker:** sama seperti sebelumnya — dan `CLAUDE_CONFIG_DIR` yang berupa symlink masih bisa membuat penulisan mengganti link itu dengan file biasa sampai #247b mendarat.
 
 ### 2026-11-22 (lanjutan) — gate E2E-2, dan bug installer yang ia temukan
 
