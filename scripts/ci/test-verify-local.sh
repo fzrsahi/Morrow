@@ -72,6 +72,19 @@ fi
 git restore --staged .woodpecker.yaml
 git checkout -- .woodpecker.yaml
 
+echo -n "Test 2b: Direct .woodpecker/ directory edit by non-DevOps... "
+mkdir -p .woodpecker
+echo "hacked pipeline" >> .woodpecker/01-linux.yaml
+git add .woodpecker/01-linux.yaml
+if ! run_guard; then
+    echo "PASS (Blocked as expected) ✅"
+else
+    echo "FAIL (Allowed unauthorized edit!) ❌"
+    exit 1
+fi
+git restore --staged .woodpecker/01-linux.yaml
+rm -rf .woodpecker
+
 # ------------------------------------------------------------------------------
 # Test 3: Direct .woodpecker.yaml modification by DevOps (@aazhrt) -> PASS
 # ------------------------------------------------------------------------------

@@ -86,19 +86,34 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Test Suite 3: .woodpecker.yaml Multi-Pipeline Structure
+# Test Suite 3: .woodpecker Multi-Workflow Structure
 # ------------------------------------------------------------------------------
-echo "--- Suite 3: .woodpecker.yaml Multi-Pipeline Structure ---"
+echo "--- Suite 3: .woodpecker Multi-Workflow Structure ---"
+WP_DIR="$ROOT/.woodpecker"
 WP_YAML="$ROOT/.woodpecker.yaml"
 
-if [ -f "$WP_YAML" ]; then
-    YAML_REPORT=$(python3 - "$WP_YAML" << 'EOF'
-import sys
+if [ -d "$WP_DIR" ] || [ -f "$WP_YAML" ]; then
+    YAML_REPORT=$(python3 - "$ROOT" << 'EOF'
+import sys, os, glob
 import yaml
 
-wp_yaml = sys.argv[1]
-with open(wp_yaml) as f:
-    docs = list(yaml.safe_load_all(f))
+root_dir = sys.argv[1]
+wp_dir = os.path.join(root_dir, ".woodpecker")
+wp_file = os.path.join(root_dir, ".woodpecker.yaml")
+
+docs = []
+if os.path.isdir(wp_dir):
+    yaml_files = sorted(glob.glob(os.path.join(wp_dir, "*.yaml")))
+    for yf in yaml_files:
+        with open(yf) as f:
+            docs.append(yaml.safe_load(f))
+    print(f'CONFIG_TYPE=DIR')
+    print(f'FILES_COUNT={len(yaml_files)}')
+elif os.path.isfile(wp_file):
+    with open(wp_file) as f:
+        docs = list(yaml.safe_load_all(f))
+    print(f'CONFIG_TYPE=SINGLE')
+    print(f'FILES_COUNT=1')
 
 # Document count check
 if len(docs) != 3:
@@ -169,6 +184,8 @@ EOF
 )
     
     assert_contains "woodpecker config defines exactly 3 pipelines" "DOCS_COUNT=3" "$YAML_REPORT"
+    assert_contains "woodpecker multi-workflow config loaded from directory" "CONFIG_TYPE=DIR" "$YAML_REPORT"
+    assert_contains "woodpecker directory defines exactly 3 workflow files" "FILES_COUNT=3" "$YAML_REPORT"
     assert_contains "Pipeline 1 targets linux/amd64" "P1_PLATFORM=linux/amd64" "$YAML_REPORT"
     assert_contains "Pipeline 1 has test-linux step" "test-linux" "$YAML_REPORT"
     assert_contains "Pipeline 1 has check-windows step" "check-windows" "$YAML_REPORT"
@@ -195,7 +212,7 @@ EOF
     assert_contains "Pipeline 3 dispatches to shared/ci/manifest.sh" "P3_MANIFEST_DISPATCH=YES" "$YAML_REPORT"
     assert_contains "Pipeline 3 reads macos/Info.plist" "P3_INFO_PLIST=YES" "$YAML_REPORT"
 else
-    echo "  [FAIL] .woodpecker.yaml does not exist"
+    echo "  [FAIL] .woodpecker directory or .woodpecker.yaml does not exist"
     FAILED=$((FAILED + 1))
 fi
 

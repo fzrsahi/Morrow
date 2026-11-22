@@ -1,0 +1,92 @@
+# ==============================================================================
+# Pipeline 1: Linux & Windows Fast Lane (Docker Runner on Host)
+# ==============================================================================
+when:
+  - event: [pull_request, tag]
+  - event: push
+    branch: [dev, main]
+
+labels:
+  platform: linux/amd64
+
+steps:
+  - name: test-linux
+    image: rust:1.98-bookworm
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - set -e
+      - |
+        report() {
+          python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / Linux & Rust Harness" --state "$1" --description "$2" || true
+        }
+        # Smart Fast-Bypass for Monorepo PRs:
+        if [ "${CI_PIPELINE_EVENT:-}" = "pull_request" ] && [ -n "${CI_PIPELINE_FILES:-}" ]; then
+          if ! echo "$CI_PIPELINE_FILES" | grep -Eq 'Cargo\.|rust-toolchain|shared/|crates/|linux/|windows/|scripts/ci/(linux|windows|verify|test-multiplatform)|\.woodpecker'; then
+            echo "Notice: No Linux/Rust changes detected in PR. Fast-bypass skipping."
+            report success "Skipped — No Linux/Rust changes in this PR"
+            exit 0
+          fi
+        fi
+        report pending "Running cargo test, fmt, clippy, purity..."
+        if [ -f "./linux/ci/test.sh" ]; then
+          TEST_SCRIPT="./linux/ci/test.sh"
+        elif [ -f "./scripts/ci/linux-test.sh" ]; then
+          TEST_SCRIPT="./scripts/ci/linux-test.sh"
+        else
+          echo "Notice: Linux test script not found in this commit. Skipping."
+          report success "Linux & Rust tests skipped (no test script)"
+          exit 0
+        fi
+        if "$TEST_SCRIPT"; then
+          report success "Linux & Rust tests passed"
+        else
+          report failure "Linux & Rust tests failed"
+          exit 1
+        fi
+
+  - name: check-windows
+    image: rust:1.98-bookworm
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - set -e
+      - |
+        report() {
+          python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / Windows MSVC Check" --state "$1" --description "$2" || true
+        }
+        # Smart Fast-Bypass for Monorepo PRs:
+        if [ "${CI_PIPELINE_EVENT:-}" = "pull_request" ] && [ -n "${CI_PIPELINE_FILES:-}" ]; then
+          if ! echo "$CI_PIPELINE_FILES" | grep -Eq 'Cargo\.|rust-toolchain|shared/|crates/|linux/|windows/|scripts/ci/(linux|windows|verify|test-multiplatform)|\.woodpecker'; then
+            echo "Notice: No Windows changes detected in PR. Fast-bypass skipping."
+            report success "Skipped — No Windows changes in this PR"
+            exit 0
+          fi
+        fi
+        report pending "Running cargo-xwin clippy for x86_64-pc-windows-msvc..."
+        if [ ! -f "./Cargo.toml" ]; then
+          echo "Notice: Cargo.toml not found in this commit. Skipping."
+          report success "Windows MSVC check skipped (no Cargo.toml)"
+          exit 0
+        fi
+        rustup target add x86_64-pc-windows-msvc
+        if ! command -v cargo-xwin >/dev/null 2>&1; then
+          curl -sL https://github.com/rust-cross/cargo-xwin/releases/download/v0.23.1/cargo-xwin-v0.23.1.x86_64-unknown-linux-musl.tar.gz | tar -xz -C /usr/local/cargo/bin
+        fi
+        if [ -f "./windows/ci/check.sh" ]; then
+          CHECK_SCRIPT="./windows/ci/check.sh"
+        elif [ -f "./scripts/ci/windows-check.sh" ]; then
+          CHECK_SCRIPT="./scripts/ci/windows-check.sh"
+        else
+          echo "Notice: Windows check script not found in this commit. Skipping."
+          report success "Windows MSVC check skipped (no check script)"
+          exit 0
+        fi
+        if "$CHECK_SCRIPT"; then
+          report success "Windows MSVC type-check passed"
+        else
+          report failure "Windows MSVC type-check failed"
+          exit 1
+        fi
