@@ -250,3 +250,247 @@ mod tests {
         assert_eq!(project_dir::app_encoded("/"), "");
     }
 }
+
+/// The files a store reader lists before it reads any of them.
+///
+/// `ClaudeDiscovery.claudeTranscriptFiles`: the `.jsonl` transcripts in one
+/// project dir with their mtimes, read in one bulk listing instead of a stat per
+/// file.
+///
+/// Two details are the whole point of this being here rather than inline:
+///
+/// - The **directory** is resolved first. A project dir that is itself a symlink
+///   fails a plain listing on macOS, and every multi-account setup that shares a
+///   project across accounts has one.
+/// - The **entries are not resolved**. A symlinked transcript still reports its
+///   own mtime, which is what tells "this session is live" from "this session
+///   was left behind" — resolving it would report the target's mtime and, worse,
+///   make two spellings look like one session (#248).
+pub mod transcript_files {
+    use std::time::UNIX_EPOCH;
+
+    use crate::path_identity;
+
+    /// One transcript as the listing sees it.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct TranscriptFile {
+        /// The file name alone, which is the session id plus `.jsonl`.
+        pub name: String,
+        /// Full path, built from the *resolved* directory.
+        pub path: String,
+        /// Milliseconds since the Unix epoch.
+        pub modified_ms: u64,
+    }
+
+    /// `None` when the directory cannot be listed at all — a store that is
+    /// missing, unreadable, or a symlink loop. An empty `Vec` is a directory
+    /// that exists and holds no transcripts, which is a different answer: the
+    /// first means "look elsewhere", the second "nothing here".
+    pub fn list(project_dir: &str) -> Option<Vec<TranscriptFile>> {
+        let dir = path_identity::resolved(project_dir);
+        let entries = std::fs::read_dir(&dir).ok()?;
+        let mut files: Vec<TranscriptFile> = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.ends_with(".jsonl") {
+                continue;
+            }
+            // A dangling link has no mtime to report; skip it rather than
+            // invent one, so it can never win "the most recent".
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            if !metadata.is_file() {
+                continue;
+            }
+            let Some(modified_ms) = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+                .map(|elapsed| elapsed.as_millis() as u64)
+            else {
+                continue;
+            };
+            files.push(TranscriptFile {
+                path: std::path::Path::new(&dir)
+                    .join(&name)
+                    .to_string_lossy()
+                    .into_owned(),
+                name,
+                modified_ms,
+            });
+        }
+        // Deterministic, so a tie on mtime does not depend on readdir order.
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        Some(files)
+    }
+
+    /// How far before the process started a transcript may still belong to it:
+    /// the CLI writes the first line after the process is already running, and
+    /// clock granularity is not free.
+    pub const START_SLACK_MS: u64 = 10_000;
+
+    /// The newest transcript written by a process that started at
+    /// `started_at_ms`, skipping files from sessions older than that.
+    ///
+    /// `started_at_ms == None` means the process start time is unknown, and then
+    /// every file is a candidate — the same rule the Swift readers use, where a
+    /// missing start time only widens the field.
+    pub fn most_recent(
+        files: &[TranscriptFile],
+        started_at_ms: Option<u64>,
+    ) -> Option<&TranscriptFile> {
+        files
+            .iter()
+            .filter(|file| match started_at_ms {
+                None => true,
+                Some(start) => file.modified_ms + START_SLACK_MS >= start,
+            })
+            .max_by_key(|file| file.modified_ms)
+    }
+}
+
+#[cfg(test)]
+mod transcript_file_tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::transcript_files::{self, START_SLACK_MS, TranscriptFile};
+
+    /// A scratch directory that removes itself, so a failing assertion cannot
+    /// leave a symlinked tree in `/tmp`.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("morrow-transcripts-{}-{name}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(&path).expect("a scratch directory");
+            Self(path)
+        }
+
+        fn text(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_missing_store_is_none_and_an_empty_one_is_empty() {
+        let scratch = Scratch::new("empty");
+        // A directory that exists but holds no transcript: "nothing here".
+        assert_eq!(transcript_files::list(&scratch.text()), Some(Vec::new()));
+        // A directory that is not there: "look elsewhere".
+        assert_eq!(
+            transcript_files::list(&format!("{}/nope", scratch.text())),
+            None
+        );
+    }
+
+    #[test]
+    fn only_jsonl_regular_files_are_listed() {
+        let scratch = Scratch::new("kinds");
+        fs::write(scratch.0.join("a.jsonl"), b"{}\n").expect("a transcript");
+        fs::write(scratch.0.join("notes.txt"), b"hi").expect("a file");
+        fs::create_dir_all(scratch.0.join("nested.jsonl")).expect("a directory named .jsonl");
+
+        let files = transcript_files::list(&scratch.text()).expect("a listing");
+        let names: Vec<&str> = files.iter().map(|file| file.name.as_str()).collect();
+        assert_eq!(names, vec!["a.jsonl"]);
+    }
+
+    /// The reason the directory is resolved first: a project dir that is itself
+    /// a symlink is how two accounts share one project.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_project_directory_is_listed_through_the_link() {
+        let scratch = Scratch::new("dir-link");
+        fs::create_dir_all(scratch.0.join("real")).expect("a directory");
+        fs::write(scratch.0.join("real/s.jsonl"), b"{}\n").expect("a transcript");
+        std::os::unix::fs::symlink(scratch.0.join("real"), scratch.0.join("link"))
+            .expect("a symlink");
+
+        let through_link =
+            transcript_files::list(&scratch.0.join("link").to_string_lossy()).expect("a listing");
+        assert_eq!(through_link.len(), 1);
+        assert_eq!(through_link[0].name, "s.jsonl");
+        // The path is built from the resolved directory, so a caller that opens
+        // it does not go through the link a second time.
+        assert_eq!(
+            through_link[0].path,
+            format!(
+                "{}/s.jsonl",
+                crate::path_identity::resolved(&scratch.0.join("real").to_string_lossy())
+            )
+        );
+    }
+
+    #[test]
+    fn the_newest_transcript_wins() {
+        let files = vec![
+            TranscriptFile {
+                name: "old.jsonl".into(),
+                path: "/p/old.jsonl".into(),
+                modified_ms: 1_000,
+            },
+            TranscriptFile {
+                name: "new.jsonl".into(),
+                path: "/p/new.jsonl".into(),
+                modified_ms: 5_000,
+            },
+        ];
+        assert_eq!(
+            transcript_files::most_recent(&files, None).map(|file| file.name.as_str()),
+            Some("new.jsonl")
+        );
+        assert_eq!(transcript_files::most_recent(&[], None), None);
+    }
+
+    #[test]
+    fn a_transcript_from_before_the_process_started_is_not_its_session() {
+        let files = vec![
+            // Written long before the process started: another session.
+            TranscriptFile {
+                name: "stale.jsonl".into(),
+                path: "/p/stale.jsonl".into(),
+                modified_ms: 1_000,
+            },
+            // Written after it started, but not the newest.
+            TranscriptFile {
+                name: "mine.jsonl".into(),
+                path: "/p/mine.jsonl".into(),
+                modified_ms: 20_000,
+            },
+            // Newest of all, and written by this process.
+            TranscriptFile {
+                name: "mine-later.jsonl".into(),
+                path: "/p/mine-later.jsonl".into(),
+                modified_ms: 30_000,
+            },
+        ];
+        let started = 20_000;
+        assert_eq!(
+            transcript_files::most_recent(&files, Some(started)).map(|file| file.name.as_str()),
+            Some("mine-later.jsonl")
+        );
+        // The stale one is excluded even when it is the only candidate.
+        assert_eq!(
+            transcript_files::most_recent(&files[..1], Some(started)),
+            None
+        );
+        // The slack exists because the CLI writes its first line just after the
+        // process is already running.
+        let just_before = started - START_SLACK_MS;
+        assert_eq!(
+            transcript_files::most_recent(&files[..1], Some(just_before))
+                .map(|file| file.name.as_str()),
+            Some("stale.jsonl")
+        );
+    }
+}
