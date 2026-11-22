@@ -70,6 +70,8 @@ Status: `belum` · `sedang` · `PR dibuka` · `revisi` · `merged` · `gagal` ·
 | 6 | #180–#202 → PR #203 | panel UI: 18 komponen, kartu sesi/approval/musik/Question/completion, drag, Settings | `PR dibuka` (draft) — **tidak** di `main` | oxlint/svelte-check bersih, 209 test frontend, 632 test Rust, clippy bersih; L-001…L-012 + W-001…W-009 belum dinilai |
 | 6 | #235 → PR #249 | Capability jujur: 11 baris Linux / 8 Windows turun ke `Unsupported(reason)`, registry `ADAPTERS` + test penjaga | `PR dibuka` (stacked #203) | 635 test Rust; guard merah dulu untuk 11 baris |
 | 6 | #241 → PR #250 | outlet suara: `PlaySound` diputar, tabel cue, `PlaySoundW` di Windows, halaman Settings → Sound | `PR dibuka` (stacked #249) | 643 test Rust, 211 frontend, `windows/ci/check.sh` PASS |
+| 6 | #242 → PR #251 | dokumen status cocok dengan kode: 33 baris papan, kolom Status §5.1/§5.2 | `PR dibuka` (stacked #250) | `rg` tidak menemukan klaim yang dibantah |
+| 6 | #243 → PR #252 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `PR dibuka` (stacked #251) | self-check 11/11; gate penuh butuh host dengan `claude` |
 
 Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge commit*, hapus branch setelah merge.
 
@@ -92,10 +94,14 @@ Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge com
 
 ## Gate end-to-end
 
-| Gate | Fase | Input | Membuktikan | Dinilai di |
-|---|---|---|---|---|
-| `E2E-1` | 1 | hook JSON sintetis | kabel tersambung dua arah | Xvfb (smoke) → host Debian X11 (final) |
-| `E2E-2` | 3, 4 | `claude` asli + hook terinstall | produk bekerja terhadap CLI nyata | host Debian; Windows QEMU/hardware |
+| Gate | Fase | Input | Membuktikan | Dinilai di | Skrip |
+|---|---|---|---|---|---|
+| `E2E-1` | 1 | hook JSON sintetis | kabel tersambung dua arah | Xvfb (smoke) → host Debian X11 (final) | `linux/ci/e2e1.sh` |
+| `E2E-2` | 3, 4 | `claude` asli + hook terinstall | produk bekerja terhadap CLI nyata | host Debian; Windows QEMU/hardware | `linux/ci/e2e2.sh` · `windows/ci/e2e2.ps1` |
+
+`linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude` dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Itu bisa dijalankan siapa pun, di mesin mana pun, dan 11 pemeriksaannya lulus pada 2026-11-22. Separuh panel (CLI asli + klik) tetap butuh host.
+
+`windows/ci/e2e2.ps1` **belum pernah dijalankan di host Windows**. Bagian installer-nya otomatis; bagian panel masih manual dan tercetak sebagai langkah di blok Evidence-nya.
 
 ---
 
@@ -120,6 +126,13 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (lanjutan) — gate E2E-2, dan bug installer yang ia temukan
+
+- **Sudah:** `linux/ci/e2e2.sh` (dengan mode `--self-check` yang jalan tanpa `claude` dan tanpa display), `windows/ci/e2e2.ps1` (belum pernah dijalankan di host Windows), dan `morrow-app --hooks status|install|uninstall|install-all|uninstall-all` sebagai jalur installer tanpa GUI — prasyarat agar gate bisa memasang hook tanpa mengklik Settings. **Gate itu langsung menemukan dua bug:** `delete_top_level_key` meninggalkan baris baru sehingga uninstall tidak mengembalikan `settings.json` byte-for-byte (melanggar AC #98), dan `x11_cleanup` gagal dengan `pids[@]: unbound variable` ketika tidak ada proses yang dijalankan. Keduanya diperbaiki; invariannya sekarang: `insert_key` tidak pernah menambah spasi miliknya sendiri.
+- **Bukti:** `linux/ci/e2e2.sh --self-check` 11/11 lulus; `cargo test --workspace` 647 lulus (643 sebelum); `windows/ci/check.sh` PASS ketiga crate; `bun test` 211 lulus.
+- **Berikutnya:** #232 → #245 (decoder core batch 1 + fixture dari Swift), lalu #244, #247, #246, #248.
+- **Blocker:** gate E2E-2 penuh butuh host dengan `claude` terpasang dan login — tidak ada di mesin pengembangan ini.
 
 ### 2026-11-22 — audit paritas #240 dan dua slice remediasi
 
