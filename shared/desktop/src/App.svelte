@@ -26,6 +26,7 @@
     type SessionFilter,
     type Size,
   } from './lib/panel';
+  import { activeSession, collapsedWidth } from './lib/session-cards';
   import { MOTION, PALETTE, cssVariables } from './lib/tokens';
   import type { CapabilityRow, Card, Decision, Session, Snapshot } from './lib/types';
 
@@ -74,6 +75,9 @@
   let ambient = $state<AmbientState>({ fullscreen: false, locked: false, quiet: false });
   let support = $state<AmbientSupport>({ fullscreenDetection: false, screenLock: false });
   let view = $derived(ambientView(ambient, support));
+  let active = $derived(activeSession(sessions));
+  let collapsed = $derived({ width: collapsedWidth(active), height: COLLAPSED_SIZE.height });
+  let lastCollapsedWidth = COLLAPSED_SIZE.width;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   const POLL_MS = 1000;
 
@@ -164,7 +168,7 @@
     closeTimer = setTimeout(() => {
       closing = false;
       openHeight = null;
-      for (const size of fit.closed(COLLAPSED_SIZE)) reportFit(size, false);
+      for (const size of fit.closed(collapsed)) reportFit(size, false);
     }, CLOSE_TRANSITION.durationMs + 40);
   }
 
@@ -272,7 +276,8 @@
     };
     invoke('subscribe', { channel });
     loadCapabilities();
-    reportFit(COLLAPSED_SIZE, false);
+    lastCollapsedWidth = collapsed.width;
+    reportFit(collapsed, false);
 
     return () => {
       clearTimeout(hoverTimer);
@@ -285,10 +290,34 @@
     };
   });
 
+  // #183: a card's words can change while its count stays the same, so the
+  // fit trigger reads the rendered fields too. It still goes through this
+  // one path; IslandFit drops a size that has not changed.
+  let sessionContent = $derived(
+    sessions
+      .map(
+        (s) =>
+          `${s.session_id}:${s.status}:${s.current_tool}:${s.tool_description}:${s.last_user_prompt}:${s.last_assistant_message}:${s.updated_at}`,
+      )
+      .join('|'),
+  );
+
+  // #183: the working bar grows for thinking/tool labels and the workspace
+  // dock. One tight-fit call per change (batched by tick), not per frame.
+  $effect(() => {
+    const width = collapsed.width;
+    if (expanded || closing || width === lastCollapsedWidth) return;
+    void tick().then(() => {
+      if (fit.phase !== 'collapsed') return;
+      lastCollapsedWidth = width;
+      reportFit({ width, height: COLLAPSED_SIZE.height }, false);
+    });
+  });
+
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = sessions.length + cards.length + tab.length;
+    const content = `${sessionContent}|${cards.length}|${tab}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -306,6 +335,7 @@
   data-variant={variant}
   data-phase={fit.phase}
   {style}
+  style:width={expanded || closing ? undefined : `${collapsed.width}px`}
   style:height={openHeight === null ? undefined : `${openHeight}px`}
   bind:this={island}
   onpointerenter={onPointerEnter}
@@ -314,7 +344,7 @@
 >
   {#if !expanded && !closing}
     <button class="toggle" onclick={openPanel} aria-label="Open the Morrow panel">
-      <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} />
+      <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} {active} />
     </button>
   {/if}
   <div class="panel-content" class:visible={expanded || closing} bind:this={panelContent}>

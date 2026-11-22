@@ -1,25 +1,53 @@
 <script lang="ts">
-  // #180 — idle, empty and prehover states of the collapsed island, matched
-  // 1:1 to canvas section #collapsed-quiet. #181 uses the exported Clawd
-  // sleeping sheet at 21 pt; #182 adds open/close motion.
+  // #180 idle, empty and prehover (#collapsed-quiet); #183 adds the working
+  // bar (#collapsed-working): thinking dots or a tool label coloured by the
+  // canvas table, plus the workspace dock of the active session.
   import Mascot from './Mascot.svelte';
   import PixelText from './PixelText.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import { COLLAPSED, PALETTE } from '../tokens';
+  import { mascotStatus, middleTruncate, toolColor, toolLabel } from '../session-cards';
+  import type { Session } from '../types';
 
-  type Props = { sessionCount: number; prehover?: boolean; quiet?: boolean };
-  let { sessionCount, prehover = false, quiet = false }: Props = $props();
+  type Props = {
+    sessionCount: number;
+    prehover?: boolean;
+    quiet?: boolean;
+    /** First working/thinking session from the shell's ordered list. */
+    active?: Session | null;
+  };
+  let { sessionCount, prehover = false, quiet = false, active = null }: Props = $props();
 
-  let state = $derived(sessionCount > 0 ? 'idle' : 'empty');
+  let source = $derived(active?.source ?? 'claude');
+  let status = $derived(active ? mascotStatus(active.status) : 'idle');
+  let toolName = $derived(active?.current_tool ?? '');
+  let state = $derived(
+    active ? (toolName ? 'tool' : 'thinking') : sessionCount > 0 ? 'idle' : 'empty',
+  );
+  let dockLabel = $derived(
+    active ? middleTruncate(active.cwd_name || active.session_id, 26) : '',
+  );
 </script>
 
 <div class="col" class:pre={prehover} data-state={state} aria-label="Morrow island, {state}">
   <span class="wing">
-    <Mascot source="claude" status="idle" size={COLLAPSED.mascot} />
+    <Mascot {source} {status} size={COLLAPSED.mascot} />
+    {#if state === 'thinking'}
+      <span class="thinkdots"><i></i><i></i><i></i></span>
+      <PixelText text="THINKING" size={1.3} color={PALETTE.cyan} />
+    {:else if state === 'tool'}
+      <PixelText text={toolLabel(toolName)} size={1.3} color={toolColor(toolName)} />
+      <span class="tooldetail">{active?.tool_description ?? ''}</span>
+    {/if}
   </span>
   <span class="gap"></span>
   <span class="wing">
-    {#if state === 'empty' && !quiet}
+    {#if state === 'thinking' || state === 'tool'}
+      <span class="dock">
+        <PixelIcon name="workspace" size={0.9} color={PALETTE.cyan} />
+        <span class="t">{dockLabel}</span>
+      </span>
+    {:else if state === 'empty' && !quiet}
       <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
     {:else}
       <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
@@ -71,13 +99,69 @@
   .gap {
     flex: 1 0 96px;
   }
-  /* #197 quiet-hours moon (the GIF/zz stand-in was replaced by Mascot in #181). */
+  /* #180 idle/empty states keep their 21 pt mascot; #183 reuses it working. */
   .moon {
     flex: none;
+  }
+  .thinkdots {
+    display: inline-flex;
+    gap: 3px;
+  }
+  .thinkdots i {
+    width: 4px;
+    height: 4px;
+    background: var(--cyan);
+    opacity: 0.25;
+    animation: td 1.05s steps(1) infinite;
+  }
+  .thinkdots i:nth-child(2) {
+    animation-delay: 0.35s;
+  }
+  .thinkdots i:nth-child(3) {
+    animation-delay: 0.7s;
+  }
+  @keyframes td {
+    0%,
+    33% {
+      opacity: 1;
+    }
+    34%,
+    100% {
+      opacity: 0.25;
+    }
+  }
+  .tooldetail {
+    font: 9px ui-monospace, monospace;
+    color: rgba(255, 255, 255, 0.7);
+    max-width: 120px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dock {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2.5px 6px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.06);
+    box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.1);
+  }
+  .dock .t {
+    font: 700 8px ui-monospace, monospace;
+    color: rgba(255, 255, 255, 0.95);
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   @media (prefers-reduced-motion: reduce) {
     .col {
       transition: none;
+    }
+    .thinkdots i {
+      animation: none;
+      opacity: 1;
     }
   }
 </style>
