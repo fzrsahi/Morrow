@@ -82,8 +82,10 @@ fn hold(connection: Connection, payload: &HookPayload, feed: &Arc<Feed>) {
         .spawn(move || {
             loop {
                 match decision.recv_timeout(PEER_CHECK) {
-                    Ok(decision) => {
-                        if let Err(error) = connection.reply(decision.reply()) {
+                    Ok(reply) => {
+                        // The shell already framed the reply: a plain decision
+                        // or #188's `updatedInput.answers` for a question.
+                        if let Err(error) = connection.reply(&reply) {
                             eprintln!("morrow-app: answer request {id}: {error}");
                         }
                         return;

@@ -5,10 +5,12 @@
   // this component only renders the track it is handed and reports a click.
   import PixelIcon from './PixelIcon.svelte';
   import PixelText from './PixelText.svelte';
-  import { PALETTE } from '../tokens';
+  import LineIcon from './LineIcon.svelte';
+  import { PALETTE, type Theme } from '../tokens';
   import {
     currentLyricIndex,
     formatTime,
+    lyricScrollY,
     progress,
     type Controls,
     type DeckState,
@@ -17,6 +19,7 @@
   } from '../music';
 
   type Props = {
+    theme?: Theme;
     track: Track | null;
     state: DeckState;
     lyrics: LyricLine[] | null;
@@ -28,6 +31,7 @@
     onSeek: (fraction: number) => void;
   };
   let {
+    theme = 'pixel',
     track,
     state,
     lyrics,
@@ -47,8 +51,18 @@
   let artist = $derived(none ? 'No MPRIS / media session' : track?.artist || '');
   let lengthUs = $derived(track?.length_us ?? null);
   let lit = $derived(Math.round(progress(positionUs, lengthUs) * CELLS));
+  let fraction = $derived(Math.round(progress(positionUs, lengthUs) * 100));
+  let modernSubtitle = $derived(
+    none
+      ? 'Start a player: Spotify, a browser tab, mpv…'
+      : `${track?.artist ?? ''} · ${track?.album ?? ''}`,
+  );
   let current = $derived(currentLyricIndex(lyrics ?? [], positionUs));
   let synced = $derived(playing && lyrics !== null && lyrics.length > 0);
+  // The 84 pt box has 8 pt of padding at each end; 10 pt lines + 4 pt gap.
+  const LYRIC_LINE_PX = 16;
+  const LYRIC_VIEW_PX = 68;
+  let scrollY = $derived(lyricScrollY(current, lyrics?.length ?? 0, LYRIC_LINE_PX, LYRIC_VIEW_PX));
 
   function scrub(event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -57,6 +71,34 @@
   }
 </script>
 
+{#if theme === 'modern'}
+  <div class="mdeck" data-deck={state}>
+    <div class="art" class:none={none}>
+      {#if none}<LineIcon name="note" color="currentColor" size={26} />{/if}
+    </div>
+    <div class="mbody">
+      <div class="mtitle">{title}</div>
+      <div class="msub">{modernSubtitle}</div>
+      {#if !none}
+        <button
+          type="button"
+          class="mprogress"
+          aria-label="Seek within track"
+          disabled={!enabled.seek}
+          onclick={scrub}
+        ><span class="fill" style="width:{fraction}%"></span></button>
+        <div class="mtimes">
+          <span>{formatTime(positionUs)}</span><span>{formatTime(lengthUs ?? 0)}</span>
+        </div>
+      {/if}
+      <div class="mtransport">
+        <button class="mtb" aria-label="Previous track" disabled={!enabled.previous} onclick={onPrevious}>◀◀</button>
+        <button class="mtb" aria-label={playing ? 'Pause' : 'Play'} disabled={!enabled.playPause} onclick={onPlayPause}>{playing ? '❚❚' : '▶'}</button>
+        <button class="mtb" aria-label="Next track" disabled={!enabled.next} onclick={onNext}>▶▶</button>
+      </div>
+    </div>
+  </div>
+{:else}
 <div class="deck" data-deck={state}>
   <div class="l">
     <div class="top">
@@ -127,13 +169,17 @@
       <div class="lyr msg"><PixelText text="[ NO LYRIC FEED ]" size={1.1} color="rgba(255,255,255,.4)" /></div>
     {:else}
       <div class="lyr">
-        {#each lyrics as line, i (i)}
-          <span class:cur={i === current}>{i === current ? '▶ ' : ''}{line.text}</span>
-        {/each}
+        <!-- Only the lines move: the mask and the 84 pt window stay put. -->
+        <div class="lines" style="transform: translateY({scrollY}px)">
+          {#each lyrics as line, i (i)}
+            <span class:cur={i === current}>{i === current ? '▶ ' : ''}{line.text}</span>
+          {/each}
+        </div>
       </div>
     {/if}
   </div>
 </div>
+{/if}
 
 <style>
   .deck {
@@ -288,15 +334,25 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    gap: 4px;
     padding: 8px 0;
     font: 500 10px system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.42);
     -webkit-mask: linear-gradient(transparent, #000 25%, #000 75%, transparent);
     mask: linear-gradient(transparent, #000 25%, #000 75%, transparent);
   }
+  .lines {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: transform 220ms ease-out;
+  }
   .lyr span {
     white-space: nowrap;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lines {
+      transition: none;
+    }
   }
   .lyr .cur {
     color: var(--cyan);
@@ -307,6 +363,82 @@
     justify-content: center;
     -webkit-mask: none;
     mask: none;
+  }
+
+  /* #202 — canvas.css:305-306 and components.js music()'s Modern branch. */
+  .mdeck {
+    display: grid;
+    grid-template-columns: 86px 1fr;
+    gap: 14px;
+    padding: 6px 18px 16px;
+  }
+  .mdeck .art {
+    width: 86px;
+    height: 86px;
+    border-radius: 14px;
+  }
+  .mdeck .art.none {
+    color: var(--td);
+  }
+  .mbody {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .mtitle {
+    font: 500 11.5px var(--ui, system-ui, sans-serif);
+    color: var(--tw);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .msub {
+    font: 10px var(--ui, system-ui, sans-serif);
+    color: rgba(255, 255, 255, 0.6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mprogress {
+    height: 4px;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.18);
+    overflow: hidden;
+    cursor: default;
+  }
+  .mprogress .fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: #fff;
+  }
+  .mtimes {
+    display: flex;
+    justify-content: space-between;
+    font: 500 7.5px var(--ui, ui-monospace, monospace);
+    color: rgba(255, 255, 255, 0.6);
+  }
+  .mtransport {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .mtb {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--tw);
+    font: 600 11px var(--ui, system-ui, sans-serif);
+    opacity: 0.9;
+    cursor: default;
+  }
+  .mtb:disabled {
+    opacity: 0.3;
   }
   :focus-visible {
     outline: 2px solid var(--cyan);

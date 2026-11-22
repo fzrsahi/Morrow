@@ -5,12 +5,14 @@
   import Mascot from './Mascot.svelte';
   import PixelText from './PixelText.svelte';
   import PixelIcon from './PixelIcon.svelte';
-  import { COLLAPSED, PALETTE } from '../tokens';
+  import LineIcon from './LineIcon.svelte';
+  import { COLLAPSED, PALETTE, type Theme } from '../tokens';
   import { mascotStatus, middleTruncate, toolColor, toolLabel } from '../session-cards';
   import type { Track } from '../music';
   import type { Session } from '../types';
 
   type Props = {
+    theme?: Theme;
     sessionCount: number;
     prehover?: boolean;
     quiet?: boolean;
@@ -18,6 +20,8 @@
     active?: Session | null;
     /** #186: approvals the user hid are still pending — the bell stays. */
     hiddenApprovals?: number;
+    /** #188: hidden questions keep the amber `?` of canvas #collapsed-attention. */
+    hiddenQuestions?: number;
     /** #193: currently playing track; null leaves the #183 bar untouched. */
     track?: Track | null;
     /** #191: last turn finished — canvas #collapsed-attention's cyan check. */
@@ -25,11 +29,13 @@
     glanceLabel?: string;
   };
   let {
+    theme = 'pixel',
     sessionCount,
     prehover = false,
     quiet = false,
     active = null,
     hiddenApprovals = 0,
+    hiddenQuestions = 0,
     track = null,
     glance = false,
     glanceLabel = '',
@@ -55,6 +61,7 @@
 
 <div
   class="col"
+  class:modern={theme === 'modern'}
   class:pre={prehover}
   class:tight={music && active !== null}
   data-state={state}
@@ -64,14 +71,28 @@
   <span class="wing">
     <Mascot {source} {status} size={COLLAPSED.mascot} />
     {#if music}
-      <span class="note"><PixelIcon name="music" size={1.1} color={PALETTE.cyan} /></span>
+      <span class="note">
+        {#if theme === 'modern'}
+          <LineIcon name="note" color={PALETTE.cyan} size={10} />
+        {:else}
+          <PixelIcon name="music" size={1.1} color={PALETTE.cyan} />
+        {/if}
+      </span>
       <span class="song" class:compact={active !== null}>{song}</span>
     {/if}
     {#if state === 'thinking'}
       <span class="thinkdots"><i></i><i></i><i></i></span>
-      <PixelText text="THINKING" size={1.3} color={PALETTE.cyan} />
+      {#if theme === 'modern'}
+        <span class="lbl" style="color:{PALETTE.cyan}">THINKING</span>
+      {:else}
+        <PixelText text="THINKING" size={1.3} color={PALETTE.cyan} />
+      {/if}
     {:else if state === 'tool'}
-      <PixelText text={toolLabel(toolName)} size={1.3} color={toolColor(toolName)} />
+      {#if theme === 'modern'}
+        <span class="lbl" style="color:{toolColor(toolName)}">{toolLabel(toolName)}</span>
+      {:else}
+        <PixelText text={toolLabel(toolName)} size={1.3} color={toolColor(toolName)} />
+      {/if}
       <span class="tooldetail">{active?.tool_description ?? ''}</span>
     {/if}
   </span>
@@ -113,7 +134,11 @@
         />
       </svg>
     {:else if state === 'empty' && !quiet}
-      <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
+      {#if theme === 'modern'}
+        <span class="lbl" style="color:{PALETTE.textMuted}">IDLE</span>
+      {:else}
+        <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
+      {/if}
     {:else}
       <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
     {/if}
@@ -134,6 +159,30 @@
       >
         <path d="M4 11V7.5a4 4 0 0 1 8 0V11l1 1.2H3z" />
         <path d="M6.8 13.6a1.3 1.3 0 0 0 2.4 0" />
+      </svg>
+    {/if}
+    {#if hiddenQuestions > 0}
+      <!-- #188: canvas #collapsed-attention's `question-dismissed`: the user
+           hid the card, so the question bubble waits without pulsing. -->
+      <svg
+        class="qbubble"
+        viewBox="0 0 15 14"
+        width="15"
+        height="14"
+        aria-label="{hiddenQuestions} hidden questions waiting"
+        role="img"
+      >
+        <path
+          d="M2 1h11a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 10H6l-3.5 3V10H2A1.5 1.5 0 0 1 .5 8.5v-6A1.5 1.5 0 0 1 2 1z"
+          fill="#FFB347"
+        />
+        <path
+          d="M5.8 4.2a1.7 1.7 0 1 1 2.3 1.6c-.5.2-.6.5-.6 1M7.5 8.2h.01"
+          stroke="#000"
+          stroke-width="1.3"
+          fill="none"
+          stroke-linecap="round"
+        />
       </svg>
     {/if}
     {#if quiet}
@@ -174,6 +223,10 @@
     padding: 0 13.5px;
     transform: scale(1.004);
   }
+  /* #202 — components.js collapsed() `label()` in the Modern Clean branch. */
+  .lbl {
+    font: 600 10px var(--ui, system-ui, sans-serif);
+  }
   .wing {
     display: flex;
     align-items: center;
@@ -191,7 +244,8 @@
   /* #180 idle/empty states keep their 21 pt mascot; #183 reuses it working. */
   .moon,
   .bell,
-  .check {
+  .check,
+  .qbubble {
     flex: none;
   }
   .bell {

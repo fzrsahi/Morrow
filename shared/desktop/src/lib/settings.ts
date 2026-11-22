@@ -5,6 +5,9 @@
 import type { SessionDensity, SessionFilter } from './panel';
 import type { CapabilityRow } from './types';
 
+/** #202 — the shell emits the settings document to both webviews after a write. */
+export const SETTINGS_CHANGED_EVENT = 'settings-changed';
+
 export type SettingsPageId =
   | 'general'
   | 'appearance'

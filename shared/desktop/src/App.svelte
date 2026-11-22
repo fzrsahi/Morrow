@@ -5,6 +5,7 @@
   // passes on the user's Approve / Deny.
   import { onMount, tick } from 'svelte';
   import { Channel, invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import { GONE_NOTICE_MS } from './lib/approval';
   import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
@@ -13,6 +14,9 @@
   import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
+  import QuestionCard from './lib/components/QuestionCard.svelte';
+  import VolumeHud from './lib/components/VolumeHud.svelte';
+  import { isQuestion, pickIndex } from './lib/question';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -39,7 +43,9 @@
     type Size,
   } from './lib/panel';
   import {
+    SETTINGS_CHANGED_EVENT,
     SETTINGS_KEYS,
+    appearanceFromSettings,
     sessionDensityFromSettings,
     sessionFilterFromSettings,
   } from './lib/settings';
@@ -47,6 +53,7 @@
   import type { TerminalOutcome } from './lib/terminal-jump';
   import {
     COLLAPSED_MUSIC_WIDTH,
+    LyricCache,
     controls,
     deckState,
     localPosition,
@@ -55,24 +62,24 @@
     type LyricLine,
     type Track,
   } from './lib/music';
-  import { MOTION, PALETTE, cssVariables } from './lib/tokens';
+  import { MOTION, PALETTE, cssVariables, type Theme } from './lib/tokens';
+  import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
   import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
 
   // B (floating pill) is the default: it clears the GNOME top bar. Variant A
   // covers the clock and is used only when a maintainer asks for ?variant=A.
   const variant = resolveVariant(window.location.search);
-  const vars = cssVariables();
-  const css = Object.entries(vars)
-    .map(([key, value]) => `${key}:${value}`)
-    .join(';');
-  const style = [
-    css,
+  // #202: the theme is a view state, not a URL flag. It loads from the same
+  // settings document as the filter and changes live when Settings writes it.
+  let theme = $state<Theme>('pixel');
+  const style = $derived([
+    ...Object.entries(cssVariables(11, theme)).map(([key, value]) => `${key}:${value}`),
     `--open-dur:${OPEN_TRANSITION.durationMs}ms`,
     `--open-ease:${OPEN_TRANSITION.css}`,
     `--close-dur:${CLOSE_TRANSITION.durationMs}ms`,
     `--close-ease:${CLOSE_TRANSITION.css}`,
     `--panel-w:${OPEN_WIDTH}px`,
-  ].join(';');
+  ].join(';'));
 
   let sessions = $state<Session[]>([]);
   let cards = $state<Card[]>([]);
@@ -83,6 +90,9 @@
   // #187: the jump outcome belongs to the session, so it survives the card
   // being answered and re-issued. The card itself stays in the queue.
   let jumpOutcomes = $state<Record<string, TerminalOutcome>>({});
+  // #188: the option being answered, held while the shell writes the reply so
+  // a click (or a number key) shows the canvas' selected row until it lands.
+  let selected = $state<{ id: number; label: string } | null>(null);
   let hotkeySupported = $state(false);
   // #191: the last finished turn. The shell has already decided (via the
   // attention policy) whether it is a card, a glance or nothing at all.
@@ -127,6 +137,9 @@
   // webview's clock. No player probe is scheduled while the Music tab is shut.
   let track = $state<Track | null>(null);
   let lyrics = $state<LyricLine[] | null>(null);
+  // #194: keep both the lines and "the service had none" per track, so a
+  // re-read or a reopened tab never asks lrclib for the same track twice.
+  const lyricCache = new LyricCache();
   let positionUs = $state(0);
   let anchorMs = 0;
   let generation = 0;
@@ -135,12 +148,29 @@
   let deck = $derived(deckState(track));
   let enabled = $derived(controls(track));
 
+  // #195: `music_volume*` answers on the shell; the HUD only draws the reading
+  // and toggles mute on a click. A 1 s read is the price of showing the meter
+  // when the *system* (not this panel) changes the volume.
+  const VOLUME_POLL_MS = 1000;
+  let volume = $state<Volume>({ percent: 0, muted: false });
+  let volumeCapable = $state(false);
+  const volumeGate = new VolumeHudGate();
+  let hudUntil = $state(0);
+  let hudVisible = $state(false);
+
   let active = $derived(activeSession(sessions));
   let liveCards = $derived(
     cards.filter((card) => !hiddenIds.includes(card.id) && !gone.some((g) => g.card.id === card.id)),
   );
   let visibleCards = $derived([...liveCards, ...gone.map((g) => g.card)]);
   let hiddenCount = $derived(cards.filter((card) => hiddenIds.includes(card.id)).length);
+  // #188: the bell is for approvals, the amber `?` for questions.
+  let hiddenApprovals = $derived(
+    cards.filter((card) => !isQuestion(card) && hiddenIds.includes(card.id)).length,
+  );
+  let hiddenQuestions = $derived(
+    cards.filter((card) => isQuestion(card) && hiddenIds.includes(card.id)).length,
+  );
   // #186 bell + #193 music wing both need room in the tight-fit pill.
   // Idle music is the canvas' 292 pt frame; a working bar keeps its wider size.
   let collapsed = $derived({
@@ -159,13 +189,13 @@
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   const POLL_MS = 1000;
 
-  async function answer(id: number, decision: Decision) {
-    // Capture before the await: the feed can drop the card while IPC is in
-    // flight, and the notice still needs the words it had when clicked.
+  // All three answers share the "answered elsewhere" path: the feed can drop
+  // a card while IPC is in flight, so the notice keeps the words it had when
+  // clicked. `send` is the one shell call that differs between them.
+  async function settle(id: number, send: () => Promise<boolean>) {
     const card = cards.find((c) => c.id === id);
     try {
-      const answered = await invoke<boolean>('answer_permission', { id, decision });
-      if (answered) {
+      if (await send()) {
         hiddenIds = hiddenIds.filter((hidden) => hidden !== id);
       } else {
         // Answered in the terminal (or its hook went) before this click.
@@ -176,7 +206,42 @@
       }
     } catch (error) {
       hooksError = String(error);
+    } finally {
+      if (selected?.id === id) selected = null;
     }
+  }
+
+  function answer(id: number, decision: Decision) {
+    return settle(id, () => invoke<boolean>('answer_permission', { id, decision }));
+  }
+
+  // #188: one click (or number key) answers at once. The shell keys the reply
+  // by question text; the label we send is the option the user picked.
+  function answerQuestion(id: number, label: string) {
+    if (selected?.id === id) return;
+    selected = { id, label };
+    return settle(id, () => invoke<boolean>('answer_question', { id, answer: label }));
+  }
+
+  // #188: macOS' Skip answers the hook without a pick (deny for a
+  // PermissionRequest, bare output for a Notification question).
+  function skipQuestion(id: number) {
+    if (selected?.id === id) return;
+    return settle(id, () => invoke<boolean>('skip_question', { id }));
+  }
+
+  // #question: 1–9 pick the first visible question while the panel is open.
+  function onKeyDown(event: KeyboardEvent) {
+    if (!expanded || closing || event.ctrlKey || event.altKey || event.metaKey) return;
+    const target = event.target as HTMLElement | null;
+    if (target && /^(INPUT|TEXTAREA)$/.test(target.tagName)) return;
+    const index = pickIndex(event.key);
+    if (index === null) return;
+    const card = liveCards.find(isQuestion);
+    const label = card?.question?.options[index]?.label;
+    if (!card || !label) return;
+    event.preventDefault();
+    void answerQuestion(card.id, label);
   }
 
   function hide(id: number) {
@@ -230,10 +295,15 @@
       return { x: r.x, y: r.y, width: r.width, height: r.height };
     };
     for (const el of island.querySelectorAll<HTMLElement>('[data-card]')) {
+      // #188: a question card has no Approve / Deny buttons; E2E-1 measures
+      // approvals, so leave question cards out of that report.
+      const approve = el.querySelector('.approve');
+      const deny = el.querySelector('.deny');
+      if (!approve || !deny) continue;
       invoke('smoke_card', {
         id: Number(el.dataset.card),
-        approve: rect(el.querySelector('.approve')),
-        deny: rect(el.querySelector('.deny')),
+        approve: rect(approve),
+        deny: rect(deny),
       });
     }
   }
@@ -391,6 +461,10 @@
       suppressClick = false;
       return;
     }
+    // #188: macOS' collapsed question badge reopens a card the user hid;
+    // approvals keep #186's bell-only reminder.
+    const reopened = cards.find((card) => isQuestion(card) && hiddenIds.includes(card.id));
+    if (reopened) hiddenIds = hiddenIds.filter((id) => id !== reopened.id);
     openPanel();
   }
 
@@ -407,34 +481,78 @@
     }, 3000);
   }
 
-  async function onMute() {
+  // #195: seed=true records the first reading without popping the HUD on
+  // launch. Later readings that differ show it for VOLUME_HUD_MS.
+  async function readVolume(seed = false) {
     try {
-      await invoke('music_volume_mute');
-      muted = !muted;
+      const next = await invoke<Volume>('music_volume');
+      volume = next;
+      muted = next.muted;
+      const now = performance.now();
+      if (seed) volumeGate.observe(next, now);
+      else if (volumeGate.observe(next, now)) hudUntil = now + VOLUME_HUD_MS;
     } catch (error) {
       hooksError = String(error);
     }
   }
 
+  async function onMute() {
+    if (!volumeCapable) return;
+    // Show immediately: the follow-up read may be slow, or fail on a device
+    // that answered the mute command but cannot report its level.
+    const now = performance.now();
+    volumeGate.show(now);
+    hudUntil = now + VOLUME_HUD_MS;
+    try {
+      await invoke('music_volume_mute');
+      muted = !muted;
+      await readVolume();
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
+  // One timer per new dwell; a second change while the HUD is up restarts it.
+  $effect(() => {
+    const until = hudUntil;
+    if (until <= performance.now()) {
+      hudVisible = false;
+      return;
+    }
+    hudVisible = true;
+    const timer = setTimeout(() => (hudVisible = false), until - performance.now());
+    return () => clearTimeout(timer);
+  });
+
+  // Only a machine with a System volume adapter asks for the level. It keeps
+  // reading while the bar is collapsed: an OS-level change must raise the HUD.
+  $effect(() => {
+    if (!volumeCapable) return;
+    void readVolume();
+    const timer = setInterval(() => void readVolume(), VOLUME_POLL_MS);
+    return () => clearInterval(timer);
+  });
+
   // #193: one read asks the player, then the deck interpolates locally. The
-  // generation guards against a slow lyrics answer landing on a newer track.
+  // generation guards against a slow lyrics answer landing on a newer track;
+  // #194 keeps the answer in a per-track cache and only asks on a miss.
   async function readTrack() {
     const mine = ++generation;
     try {
       const next = await invoke<Track | null>('music_track');
       if (mine !== generation) return;
-      const changed = (next?.title ?? '') !== (track?.title ?? '') ||
-        (next?.artist ?? '') !== (track?.artist ?? '') ||
-        (next?.player ?? '') !== (track?.player ?? '');
       track = next;
       anchorMs = performance.now();
       positionUs = next?.position_us ?? 0;
-      // A refresh of the same track keeps the old lines until the answer
-      // lands; only a new track clears them.
-      if (changed) lyrics = null;
-      if (next) {
+      const cached = next ? lyricCache.get(next) : undefined;
+      // A cached null is an answer ("the service has none"), not a miss: the
+      // placeholder stays up without another call on this track.
+      lyrics = cached ?? null;
+      if (next && cached === undefined) {
         const lines = await invoke<LyricLine[] | null>('music_lyrics', { track: next });
-        if (mine === generation) lyrics = lines;
+        if (mine !== generation) return;
+        lyricCache.put(next, lines);
+        lyrics = lines;
       }
     } catch (error) {
       hooksError = String(error);
@@ -494,6 +612,8 @@
       };
       // #186: shortcut hints are only honest when a global hotkey can fire.
       hotkeySupported = supported('Global hotkey');
+      // #195: no HUD (and no volume poll) on a machine without the adapter.
+      volumeCapable = volumeSupported(rows);
       schedulePoll();
     } catch (error) {
       hooksError = String(error);
@@ -583,16 +703,29 @@
       .then((stored) => {
         filter = sessionFilterFromSettings(stored);
         density = sessionDensityFromSettings(stored);
+        theme = appearanceFromSettings(stored).theme;
       })
+      .catch(() => {});
+    // #202: Settings lives in another webview. The shell emits one event after
+    // every settings write; adopting the theme here needs no restart and does
+    // not touch the fit/reportCards chain.
+    let unlisten: (() => void) | undefined;
+    void listen<unknown>(SETTINGS_CHANGED_EVENT, (event) => {
+      theme = appearanceFromSettings(event.payload).theme;
+    })
+      .then((off) => (unlisten = off))
       .catch(() => {});
     loadCapabilities();
     // One seed read so the collapsed wing can show a track; the tab effect
     // owns every read after this, so a closed tab never polls.
     void readTrack();
+    // #195: the first volume reading is a baseline, not a change to announce.
+    void readVolume(true);
     lastCollapsedWidth = collapsed.width;
     reportFit(collapsed, false);
 
     return () => {
+      unlisten?.();
       clearTimeout(hoverTimer);
       clearTimeout(collapseTimer);
       clearTimeout(openTimer);
@@ -636,10 +769,14 @@
   // #186: a card's title and body can change while its count stays the same.
   let cardContent = $derived(
     visibleCards
-      .map(
-        (card) =>
-          `${card.id}:${card.tool_name}:${JSON.stringify(card.tool_input)}:${JSON.stringify(jumpOutcomes[card.session_id] ?? null)}`,
-      )
+      .map((card) => {
+        const question = card.question
+          ? `${card.question.question}:${card.question.header}:${card.question.options
+              .map((option) => `${option.label}/${option.description}`)
+              .join(',')}`
+          : '';
+        return `${card.id}:${card.tool_name}:${JSON.stringify(card.tool_input)}:${question}:${JSON.stringify(jumpOutcomes[card.session_id] ?? null)}`;
+      })
       .join('|'),
   );
 
@@ -660,6 +797,8 @@
   });
 </script>
 
+<svelte:window onkeydown={onKeyDown} />
+
 <div
   class="island"
   class:open={expanded}
@@ -668,6 +807,7 @@
   class:locked={view.suspended}
   data-variant={variant}
   data-phase={fit.phase}
+  data-theme={theme}
   {style}
   style:width={expanded ? undefined : `${collapsed.width}px`}
   style:height={openHeight === null ? undefined : `${openHeight}px`}
@@ -677,30 +817,46 @@
   role="presentation"
 >
   {#if !expanded && !closing}
-    <button
-      class="toggle"
-      onclick={onBarClick}
-      onpointerdown={onBarPointerDown}
-      onpointermove={onBarPointerMove}
-      onpointerup={onBarPointerUp}
-      onpointercancel={onBarPointerCancel}
-      aria-label="Open the Morrow panel"
-    >
-      <CollapsedBar
-        sessionCount={sessions.length}
-        {prehover}
-        quiet={view.quiet}
-        {active}
-        hiddenApprovals={hiddenCount}
-        {track}
-        glance={completion !== null && completion.presentation !== 'status_only'}
-        glanceLabel={completionSession?.cwd_name ?? ''}
+    {#if hudVisible && volumeCapable}
+      <!-- #195: for ~1.5 s after a change the meter takes the bar's place;
+           clicking it toggles mute through the shell's existing command. -->
+      <VolumeHud
+        {volume}
+        onToggle={onMute}
+        onpointerdown={onBarPointerDown}
+        onpointermove={onBarPointerMove}
+        onpointerup={onBarPointerUp}
+        onpointercancel={onBarPointerCancel}
       />
-      <span class="grip" aria-hidden="true"></span>
-    </button>
+    {:else}
+      <button
+        class="toggle"
+        onclick={onBarClick}
+        onpointerdown={onBarPointerDown}
+        onpointermove={onBarPointerMove}
+        onpointerup={onBarPointerUp}
+        onpointercancel={onBarPointerCancel}
+        aria-label="Open the Morrow panel"
+      >
+        <CollapsedBar
+          {theme}
+          sessionCount={sessions.length}
+          {prehover}
+          quiet={view.quiet}
+          {active}
+          {hiddenApprovals}
+          {hiddenQuestions}
+          {track}
+          glance={completion !== null && completion.presentation !== 'status_only'}
+          glanceLabel={completionSession?.cwd_name ?? ''}
+        />
+        <span class="grip" aria-hidden="true"></span>
+      </button>
+    {/if}
   {/if}
   <div class="panel-content" class:visible={expanded || closing} bind:this={panelContent}>
     <Header
+      {theme}
       {tab}
       {filter}
       {muted}
@@ -722,6 +878,7 @@
           />
         {:else}
           <SessionList
+            {theme}
             {sessions}
             {filter}
             {density}
@@ -734,6 +891,7 @@
       </div>
     {:else}
       <MusicDeck
+        {theme}
         {track}
         state={deck}
         {lyrics}
@@ -748,18 +906,33 @@
     {#if visibleCards.length > 0}
       <div class="padded cards">
         {#each visibleCards as card, i (card.id)}
-          <PermissionCard
-            {card}
-            session={sessions.find((s) => s.session_id === card.session_id) ?? null}
-            position={i + 1}
-            total={visibleCards.length}
-            {hotkeySupported}
-            gone={gone.some((g) => g.card.id === card.id)}
-            outcome={jumpOutcomes[card.session_id] ?? null}
-            onAnswer={answer}
-            onHide={hide}
-            onJump={jumpToTerminal}
-          />
+          {#if isQuestion(card)}
+            <QuestionCard
+              {card}
+              session={sessions.find((s) => s.session_id === card.session_id) ?? null}
+              position={i + 1}
+              total={visibleCards.length}
+              {hotkeySupported}
+              selected={selected?.id === card.id ? selected.label : null}
+              gone={gone.some((g) => g.card.id === card.id)}
+              onPick={answerQuestion}
+              onSkip={skipQuestion}
+              onHide={hide}
+            />
+          {:else}
+            <PermissionCard
+              {card}
+              session={sessions.find((s) => s.session_id === card.session_id) ?? null}
+              position={i + 1}
+              total={visibleCards.length}
+              {hotkeySupported}
+              gone={gone.some((g) => g.card.id === card.id)}
+              outcome={jumpOutcomes[card.session_id] ?? null}
+              onAnswer={answer}
+              onHide={hide}
+              onJump={jumpToTerminal}
+            />
+          {/if}
         {/each}
       </div>
     {/if}
@@ -835,6 +1008,10 @@
   .island.locked :global(*) {
     animation: none !important;
     transition: none !important;
+  }
+  /* #195: the 30 pt HUD sits centred in the 34 pt collapsed pill. */
+  .island > :global([data-volume-hud]) {
+    margin: 2px auto;
   }
   .toggle {
     display: block;

@@ -48,6 +48,18 @@ export type Session = {
 /** The hook's `tool_input`, serialised by `serde_json::Value`. */
 export type ToolInput = Record<string, unknown> | null;
 
+/** #188 — one OptionRow of a Question card. */
+export type QuestionOption = { label: string; description: string };
+
+/** #188 — the question a card draws (AskUserQuestion or Notification). */
+export type QuestionCard = {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  /** AskUserQuestion replies need `updatedInput.answers`; Notification does not. */
+  from_permission: boolean;
+};
+
 export type Card = {
   id: number;
   session_id: string;
@@ -55,6 +67,8 @@ export type Card = {
   tool_name: string;
   summary: string;
   tool_input: ToolInput;
+  /** #188: null on an approval card. */
+  question: QuestionCard | null;
 };
 
 /** Inline spans are parsed by `morrow_core::markdown`; the panel never parses

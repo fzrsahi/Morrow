@@ -11,6 +11,7 @@ import {
   liveReply,
   mascotStatus,
   middleTruncate,
+  modernStatus,
   subLabel,
   taskGauge,
   taskLabel,
@@ -68,6 +69,16 @@ describe('status words and colours (#list-status)', () => {
     expect(mascotStatus('thinking')).toBe('working');
     expect(mascotStatus('done')).toBe('idle');
     expect(mascotStatus('error')).toBe('idle');
+  });
+
+  test('Modern Clean chips use title case and the canvas modern colours', () => {
+    expect(modernStatus('needs_you')).toEqual({ label: 'Needs you', color: '#FFB833' });
+    expect(modernStatus('working')).toEqual({ label: 'Working', color: '#00F5D4' });
+    expect(modernStatus('thinking')).toEqual({ label: 'Thinking', color: '#00F5D4' });
+    expect(modernStatus('done')).toEqual({ label: 'Done', color: '#D9D9D9' });
+    expect(modernStatus('idle')).toEqual({ label: 'Idle', color: 'rgba(255,255,255,.55)' });
+    expect(modernStatus('stopped')).toEqual({ label: 'Stopped', color: '#FF8C66' });
+    expect(modernStatus('error')).toEqual({ label: 'Error', color: '#FF6170' });
   });
 });
 
