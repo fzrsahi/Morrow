@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use morrow_core::attention::CompletionStyle;
 use morrow_core::reduce::SideEffect;
 use morrow_platform::process::Watch;
+use morrow_platform::sound;
 use morrow_protocol::HookPayload;
 use serde::Serialize;
 use tauri::ipc::Channel;
@@ -44,13 +45,29 @@ const TAIL_POLL: Duration = Duration::from_millis(200);
 /// has to disappear from the panel (#198).
 const PRUNE_POLL: Duration = Duration::from_secs(1);
 
-#[derive(Default)]
+/// Where a decided sound goes (#241). Production leaves it `None` and the
+/// platform plays it; a test installs a recorder, because "a locked screen is
+/// silent" is only observable if something was asked to play.
+pub type SoundOutlet = Arc<dyn Fn(&str) + Send + Sync>;
+
 pub struct Feed {
     state: Mutex<State>,
     changed: Condvar,
     /// Wakes the pruner when a session appears; separate from the pusher's
     /// condvar so a single hook cannot wake only the wrong waiter.
     prune_changed: Condvar,
+    sound: Option<SoundOutlet>,
+}
+
+impl Default for Feed {
+    fn default() -> Self {
+        Self {
+            state: Mutex::new(State::default()),
+            changed: Condvar::new(),
+            prune_changed: Condvar::new(),
+            sound: None,
+        }
+    }
 }
 
 struct State {
@@ -103,16 +120,49 @@ impl State {
 }
 
 impl Feed {
+    /// A feed whose sounds go to `outlet` instead of the desktop (#241).
+    #[cfg(test)]
+    pub fn with_sound(outlet: SoundOutlet) -> Self {
+        Self {
+            sound: Some(outlet),
+            ..Self::default()
+        }
+    }
+
+    /// Play one cue through the outlet, or the platform's player when there is
+    /// none. A missing or failing player is a Capability the Settings table
+    /// already states; the feed has nowhere to show it and must not stop.
+    fn emit_sound(&self, cue: &str) {
+        if let Some(outlet) = &self.sound {
+            outlet(cue);
+            return;
+        }
+        if let Some(player) = sound::player_on_path() {
+            let _ = sound::play(player, cue);
+        }
+    }
+
     /// Reduces one hook into the sessions.
     pub fn record(&self, payload: &HookPayload) {
         let now = now_ms();
+        // #241: the cues are collected under the lock and played after it is
+        // released — starting a process is not something the feed's other
+        // waiters should queue behind.
+        let mut cues: Vec<String> = Vec::new();
         let mut state = self.lock();
         let applied = state.sessions.apply_with_intents(payload, now);
         for effect in &applied.effects {
-            if let SideEffect::RemoveSession { session_id } = effect {
-                state.permissions.drop_session(session_id);
-                state.tails.remove(session_id);
-                state.watches.forget(session_id);
+            match effect {
+                SideEffect::RemoveSession { session_id } => {
+                    state.permissions.drop_session(session_id);
+                    state.tails.remove(session_id);
+                    state.watches.forget(session_id);
+                }
+                // #241: a locked screen is silent, and the cue is dropped
+                // rather than queued for the unlock. `probes_active` is the
+                // shell's lock state (#197), the same one the probes obey.
+                SideEffect::PlaySound(cue) if state.probes_active => cues.push(cue.clone()),
+                _ => {}
             }
         }
         let event_name = payload
@@ -150,6 +200,10 @@ impl Feed {
             }
         }
         state.dirty = true;
+        drop(state);
+        for cue in &cues {
+            self.emit_sound(cue);
+        }
         self.changed.notify_one();
         self.prune_changed.notify_one();
     }
@@ -401,6 +455,7 @@ mod tests {
     use std::io::Write;
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex};
 
     const REPLY: &str =
         r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Adding filters"}]}}"#;
@@ -511,6 +566,45 @@ mod tests {
             "Wired the bar",
             "resuming picks up what was appended while locked"
         );
+    }
+
+    #[test]
+    fn a_locked_screen_plays_no_sound_and_a_cue_is_not_queued() {
+        let played = Arc::new(Mutex::new(Vec::new()));
+        let recorder = {
+            let played = Arc::clone(&played);
+            Arc::new(move |cue: &str| played.lock().unwrap().push(cue.to_owned()))
+        };
+        let feed = Feed::with_sound(recorder);
+        let prompt = hook(r#"{"session_id":"a","hook_event_name":"UserPromptSubmit"}"#);
+        let stop = hook(r#"{"session_id":"a","hook_event_name":"Stop"}"#);
+
+        // Awake: the turn's own cues ring.
+        feed.record(&prompt);
+        feed.record(&stop);
+        assert_eq!(
+            *played.lock().unwrap(),
+            vec!["UserPromptSubmit".to_owned(), "Stop".to_owned()]
+        );
+
+        // Locked: the same cues arrive and nothing is played, and nothing is
+        // waiting for the unlock either (#241, macOS `settle`'s lock rule).
+        played.lock().unwrap().clear();
+        feed.set_probes_active(false);
+        feed.record(&prompt);
+        feed.record(&stop);
+        assert!(
+            played.lock().unwrap().is_empty(),
+            "a locked screen is silent"
+        );
+
+        // Unlocking does not replay what was dropped.
+        feed.set_probes_active(true);
+        assert!(played.lock().unwrap().is_empty(), "no cue is queued");
+
+        // And the outlet is live again.
+        feed.record(&prompt);
+        assert_eq!(*played.lock().unwrap(), vec!["UserPromptSubmit".to_owned()]);
     }
 
     #[test]

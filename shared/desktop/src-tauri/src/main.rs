@@ -17,6 +17,7 @@ mod prune;
 mod sessions;
 mod settings;
 mod settings_window;
+mod sound;
 mod transcripts;
 mod tray;
 #[cfg(windows)]
@@ -158,6 +159,8 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            sound::sound_cues,
+            sound::sound_preview,
             settings_window::open_settings,
             peek_window::close_peek,
             music::music_track,

@@ -276,7 +276,13 @@ impl Feature {
             Self::Ble => {
                 Capability::Unsupported("no Bluetooth adapter yet: BlueZ is not used".into())
             }
-            Self::Audio => Capability::Unsupported(NO_AUDIO.into()),
+            // #241: the row follows the same tool list the feed plays through.
+            Self::Audio => match crate::sound::player(|tool| environment.has(tool)) {
+                Some(_) => Capability::Supported,
+                None => Capability::Unsupported(
+                    "needs pw-play (PipeWire), paplay (PulseAudio) or canberra-gtk-play".into(),
+                ),
+            },
             Self::Updater => Capability::Unsupported(NO_UPDATER.into()),
         }
     }
@@ -362,6 +368,11 @@ pub const ADAPTERS: &[Adapter] = &[
         feature: Feature::Autostart,
         module: "src/autostart.rs",
     },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Audio,
+        module: "src/sound.rs",
+    },
     // Windows: each of these is a WinRT/Win32 call, so the module is the probe.
     Adapter {
         os: Os::Windows,
@@ -433,6 +444,11 @@ pub const ADAPTERS: &[Adapter] = &[
         feature: Feature::Autostart,
         module: "src/windows/autostart.rs",
     },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Audio,
+        module: "src/windows/sound.rs",
+    },
 ];
 
 /// The adapter behind a row, if one is registered for that OS.
@@ -446,7 +462,6 @@ pub fn adapter(os: Os, feature: Feature) -> Option<&'static Adapter> {
 /// arms where the absence is the same on both OSes, so Linux and Windows cannot
 /// drift into describing one missing adapter two different ways.
 const NO_SYSTEM_STATS: &str = "no system-stats adapter yet: CPU, memory and battery are not read";
-const NO_AUDIO: &str = "no sound player yet: the sound effects are not played";
 const NO_UPDATER: &str = "no updater yet: no update feed is configured";
 
 /// One row of the Settings table.
@@ -511,7 +526,8 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::Ble => Capability::Unsupported(
             "no Bluetooth adapter yet: WinRT Bluetooth LE is not called".into(),
         ),
-        Feature::Audio => Capability::Unsupported(NO_AUDIO.into()),
+        // `PlaySoundW` is part of the OS: no tool to find, no bus to have.
+        Feature::Audio => Capability::Supported,
         Feature::Updater => Capability::Unsupported(NO_UPDATER.into()),
     }
 }
@@ -598,7 +614,7 @@ impl Environment {
         self.has_session_bus
     }
 
-    fn has(&self, tool: &str) -> bool {
+    pub fn has(&self, tool: &str) -> bool {
         self.path_tools
             .iter()
             .any(|entry| Path::new(entry).join(tool).is_file())

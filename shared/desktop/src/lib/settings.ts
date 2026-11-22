@@ -35,7 +35,7 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
       { id: 'general', label: 'General', icon: 'settings', available: false },
       { id: 'appearance', label: 'Appearance', icon: 'settings', available: true },
       { id: 'mascots', label: 'Mascots', icon: 'agents', available: false },
-      { id: 'sound', label: 'Sound', icon: 'volume', available: false },
+      { id: 'sound', label: 'Sound', icon: 'volume', available: true },
       { id: 'shortcuts', label: 'Shortcuts', icon: 'workspace', available: false },
     ],
   },

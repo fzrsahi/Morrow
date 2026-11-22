@@ -21,6 +21,7 @@ adapters that exist, and the ones that do not are listed at the end.
 | Start at login | `~/.config/autostart/*.desktop` | `HKCU\…\CurrentVersion\Run` via `reg.exe` | W-009 |
 | Jump to terminal | `swaymsg`/`hyprctl`/`wmctrl` by app id | the session's process chain, then `SetForegroundWindow` | W-005 |
 | Pointer | — no reader yet (see below) | `GetCursorPos`, global here | — |
+| Sound effects | `pw-play` / `paplay` / `canberra-gtk-play` | `PlaySoundW` with `SND_ASYNC` | — |
 | Secrets | — no adapter yet (see below) | — no adapter yet (see below) | W-008 |
 
 ## What is not wired yet (#235)
@@ -29,7 +30,7 @@ These rows answer `Not supported` with a reason on both OSes, because no module
 behind them exists. They are the list the Capability table used to overstate:
 
 `Synthetic input` · `System stats` · `Geolocation` · `Secret storage` ·
-`Claude credentials` · `Bluetooth (ESP32)` · `Sound effects` · `Updates`
+`Claude credentials` · `Bluetooth (ESP32)` · `Updates`
 
 On Linux only, for the same reason: `Fullscreen detection`, `Pointer outside
 the island`, `Terminal visibility`. The Windows adapters for the first two are
