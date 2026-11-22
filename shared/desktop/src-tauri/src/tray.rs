@@ -13,6 +13,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{App, Manager};
 
 use crate::island;
+use crate::settings_window;
 
 /// What actually happened, for the Capability table: the probe cannot know
 /// whether the status notifier registered, only whether the library is there.
@@ -36,8 +37,9 @@ pub fn create(app: &App) {
 
 fn build(app: &App) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show or hide the island", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit Morrow", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &settings, &quit])?;
 
     TrayIconBuilder::with_id("morrow")
         .tooltip("Morrow")
@@ -45,6 +47,11 @@ fn build(app: &App) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle" => toggle_island(app),
+            "settings" => {
+                if let Err(error) = settings_window::open_settings(app.clone()) {
+                    eprintln!("morrow-app: cannot open Settings ({error})");
+                }
+            }
             "quit" => app.exit(0),
             _ => {}
         })

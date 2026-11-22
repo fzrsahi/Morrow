@@ -8,99 +8,23 @@
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
-  import SettingsPanel from './lib/components/SettingsPanel.svelte';
-  import type {
-    AutostartStatus,
-    CapabilityRow,
-    Card,
-    Decision,
-    HooksSnapshot,
-    KimiStatus,
-    OpencodeStatus,
-    Session,
-    Snapshot,
-    TargetStatus,
-    YamlStatus,
-  } from './lib/types';
+  import PixelIcon from './lib/components/PixelIcon.svelte';
+  import { PALETTE } from './lib/tokens';
+  import type { Card, Decision, Session, Snapshot } from './lib/types';
 
   let sessions = $state<Session[]>([]);
   let cards = $state<Card[]>([]);
   let expanded = $state(false);
-  let hooks = $state<HooksSnapshot | null>(null);
-  let capabilities = $state<CapabilityRow[]>([]);
-  let autostart = $state<AutostartStatus | null>(null);
-  let hooksBusy = $state(false);
-  let hooksError = $state<string | null>(null);
   let island: HTMLElement;
 
   function answer(id: number, decision: Decision) {
     invoke('answer_permission', { id, decision });
   }
 
-  async function loadCapabilities() {
-    try {
-      capabilities = await invoke<CapabilityRow[]>('capabilities');
-      autostart = await invoke<AutostartStatus>('autostart_status');
-    } catch (error) {
-      hooksError = String(error);
-    }
-  }
-
-  async function toggleAutostart() {
-    await run(() => invoke('autostart_set', { enabled: !autostart?.installed }));
-  }
-
-  async function loadHooks() {
-    try {
-      hooks = await invoke<HooksSnapshot>('hooks_status');
-      hooksError = null;
-    } catch (error) {
-      hooksError = String(error);
-    }
-  }
-
-  async function runHooks(command: 'hooks_install' | 'hooks_uninstall') {
-    await run(() => invoke(command));
-  }
-
-  // One of the other CLIs: install when its file has no hook of ours, remove
-  // when it has. The shell skips a CLI that is not on this machine.
-  async function toggleTarget(row: TargetStatus) {
-    await run(() =>
-      invoke(row.installed ? 'target_uninstall' : 'target_install', { source: row.source }),
-    );
-  }
-
-  // OpenCode is a plugin file, not a hooks key, so it gets its own row.
-  async function toggleOpencode(row: OpencodeStatus) {
-    await run(() =>
-      invoke(row.plugin_installed ? 'opencode_uninstall' : 'opencode_install'),
-    );
-  }
-
-  // Kimi keeps its hooks in a TOML file; our blocks are appended to it.
-  async function toggleKimi(row: KimiStatus) {
-    await run(() => invoke(row.installed ? 'kimi_uninstall' : 'kimi_install'));
-  }
-
-  // The YAML sources: one managed block, and a refusal is shown rather than
-  // silently skipped.
-  async function toggleYaml(row: YamlStatus) {
-    await run(() =>
-      invoke(row.installed ? 'yaml_uninstall' : 'yaml_install', { source: row.source }),
-    );
-  }
-
-  async function run(action: () => Promise<unknown>) {
-    hooksBusy = true;
-    try {
-      await action();
-      await loadHooks();
-    } catch (error) {
-      hooksError = String(error);
-    } finally {
-      hooksBusy = false;
-    }
+  // #199 — Settings moved to its own window; the gear only asks the shell to
+  // create or raise it, lazily on first use.
+  function openSettings() {
+    invoke('open_settings');
   }
 
   // For the E2E-1 gate (the shell prints them only with MORROW_SMOKE=1).
@@ -125,8 +49,6 @@
       cards = snapshot.permissions;
     };
     invoke('subscribe', { channel });
-    loadHooks();
-    loadCapabilities();
 
     // Tight-fit window: the window is as big as the island and no bigger.
     // Measured after every layout change (collapse, expand, a row, a card).
@@ -159,22 +81,10 @@
       <div class="padded"><SessionList {sessions} /></div>
     {/if}
   </button>
-  {#if expanded}
-    <div class="padded">
-      <SettingsPanel
-        {hooks}
-        {capabilities}
-        {autostart}
-        {hooksBusy}
-        {hooksError}
-        onRunHooks={runHooks}
-        onToggleTarget={toggleTarget}
-        onToggleOpencode={toggleOpencode}
-        onToggleKimi={toggleKimi}
-        onToggleYaml={toggleYaml}
-        onToggleAutostart={toggleAutostart}
-      />
-    </div>
+  {#if expanded || cards.length > 0}
+    <button class="gear" aria-label="Settings" title="Settings" onclick={openSettings}>
+      <PixelIcon name="settings" size={1} color={PALETTE.textMuted} />
+    </button>
   {/if}
   {#each cards as card (card.id)}
     <div class="padded"><PermissionCard {card} onAnswer={answer} /></div>
@@ -240,5 +150,20 @@
   }
   .source {
     color: #d0d0d0;
+  }
+  /* Absolutely placed so the gear never changes the island's measured size. */
+  .gear {
+    position: absolute;
+    top: 9px;
+    right: 10px;
+    z-index: 1;
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: default;
   }
 </style>

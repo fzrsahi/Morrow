@@ -1,0 +1,153 @@
+// #199 — the Settings window's pure logic. The sidebar follows the port-only
+// pages of the #settings canvas; the settings themselves live in the existing
+// ~/.codeisland/settings.json, read and written by the shell's settings_* commands.
+
+import type { CapabilityRow } from './types';
+
+export type SettingsPageId =
+  | 'general'
+  | 'appearance'
+  | 'mascots'
+  | 'sound'
+  | 'shortcuts'
+  | 'agents'
+  | 'music'
+  | 'behavior'
+  | 'hooks'
+  | 'capabilities'
+  | 'about';
+
+export type SettingsNavItem = {
+  id: SettingsPageId;
+  label: string;
+  icon: string;
+  available: boolean;
+};
+
+export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
+  {
+    group: 'System',
+    items: [
+      { id: 'general', label: 'General', icon: 'settings', available: false },
+      { id: 'appearance', label: 'Appearance', icon: 'settings', available: true },
+      { id: 'mascots', label: 'Mascots', icon: 'agents', available: false },
+      { id: 'sound', label: 'Sound', icon: 'volume', available: false },
+      { id: 'shortcuts', label: 'Shortcuts', icon: 'workspace', available: false },
+    ],
+  },
+  {
+    group: 'Features',
+    items: [
+      { id: 'agents', label: 'Agents', icon: 'agents', available: false },
+      { id: 'music', label: 'Music', icon: 'music', available: false },
+    ],
+  },
+  {
+    group: 'Morrow',
+    items: [
+      { id: 'behavior', label: 'Behavior', icon: 'workspace', available: false },
+      { id: 'hooks', label: 'Hooks', icon: 'checkmark', available: true },
+      { id: 'capabilities', label: 'Capabilities', icon: 'workspace', available: true },
+      { id: 'about', label: 'About', icon: 'settings', available: true },
+    ],
+  },
+];
+
+export const SETTINGS_KEYS = {
+  theme: 'theme',
+  fontSize: 'fontSize',
+  accent: 'accent',
+  animationSpeed: 'animationSpeed',
+  islandShape: 'islandShape',
+  position: 'position',
+  expandOnHover: 'expandOnHover',
+  collapseOnLeave: 'collapseOnLeave',
+} as const;
+
+export type AppearanceSettings = {
+  theme: 'pixel' | 'modern';
+  fontSize: 11 | 12 | 14 | 16;
+  accent: string;
+  animationSpeed: number;
+  islandShape: 'edge-tab' | 'floating-pill';
+  position: string;
+  expandOnHover: boolean;
+  collapseOnLeave: boolean;
+};
+
+export const DEFAULT_APPEARANCE: AppearanceSettings = {
+  theme: 'pixel',
+  fontSize: 11,
+  accent: 'cyan',
+  animationSpeed: 1,
+  islandShape: 'edge-tab',
+  position: 'Top centre · primary monitor',
+  expandOnHover: false,
+  collapseOnLeave: false,
+};
+
+const FONT_SIZES = [11, 12, 14, 16] as const;
+
+function object(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function text(value: unknown, fallback: string): string {
+  return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function flag(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+/// Read the appearance values from the user's settings document. Unknown or
+/// malformed values fall back to defaults instead of breaking the window.
+export function appearanceFromSettings(value: unknown): AppearanceSettings {
+  const stored = object(value) ?? {};
+  const theme = stored[SETTINGS_KEYS.theme];
+  const fontSize = stored[SETTINGS_KEYS.fontSize];
+  const speed = stored[SETTINGS_KEYS.animationSpeed];
+  const shape = stored[SETTINGS_KEYS.islandShape];
+  return {
+    theme: theme === 'pixel' || theme === 'modern' ? theme : DEFAULT_APPEARANCE.theme,
+    fontSize: FONT_SIZES.includes(fontSize as (typeof FONT_SIZES)[number])
+      ? (fontSize as AppearanceSettings['fontSize'])
+      : DEFAULT_APPEARANCE.fontSize,
+    accent: text(stored[SETTINGS_KEYS.accent], DEFAULT_APPEARANCE.accent),
+    animationSpeed:
+      typeof speed === 'number' && Number.isFinite(speed) && speed > 0
+        ? speed
+        : DEFAULT_APPEARANCE.animationSpeed,
+    islandShape:
+      shape === 'edge-tab' || shape === 'floating-pill'
+        ? shape
+        : DEFAULT_APPEARANCE.islandShape,
+    position: text(stored[SETTINGS_KEYS.position], DEFAULT_APPEARANCE.position),
+    expandOnHover: flag(stored[SETTINGS_KEYS.expandOnHover], DEFAULT_APPEARANCE.expandOnHover),
+    collapseOnLeave: flag(
+      stored[SETTINGS_KEYS.collapseOnLeave],
+      DEFAULT_APPEARANCE.collapseOnLeave,
+    ),
+  };
+}
+
+export type DescribedCapability = {
+  label: 'Supported' | 'Limited' | 'Not supported';
+  reason: string | null;
+};
+
+const NO_REASON = 'No reason reported by this platform.';
+
+/// Rust sends `Capability` as an externally tagged enum: one key, optionally a
+/// reason. A limitation without a usable reason still has to say something —
+/// the table never renders the literal "null".
+export function describeCapability(row: CapabilityRow): DescribedCapability {
+  const [kind, raw] = Object.entries(row.capability)[0] ?? ['Supported', null];
+  if (kind === 'Supported') return { label: 'Supported', reason: null };
+  return {
+    label: kind === 'Degraded' ? 'Limited' : 'Not supported',
+    reason: typeof raw === 'string' && raw.trim() ? raw : NO_REASON,
+  };
+}

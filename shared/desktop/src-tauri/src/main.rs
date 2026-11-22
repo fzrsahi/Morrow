@@ -12,6 +12,7 @@ mod music;
 mod permissions;
 mod sessions;
 mod settings;
+mod settings_window;
 mod tray;
 #[cfg(windows)]
 mod windows_panel;
@@ -105,6 +106,7 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            settings_window::open_settings,
             music::music_track,
             music::music_position,
             music::music_play_pause,
