@@ -325,6 +325,7 @@ struct NotchPanelView: View {
     @State private var quotaChipWidth: CGFloat = 0
     /// Measured width of the collapsed left wing (0 until first laid out).
     @State private var leftWingWidth: CGFloat = 0
+    @State private var chargingAmbientPulse = false
     /// Measured width of the collapsed right wing (0 until first laid out).
     @State private var rightWingWidth: CGFloat = 0
     @State private var isHoveringRightWing = false
@@ -1307,20 +1308,149 @@ struct NotchPanelView: View {
                 )
                 .shadow(color: Color.black.opacity(0.8), radius: 8, y: 4)
         } else {
-            NotchPanelShape(
+            let shape = NotchPanelShape(
                 topExtension: currentTopExt,
                 bottomRadius: currentBottomRadius,
                 minHeight: effectiveNotchHeight
             )
-            .fill(Color.black)
-            .overlay(
-                NotchPanelShape(
-                    topExtension: currentTopExt,
-                    bottomRadius: currentBottomRadius,
-                    minHeight: effectiveNotchHeight
+            shape
+                .fill(Color.black)
+                .overlay(chargingAmbientLayer(for: shape))
+                .overlay(
+                    shape.stroke(
+                        signals.showChargingBanner && !appState.surface.isExpanded
+                            ? chargingAmbientColor.opacity(chargingAmbientStrokeOpacity)
+                            : currentStrokeColor,
+                        lineWidth: currentStrokeWidth
+                    )
                 )
-                .stroke(currentStrokeColor, lineWidth: currentStrokeWidth)
-            )
+        }
+    }
+
+    private var chargingAmbientColor: Color {
+        switch sys.activeBannerState {
+        case .charging, .fullyCharged:
+            return Color(red: 0.19, green: 0.82, blue: 0.35)
+        case .onHold:
+            return Color(red: 1.0, green: 0.72, blue: 0.12)
+        case .lowBattery:
+            return Color(red: 1.0, green: 0.27, blue: 0.23)
+        }
+    }
+
+    private var chargingAmbientBaseOpacity: Double {
+        switch sys.activeBannerState {
+        case .charging:
+            return 0.18
+        case .onHold:
+            return chargingAmbientPulse ? 0.20 : 0.12
+        case .fullyCharged:
+            return 0.20
+        case .lowBattery:
+            return chargingAmbientPulse ? 0.26 : 0.04
+        }
+    }
+
+    private var chargingAmbientStrokeOpacity: Double {
+        switch sys.activeBannerState {
+        case .charging:
+            return chargingAmbientPulse ? 0.34 : 0.20
+        case .onHold:
+            return chargingAmbientPulse ? 0.28 : 0.18
+        case .fullyCharged:
+            return 0.26
+        case .lowBattery:
+            return chargingAmbientPulse ? 0.38 : 0.08
+        }
+    }
+
+    @ViewBuilder
+    private func chargingAmbientLayer<S: Shape>(for shape: S) -> some View {
+        if signals.showChargingBanner && !appState.surface.isExpanded {
+            let wingY: CGFloat = hasNotch ? 0.12 : 0.04
+            ZStack {
+                // Left & right wing glows (visible beside physical M2 notch & upper edge)
+                shape.fill(
+                    EllipticalGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity),
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.3),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.08, y: wingY),
+                        startRadiusFraction: 0.02,
+                        endRadiusFraction: 0.48
+                    )
+                )
+                shape.fill(
+                    EllipticalGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity),
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.3),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.92, y: wingY),
+                        startRadiusFraction: 0.02,
+                        endRadiusFraction: 0.48
+                    )
+                )
+                // Soft bridge just below the hardware notch so it connects seamlessly
+                shape.fill(
+                    EllipticalGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.75),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.5, y: hasNotch ? 0.20 : 0.03),
+                        startRadiusFraction: 0.04,
+                        endRadiusFraction: 0.56
+                    )
+                )
+
+                if case .charging = sys.activeBannerState {
+                    TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                        let cycle = 1.8
+                        let progress = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: cycle) / cycle
+                        let sweepX = -0.35 + progress * 1.70
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [
+                                    chargingAmbientColor.opacity(0.28),
+                                    chargingAmbientColor.opacity(0.10),
+                                    Color.clear
+                                ],
+                                center: UnitPoint(x: sweepX, y: wingY),
+                                startRadiusFraction: 0.02,
+                                endRadiusFraction: 0.42
+                            )
+                        )
+                    }
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    private func updateChargingAmbientAnimation(visible: Bool) {
+        chargingAmbientPulse = false
+        guard visible else { return }
+
+        switch sys.activeBannerState {
+        case .charging:
+            withAnimation(.easeInOut(duration: 1.35).repeatForever(autoreverses: true)) {
+                chargingAmbientPulse = true
+            }
+        case .onHold:
+            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) {
+                chargingAmbientPulse = true
+            }
+        case .fullyCharged:
+            break
+        case .lowBattery:
+            withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
+                chargingAmbientPulse = true
+            }
         }
     }
 
@@ -1657,6 +1787,14 @@ struct NotchPanelView: View {
                 }
                 if newTab == .workspace {
                     workspaceManager.resolveAndRefreshWorkspace(appState: appState)
+                }
+            }
+            .onChange(of: signals.showChargingBanner) { _, isVisible in
+                updateChargingAmbientAnimation(visible: isVisible)
+            }
+            .onChange(of: sys.activeBannerState) { _, _ in
+                if signals.showChargingBanner {
+                    updateChargingAmbientAnimation(visible: true)
                 }
             }
             // Outside onHover on purpose: the hover region moves with the bar.

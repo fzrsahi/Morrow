@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import IOKit
 import IOKit.ps
 import Darwin
 
@@ -397,9 +398,45 @@ public final class SystemMonitorManager: ObservableObject {
         return (100, false, true, .fullyCharged(kind: adapterKind))
     }
 
+    private func isMagSafePortConnected() -> Bool {
+        var iterator: io_iterator_t = 0
+        guard let matching = IOServiceMatching("IOPort"),
+              IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iterator) == KERN_SUCCESS else {
+            return false
+        }
+        defer { IOObjectRelease(iterator) }
+
+        var service = IOIteratorNext(iterator)
+        while service != 0 {
+            defer {
+                IOObjectRelease(service)
+                service = IOIteratorNext(iterator)
+            }
+            guard let desc = IORegistryEntryCreateCFProperty(
+                service,
+                "PortTypeDescription" as CFString,
+                kCFAllocatorDefault,
+                0
+            )?.takeRetainedValue() as? String,
+                  let active = IORegistryEntryCreateCFProperty(
+                service,
+                "ConnectionActive" as CFString,
+                kCFAllocatorDefault,
+                0
+            )?.takeRetainedValue() as? Bool else {
+                continue
+            }
+            if active && desc.localizedCaseInsensitiveContains("magsafe") {
+                return true
+            }
+        }
+        return false
+    }
+
     private func readExternalAdapterDetails() -> (kind: PowerSourceKind, watts: Int?) {
+        let magSafeConnected = isMagSafePortConnected()
         guard let details = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any] else {
-            return (.magSafe, nil)
+            return (magSafeConnected ? .magSafe : .usbC, nil)
         }
         let watts = details[kIOPSPowerAdapterWattsKey as String] as? Int
         let name = (details["Name"] as? String ?? details[kIOPSPowerAdapterSourceKey as String] as? String ?? "").lowercased()
@@ -407,7 +444,7 @@ public final class SystemMonitorManager: ObservableObject {
         let combined = "\(name) \(desc)"
 
         let kind: PowerSourceKind
-        if combined.contains("magsafe") {
+        if magSafeConnected || combined.contains("magsafe") {
             kind = .magSafe
         } else if combined.contains("usb") || combined.contains("pd") || combined.contains("type-c") {
             kind = .usbC
