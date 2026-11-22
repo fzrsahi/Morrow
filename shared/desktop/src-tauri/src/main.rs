@@ -88,6 +88,7 @@ fn main() -> ExitCode {
             answer_permission,
             island::set_island_size,
             island::smoke_card,
+            island::quit,
             hooks::hooks_status,
             hooks::hooks_install,
             hooks::hooks_uninstall,
