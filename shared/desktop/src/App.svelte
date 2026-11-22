@@ -5,6 +5,7 @@
   // passes on the user's Approve / Deny.
   import { onMount, tick } from 'svelte';
   import { Channel, invoke } from '@tauri-apps/api/core';
+  import { GONE_NOTICE_MS } from './lib/approval';
   import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
   import Header from './lib/components/Header.svelte';
@@ -51,6 +52,11 @@
 
   let sessions = $state<Session[]>([]);
   let cards = $state<Card[]>([]);
+  // #186: Hide keeps the request pending but out of the card stack; a click
+  // on a request the shell no longer holds shows a notice before it drops.
+  let hiddenIds = $state<number[]>([]);
+  let gone = $state<{ card: Card }[]>([]);
+  let hotkeySupported = $state(false);
   let expanded = $state(false);
   let closing = $state(false);
   let prehover = $state(false);
@@ -82,13 +88,42 @@
   let support = $state<AmbientSupport>({ fullscreenDetection: false, screenLock: false });
   let view = $derived(ambientView(ambient, support));
   let active = $derived(activeSession(sessions));
-  let collapsed = $derived({ width: collapsedWidth(active), height: COLLAPSED_SIZE.height });
+  let liveCards = $derived(
+    cards.filter((card) => !hiddenIds.includes(card.id) && !gone.some((g) => g.card.id === card.id)),
+  );
+  let visibleCards = $derived([...liveCards, ...gone.map((g) => g.card)]);
+  let hiddenCount = $derived(cards.filter((card) => hiddenIds.includes(card.id)).length);
+  // The bell needs room in the tight-fit pill (#collapsed-attention).
+  let collapsed = $derived({
+    width: Math.min(460, collapsedWidth(active) + (hiddenCount > 0 ? 20 : 0)),
+    height: COLLAPSED_SIZE.height,
+  });
   let lastCollapsedWidth = COLLAPSED_SIZE.width;
   let pollTimer: ReturnType<typeof setTimeout> | undefined;
   const POLL_MS = 1000;
 
-  function answer(id: number, decision: Decision) {
-    invoke('answer_permission', { id, decision });
+  async function answer(id: number, decision: Decision) {
+    // Capture before the await: the feed can drop the card while IPC is in
+    // flight, and the notice still needs the words it had when clicked.
+    const card = cards.find((c) => c.id === id);
+    try {
+      const answered = await invoke<boolean>('answer_permission', { id, decision });
+      if (answered) {
+        hiddenIds = hiddenIds.filter((hidden) => hidden !== id);
+      } else {
+        // Answered in the terminal (or its hook went) before this click.
+        if (!card || gone.some((g) => g.card.id === id)) return;
+        hiddenIds = hiddenIds.filter((hidden) => hidden !== id);
+        gone = [...gone, { card }];
+        setTimeout(() => (gone = gone.filter((g) => g.card.id !== id)), GONE_NOTICE_MS);
+      }
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
+  function hide(id: number) {
+    if (!hiddenIds.includes(id)) hiddenIds = [...hiddenIds, id];
   }
 
   // #199 — Settings moved to its own window; the header gear only asks the
@@ -197,7 +232,7 @@
     prehover = false;
     collapseGate.leave(performance.now());
     collapseTimer = setTimeout(() => {
-      if (collapseGate.shouldCollapse(performance.now(), cards.length > 0)) closePanel();
+      if (collapseGate.shouldCollapse(performance.now(), visibleCards.length > 0)) closePanel();
     }, COLLAPSE_DELAY_MS);
   }
 
@@ -287,6 +322,8 @@
         fullscreenDetection: supported('Fullscreen detection'),
         screenLock: supported('Screen lock'),
       };
+      // #186: shortcut hints are only honest when a global hotkey can fire.
+      hotkeySupported = supported('Global hotkey');
       schedulePoll();
     } catch (error) {
       hooksError = String(error);
@@ -336,6 +373,10 @@
     channel.onmessage = (snapshot) => {
       sessions = snapshot.sessions;
       cards = snapshot.permissions;
+      // A hidden request answered outside the panel drops off the feed;
+      // forget it so the collapsed bell stops with it.
+      const pending = new Set(snapshot.permissions.map((card) => card.id));
+      hiddenIds = hiddenIds.filter((id) => pending.has(id));
     };
     invoke('subscribe', { channel });
     loadCapabilities();
@@ -377,10 +418,17 @@
     });
   });
 
+  // #186: a card's title and body can change while its count stays the same.
+  let cardContent = $derived(
+    visibleCards
+      .map((card) => `${card.id}:${card.tool_name}:${JSON.stringify(card.tool_input)}`)
+      .join('|'),
+  );
+
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cards.length}|${tab}`;
+    const content = `${sessionContent}|${cardContent}|${gone.length}|${tab}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -416,7 +464,13 @@
       onpointercancel={onBarPointerCancel}
       aria-label="Open the Morrow panel"
     >
-      <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} {active} />
+      <CollapsedBar
+        sessionCount={sessions.length}
+        {prehover}
+        quiet={view.quiet}
+        {active}
+        hiddenApprovals={hiddenCount}
+      />
       <span class="grip" aria-hidden="true"></span>
     </button>
   {/if}
@@ -434,14 +488,23 @@
       onQuit={onQuit}
     />
     {#if tab === 'agents'}
-      <div class="padded"><SessionList {sessions} /></div>
+      <div class="padded"><SessionList {sessions} approvals={liveCards} onAnswer={answer} /></div>
     {:else}
       <div class="music-placeholder"><PixelText text="MUSIC" size={1.3} color={PALETTE.cyan} /></div>
     {/if}
-    {#if cards.length > 0}
+    {#if visibleCards.length > 0}
       <div class="padded cards">
-        {#each cards as card (card.id)}
-          <PermissionCard {card} onAnswer={answer} />
+        {#each visibleCards as card, i (card.id)}
+          <PermissionCard
+            {card}
+            session={sessions.find((s) => s.session_id === card.session_id) ?? null}
+            position={i + 1}
+            total={visibleCards.length}
+            {hotkeySupported}
+            gone={gone.some((g) => g.card.id === card.id)}
+            onAnswer={answer}
+            onHide={hide}
+          />
         {/each}
       </div>
     {/if}

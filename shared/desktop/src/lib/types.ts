@@ -30,12 +30,16 @@ export type Session = {
   cli_pid: number | null;
 };
 
+/** The hook's `tool_input`, serialised by `serde_json::Value`. */
+export type ToolInput = Record<string, unknown> | null;
+
 export type Card = {
   id: number;
   session_id: string;
   source: string;
   tool_name: string;
   summary: string;
+  tool_input: ToolInput;
 };
 
 export type Snapshot = { sessions: Session[]; permissions: Card[] };

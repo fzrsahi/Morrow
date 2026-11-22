@@ -55,6 +55,9 @@ pub struct Card {
     pub tool_name: String,
     /// One line of the tool input: the command, the file, or its JSON.
     pub summary: String,
+    /// The whole input, so the panel can draw the code / diff / MCP block
+    /// and name the file in the title (#186).
+    pub tool_input: Value,
 }
 
 #[derive(Debug, Default)]
@@ -71,12 +74,14 @@ impl Permissions {
         self.next_id += 1;
         let id = self.next_id;
         let text = |key| payload.get(key).and_then(Value::as_str).unwrap_or_default();
+        let input = payload.get("tool_input");
         let card = Card {
             id,
             session_id: payload.session_id().to_owned(),
             source: payload.source().unwrap_or("claude").to_owned(),
             tool_name: text("tool_name").to_owned(),
-            summary: summary(payload.get("tool_input")),
+            summary: summary(input),
+            tool_input: input.cloned().unwrap_or(Value::Null),
         };
         self.held.insert(id, (card, answer));
         id
@@ -166,6 +171,7 @@ mod tests {
                 source: "claude".into(),
                 tool_name: "Bash".into(),
                 summary: "rm -rf build && make".into(),
+                tool_input: serde_json::json!({"command": "rm -rf build\n  && make"}),
             }]
         );
         assert_eq!(rx.try_recv(), Err(TryRecvError::Empty));

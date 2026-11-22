@@ -5,17 +5,25 @@
   import Mascot from './Mascot.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import PixelText from './PixelText.svelte';
+  import { displayName } from '../approval';
   import { MASCOT_SIZES } from '../mascots';
   import { STATUS_META, mascotStatus, timeLabel, toolLabel } from '../session-cards';
   import { PALETTE } from '../tokens';
-  import type { Session } from '../types';
+  import type { Card, Decision, Session } from '../types';
 
-  let { sessions }: { sessions: Session[] } = $props();
+  type Props = {
+    sessions: Session[];
+    /** Pending, non-hidden requests (#approval-queue: inline in the list). */
+    approvals?: Card[];
+    onAnswer?: (id: number, decision: Decision) => void;
+  };
+  let { sessions, approvals = [], onAnswer }: Props = $props();
 </script>
 
 <ul class="list">
   {#each sessions as session (session.session_id)}
     {@const meta = STATUS_META[session.status]}
+    {@const approval = approvals.find((card) => card.session_id === session.session_id)}
     <li class="pcard" style="--sc:{meta.color}">
       <div class="pslot">
         <Mascot
@@ -57,6 +65,24 @@
               />
             </span>
             <span class="detail">{session.tool_description}</span>
+          </div>
+        {/if}
+        {#if approval}
+          <div class="papp">
+            <div class="r">
+              <PixelText text="[!]" size={1.2} color={PALETTE.amber} />
+              <PixelText text="APPROVAL REQUIRED:" size={1.1} color={PALETTE.amber} />
+              <PixelText text={displayName(approval.tool_name)} size={1.1} color={PALETTE.textWhite} />
+            </div>
+            <div class="r">
+              <button class="p16 acc" onclick={() => onAnswer?.(approval.id, 'allow')}>
+                <PixelIcon name="checkmark" size={1} color="#000" />
+                <PixelText text="APPROVE" size={1.05} color="#000" />
+              </button>
+              <button class="p16" onclick={() => onAnswer?.(approval.id, 'deny')}>
+                <PixelText text="✕ DENY" size={1.05} color={PALETTE.deny} />
+              </button>
+            </div>
           </div>
         {/if}
         {#if session.last_user_prompt}
@@ -175,6 +201,36 @@
   }
   .prompt {
     color: rgba(0, 245, 212, 0.8);
+  }
+  .papp {
+    align-self: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+    border-radius: 3px;
+    background: color-mix(in srgb, var(--amber) 8%, transparent);
+  }
+  .papp .r {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .p16 {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3.5px 7px;
+    border: 0;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.06);
+    font: inherit;
+  }
+  .p16:hover {
+    background: rgba(255, 255, 255, 0.12);
+  }
+  .p16.acc {
+    background: var(--cyan);
   }
   .empty {
     color: var(--tm);
