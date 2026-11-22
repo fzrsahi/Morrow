@@ -46,6 +46,7 @@
   import { activeSession, collapsedWidth } from './lib/session-cards';
   import {
     COLLAPSED_MUSIC_WIDTH,
+    LyricCache,
     controls,
     deckState,
     localPosition,
@@ -123,6 +124,9 @@
   // webview's clock. No player probe is scheduled while the Music tab is shut.
   let track = $state<Track | null>(null);
   let lyrics = $state<LyricLine[] | null>(null);
+  // #194: keep both the lines and "the service had none" per track, so a
+  // re-read or a reopened tab never asks lrclib for the same track twice.
+  const lyricCache = new LyricCache();
   let positionUs = $state(0);
   let anchorMs = 0;
   let generation = 0;
@@ -396,24 +400,25 @@
   }
 
   // #193: one read asks the player, then the deck interpolates locally. The
-  // generation guards against a slow lyrics answer landing on a newer track.
+  // generation guards against a slow lyrics answer landing on a newer track;
+  // #194 keeps the answer in a per-track cache and only asks on a miss.
   async function readTrack() {
     const mine = ++generation;
     try {
       const next = await invoke<Track | null>('music_track');
       if (mine !== generation) return;
-      const changed = (next?.title ?? '') !== (track?.title ?? '') ||
-        (next?.artist ?? '') !== (track?.artist ?? '') ||
-        (next?.player ?? '') !== (track?.player ?? '');
       track = next;
       anchorMs = performance.now();
       positionUs = next?.position_us ?? 0;
-      // A refresh of the same track keeps the old lines until the answer
-      // lands; only a new track clears them.
-      if (changed) lyrics = null;
-      if (next) {
+      const cached = next ? lyricCache.get(next) : undefined;
+      // A cached null is an answer ("the service has none"), not a miss: the
+      // placeholder stays up without another call on this track.
+      lyrics = cached ?? null;
+      if (next && cached === undefined) {
         const lines = await invoke<LyricLine[] | null>('music_lyrics', { track: next });
-        if (mine === generation) lyrics = lines;
+        if (mine !== generation) return;
+        lyricCache.put(next, lines);
+        lyrics = lines;
       }
     } catch (error) {
       hooksError = String(error);
