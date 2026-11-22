@@ -10,15 +10,15 @@ mod hotkey;
 mod island;
 mod listener;
 mod music;
-mod permissions;
 mod peek_window;
+mod permissions;
 mod position;
 mod prune;
 mod sessions;
 mod settings;
 mod settings_window;
-mod tray;
 mod transcripts;
+mod tray;
 #[cfg(windows)]
 mod windows_panel;
 

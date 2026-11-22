@@ -523,7 +523,10 @@ mod tests {
         let completion = snapshot.completion.expect("completion");
         assert_eq!(completion.session_id, "a");
         assert_eq!(completion.updated_at, snapshot.sessions[0].updated_at);
-        assert_eq!(completion.presentation, crate::completion::Presentation::Card);
+        assert_eq!(
+            completion.presentation,
+            crate::completion::Presentation::Card
+        );
         assert_eq!(completion.blocks.len(), 2);
         assert_eq!(
             serde_json::to_value(&completion.blocks[0]).unwrap()["kind"].as_str(),

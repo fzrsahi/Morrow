@@ -5,7 +5,7 @@ use windows::Win32::Foundation::{GlobalFree, HANDLE};
 use windows::Win32::System::DataExchange::{
     CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
 };
-use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+use windows::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
 
 // Win32's CF_UNICODETEXT. Spelling the number here keeps the WinRT/Ole feature
 // out of this crate for one constant.

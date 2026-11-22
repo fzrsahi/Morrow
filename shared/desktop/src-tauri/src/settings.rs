@@ -38,7 +38,10 @@ pub fn capabilities() -> Vec<capability::Row> {
     // still promise "Supported" there; say so instead, and keep the island
     // visible. Windows keeps the probe's own answer from the table.
     #[cfg(not(windows))]
-    if let Some(row) = rows.iter_mut().find(|row| row.feature == Feature::Fullscreen.name()) {
+    if let Some(row) = rows
+        .iter_mut()
+        .find(|row| row.feature == Feature::Fullscreen.name())
+    {
         row.capability = capability::Capability::Unsupported(
             "fullscreen detection is Windows-only; the island stays visible".into(),
         );
@@ -142,7 +145,9 @@ mod tests {
             .expect("a Fullscreen detection row");
         assert_eq!(row.capability.label(), "Not supported");
         assert!(
-            row.capability.reason().is_some_and(|reason| !reason.is_empty()),
+            row.capability
+                .reason()
+                .is_some_and(|reason| !reason.is_empty()),
             "an unsupported capability has to say why"
         );
     }

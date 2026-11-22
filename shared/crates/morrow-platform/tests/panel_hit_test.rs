@@ -91,24 +91,27 @@ fn the_open_panel_has_a_square_top_and_24pt_bottom() {
     assert!(contains_shape(rect, radii, 0, 0, 0), "top-left corner");
     assert!(contains_shape(rect, radii, 0, 679, 0), "top-right corner");
     assert!(contains_shape(rect, radii, 0, 0, 375), "bottom-left arc");
-    assert!(
-        contains_shape(rect, radii, 0, 679, 375),
-        "bottom-right arc"
-    );
+    assert!(contains_shape(rect, radii, 0, 679, 375), "bottom-right arc");
     assert!(contains_shape(rect, radii, 0, 340, 399), "bottom edge");
     assert!(!contains_shape(rect, radii, 0, 0, 399), "outside the arc");
     assert!(
         !contains_shape(rect, radii, 0, 679, 399),
         "outside the other arc"
     );
-    assert!(!contains_shape(rect, radii, 0, -1, 20), "outside the window");
+    assert!(
+        !contains_shape(rect, radii, 0, -1, 20),
+        "outside the window"
+    );
 }
 
 #[test]
 fn the_shoulder_variant_excludes_its_cutouts() {
     let rect = Rect::new(0, 0, 680, 400);
     let radii = Radii::new(0, 0, 24, 24);
-    assert!(!contains_shape(rect, radii, 14, 2, 2), "left shoulder cut-out");
+    assert!(
+        !contains_shape(rect, radii, 14, 2, 2),
+        "left shoulder cut-out"
+    );
     assert!(
         !contains_shape(rect, radii, 14, 677, 2),
         "right shoulder cut-out"

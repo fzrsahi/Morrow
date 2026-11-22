@@ -137,7 +137,13 @@ fn question(payload: &HookPayload) -> Option<QuestionCard> {
         let options: Vec<QuestionOption> = payload
             .get("options")
             .and_then(Value::as_array)
-            .map(|values| values.iter().filter_map(Value::as_str).map(option).collect())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(option)
+                    .collect()
+            })
             .unwrap_or_default();
         let prompt = flat_prompt(text, options);
         return Some(QuestionCard {
@@ -180,7 +186,13 @@ fn question(payload: &HookPayload) -> Option<QuestionCard> {
     let options = input
         .and_then(|input| input.get("options"))
         .and_then(Value::as_array)
-        .map(|values| values.iter().filter_map(Value::as_str).map(option).collect())
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(option)
+                .collect()
+        })
         .unwrap_or_default();
     let prompt = flat_prompt(text, options);
     Some(QuestionCard {
@@ -236,7 +248,10 @@ pub fn question_reply(card: &Card, picks: &[(usize, String)]) -> Vec<u8> {
     };
     let answer = |text: &str| serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
     if !card_question.from_permission {
-        let first = picks.first().map(|(_, answer)| answer.as_str()).unwrap_or("");
+        let first = picks
+            .first()
+            .map(|(_, answer)| answer.as_str())
+            .unwrap_or("");
         return format!(
             r#"{{"hookSpecificOutput":{{"hookEventName":"Notification","answer":{}}}}}"#,
             answer(first)
@@ -474,7 +489,10 @@ mod tests {
 
     #[test]
     fn questions_wait_but_plain_notifications_do_not() {
-        assert!(waits(&hook(ASK_TWO)), "AskUserQuestion is a PermissionRequest");
+        assert!(
+            waits(&hook(ASK_TWO)),
+            "AskUserQuestion is a PermissionRequest"
+        );
         assert!(waits(&hook(NOTIFY_QUESTION)));
         assert!(!waits(&hook(
             r#"{"session_id":"s","hook_event_name":"Notification","message":"idle_prompt"}"#
@@ -508,7 +526,10 @@ mod tests {
             &[(0, "B".into())],
         ))
         .unwrap();
-        assert!(reply.contains(r#""answers":{"没有 header":"B"}"#), "{reply}");
+        assert!(
+            reply.contains(r#""answers":{"没有 header":"B"}"#),
+            "{reply}"
+        );
         assert!(!reply.contains(r#""header":"#), "{reply}");
     }
 
@@ -577,10 +598,15 @@ mod tests {
         assert!(permissions.answer_questions(second, vec!["B".into()]));
         assert_eq!(rx1.try_recv(), Err(TryRecvError::Empty));
         assert!(permissions.answer_questions(first, vec!["A".into(), "D".into()]));
-        assert!(String::from_utf8(rx1.try_recv().unwrap())
-            .unwrap()
-            .contains(r#""重复的问题_2":"D""#));
-        assert!(rx2.try_recv().is_ok(), "the other request got its own reply");
+        assert!(
+            String::from_utf8(rx1.try_recv().unwrap())
+                .unwrap()
+                .contains(r#""重复的问题_2":"D""#)
+        );
+        assert!(
+            rx2.try_recv().is_ok(),
+            "the other request got its own reply"
+        );
         assert!(permissions.cards().is_empty());
     }
 

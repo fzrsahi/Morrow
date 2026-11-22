@@ -190,7 +190,11 @@ impl Sessions {
         // list) first, so the completion keeps its reducer-provided slot.
         let mut effects = reduction.effects;
         if let Some(sound) = &intents.sound {
-            let at = reduction.slots.sound.unwrap_or(effects.len()).min(effects.len());
+            let at = reduction
+                .slots
+                .sound
+                .unwrap_or(effects.len())
+                .min(effects.len());
             effects.insert(at, SideEffect::PlaySound(sound.clone()));
         }
         if intents.completion.is_some() {

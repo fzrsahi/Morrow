@@ -56,7 +56,10 @@ fn position(app: &App) -> (f64, f64) {
         return (0.0, ISLAND_HEIGHT + GAP);
     };
     let logical_width = monitor.size().width as f64 / monitor.scale_factor();
-    (((logical_width - SIZE.0) / 2.0).max(0.0), ISLAND_HEIGHT + GAP)
+    (
+        ((logical_width - SIZE.0) / 2.0).max(0.0),
+        ISLAND_HEIGHT + GAP,
+    )
 }
 
 /// The frontend dismisses the peek after its lifetime; a custom command is

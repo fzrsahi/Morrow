@@ -7,7 +7,9 @@ use morrow_core::attention::{self, Completion};
 use morrow_core::markdown::{self, MarkdownBlock, MarkdownInline};
 use serde::Serialize;
 
-pub use morrow_core::attention::{CompletionPresentation as Presentation, CompletionStyle as Style};
+pub use morrow_core::attention::{
+    CompletionPresentation as Presentation, CompletionStyle as Style,
+};
 
 /// The reply, as tagged blocks. Mirrored in `src/lib/types.ts`.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -84,9 +86,7 @@ fn convert_block(block: &MarkdownBlock) -> Block {
             level: *level,
             spans: spans(text),
         },
-        MarkdownBlock::Paragraph(text) => Block::Paragraph {
-            spans: spans(text),
-        },
+        MarkdownBlock::Paragraph(text) => Block::Paragraph { spans: spans(text) },
         MarkdownBlock::List(list) => Block::List {
             ordered: list.is_ordered,
             start: list.start,
@@ -248,4 +248,3 @@ mod tests {
         );
     }
 }
-

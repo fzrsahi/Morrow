@@ -199,7 +199,9 @@ pub fn island_question_focus(window: WebviewWindow, open: bool) -> Result<(), St
         // tao maps `focusable` to gtk_window_set_accept_focus. Presenting an
         // already-mapped window then hands the keyboard to it; closing puts
         // the overlay back to non-activating so clicks reach the app below.
-        window.set_focusable(open).map_err(|error| error.to_string())?;
+        window
+            .set_focusable(open)
+            .map_err(|error| error.to_string())?;
         if open {
             window.set_focus().map_err(|error| error.to_string())?;
         }

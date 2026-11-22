@@ -41,7 +41,7 @@ fn the_outermost_terminal_wins_not_the_nearest_shell() {
 }
 
 #[test]
-fn the_hosts_include_the_three_windows_editors_W_007_asks_for() {
+fn the_hosts_include_the_three_windows_editors_w_007_asks_for() {
     // claude → shell → Code.exe / idea64.exe / WindowsTerminal.exe. A host list
     // without these would leave W-007's jump button permanently NotPossible.
     for (leaf, host_pid, host) in [
