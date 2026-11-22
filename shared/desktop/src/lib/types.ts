@@ -83,6 +83,7 @@ export type HooksSnapshot = {
   kimi: KimiStatus;
   yaml: YamlStatus[];
   version: string | null;
+  note: string | null;
 };
 
 export type CapabilityRow = {
