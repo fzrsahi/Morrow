@@ -5,12 +5,14 @@
   import Mascot from './Mascot.svelte';
   import PixelText from './PixelText.svelte';
   import PixelIcon from './PixelIcon.svelte';
-  import { COLLAPSED, PALETTE } from '../tokens';
+  import LineIcon from './LineIcon.svelte';
+  import { COLLAPSED, PALETTE, type Theme } from '../tokens';
   import { mascotStatus, middleTruncate, toolColor, toolLabel } from '../session-cards';
   import type { Track } from '../music';
   import type { Session } from '../types';
 
   type Props = {
+    theme?: Theme;
     sessionCount: number;
     prehover?: boolean;
     quiet?: boolean;
@@ -25,6 +27,7 @@
     glanceLabel?: string;
   };
   let {
+    theme = 'pixel',
     sessionCount,
     prehover = false,
     quiet = false,
@@ -55,6 +58,7 @@
 
 <div
   class="col"
+  class:modern={theme === 'modern'}
   class:pre={prehover}
   class:tight={music && active !== null}
   data-state={state}
@@ -64,14 +68,28 @@
   <span class="wing">
     <Mascot {source} {status} size={COLLAPSED.mascot} />
     {#if music}
-      <span class="note"><PixelIcon name="music" size={1.1} color={PALETTE.cyan} /></span>
+      <span class="note">
+        {#if theme === 'modern'}
+          <LineIcon name="note" color={PALETTE.cyan} size={10} />
+        {:else}
+          <PixelIcon name="music" size={1.1} color={PALETTE.cyan} />
+        {/if}
+      </span>
       <span class="song" class:compact={active !== null}>{song}</span>
     {/if}
     {#if state === 'thinking'}
       <span class="thinkdots"><i></i><i></i><i></i></span>
-      <PixelText text="THINKING" size={1.3} color={PALETTE.cyan} />
+      {#if theme === 'modern'}
+        <span class="lbl" style="color:{PALETTE.cyan}">THINKING</span>
+      {:else}
+        <PixelText text="THINKING" size={1.3} color={PALETTE.cyan} />
+      {/if}
     {:else if state === 'tool'}
-      <PixelText text={toolLabel(toolName)} size={1.3} color={toolColor(toolName)} />
+      {#if theme === 'modern'}
+        <span class="lbl" style="color:{toolColor(toolName)}">{toolLabel(toolName)}</span>
+      {:else}
+        <PixelText text={toolLabel(toolName)} size={1.3} color={toolColor(toolName)} />
+      {/if}
       <span class="tooldetail">{active?.tool_description ?? ''}</span>
     {/if}
   </span>
@@ -113,7 +131,11 @@
         />
       </svg>
     {:else if state === 'empty' && !quiet}
-      <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
+      {#if theme === 'modern'}
+        <span class="lbl" style="color:{PALETTE.textMuted}">IDLE</span>
+      {:else}
+        <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
+      {/if}
     {:else}
       <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
     {/if}
@@ -173,6 +195,10 @@
   .col.pre {
     padding: 0 13.5px;
     transform: scale(1.004);
+  }
+  /* #202 — components.js collapsed() `label()` in the Modern Clean branch. */
+  .lbl {
+    font: 600 10px var(--ui, system-ui, sans-serif);
   }
   .wing {
     display: flex;

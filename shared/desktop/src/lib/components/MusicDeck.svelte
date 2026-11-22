@@ -5,7 +5,8 @@
   // this component only renders the track it is handed and reports a click.
   import PixelIcon from './PixelIcon.svelte';
   import PixelText from './PixelText.svelte';
-  import { PALETTE } from '../tokens';
+  import LineIcon from './LineIcon.svelte';
+  import { PALETTE, type Theme } from '../tokens';
   import {
     currentLyricIndex,
     formatTime,
@@ -17,6 +18,7 @@
   } from '../music';
 
   type Props = {
+    theme?: Theme;
     track: Track | null;
     state: DeckState;
     lyrics: LyricLine[] | null;
@@ -28,6 +30,7 @@
     onSeek: (fraction: number) => void;
   };
   let {
+    theme = 'pixel',
     track,
     state,
     lyrics,
@@ -47,6 +50,12 @@
   let artist = $derived(none ? 'No MPRIS / media session' : track?.artist || '');
   let lengthUs = $derived(track?.length_us ?? null);
   let lit = $derived(Math.round(progress(positionUs, lengthUs) * CELLS));
+  let fraction = $derived(Math.round(progress(positionUs, lengthUs) * 100));
+  let modernSubtitle = $derived(
+    none
+      ? 'Start a player: Spotify, a browser tab, mpv…'
+      : `${track?.artist ?? ''} · ${track?.album ?? ''}`,
+  );
   let current = $derived(currentLyricIndex(lyrics ?? [], positionUs));
   let synced = $derived(playing && lyrics !== null && lyrics.length > 0);
 
@@ -57,6 +66,34 @@
   }
 </script>
 
+{#if theme === 'modern'}
+  <div class="mdeck" data-deck={state}>
+    <div class="art" class:none={none}>
+      {#if none}<LineIcon name="note" color="currentColor" size={26} />{/if}
+    </div>
+    <div class="mbody">
+      <div class="mtitle">{title}</div>
+      <div class="msub">{modernSubtitle}</div>
+      {#if !none}
+        <button
+          type="button"
+          class="mprogress"
+          aria-label="Seek within track"
+          disabled={!enabled.seek}
+          onclick={scrub}
+        ><span class="fill" style="width:{fraction}%"></span></button>
+        <div class="mtimes">
+          <span>{formatTime(positionUs)}</span><span>{formatTime(lengthUs ?? 0)}</span>
+        </div>
+      {/if}
+      <div class="mtransport">
+        <button class="mtb" aria-label="Previous track" disabled={!enabled.previous} onclick={onPrevious}>◀◀</button>
+        <button class="mtb" aria-label={playing ? 'Pause' : 'Play'} disabled={!enabled.playPause} onclick={onPlayPause}>{playing ? '❚❚' : '▶'}</button>
+        <button class="mtb" aria-label="Next track" disabled={!enabled.next} onclick={onNext}>▶▶</button>
+      </div>
+    </div>
+  </div>
+{:else}
 <div class="deck" data-deck={state}>
   <div class="l">
     <div class="top">
@@ -134,6 +171,7 @@
     {/if}
   </div>
 </div>
+{/if}
 
 <style>
   .deck {
@@ -307,6 +345,82 @@
     justify-content: center;
     -webkit-mask: none;
     mask: none;
+  }
+
+  /* #202 — canvas.css:305-306 and components.js music()'s Modern branch. */
+  .mdeck {
+    display: grid;
+    grid-template-columns: 86px 1fr;
+    gap: 14px;
+    padding: 6px 18px 16px;
+  }
+  .mdeck .art {
+    width: 86px;
+    height: 86px;
+    border-radius: 14px;
+  }
+  .mdeck .art.none {
+    color: var(--td);
+  }
+  .mbody {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .mtitle {
+    font: 500 11.5px var(--ui, system-ui, sans-serif);
+    color: var(--tw);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .msub {
+    font: 10px var(--ui, system-ui, sans-serif);
+    color: rgba(255, 255, 255, 0.6);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mprogress {
+    height: 4px;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.18);
+    overflow: hidden;
+    cursor: default;
+  }
+  .mprogress .fill {
+    display: block;
+    height: 100%;
+    border-radius: 2px;
+    background: #fff;
+  }
+  .mtimes {
+    display: flex;
+    justify-content: space-between;
+    font: 500 7.5px var(--ui, ui-monospace, monospace);
+    color: rgba(255, 255, 255, 0.6);
+  }
+  .mtransport {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .mtb {
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--tw);
+    font: 600 11px var(--ui, system-ui, sans-serif);
+    opacity: 0.9;
+    cursor: default;
+  }
+  .mtb:disabled {
+    opacity: 0.3;
   }
   :focus-visible {
     outline: 2px solid var(--cyan);

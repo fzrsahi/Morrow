@@ -7,9 +7,12 @@ use std::path::PathBuf;
 use morrow_platform::capability::{self, Feature};
 use morrow_platform::{autostart, settings};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::HooksSite;
+
+/// #202 — the island listens for this while Settings writes from its own window.
+pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
 
 /// Every adapter and what it can do on this machine.
 ///
@@ -103,10 +106,21 @@ pub fn settings_load(site: State<'_, HooksSite>) -> Result<Value, String> {
     settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())
 }
 
-/// Set one top-level setting.
+/// Set one top-level setting. The saved document is broadcast to both windows
+/// so a theme choice in Settings reaches the island without a restart (#202).
 #[tauri::command]
-pub fn settings_set(site: State<'_, HooksSite>, key: String, value: Value) -> Result<bool, String> {
-    settings::set(&site.paths.codeisland_dir, &key, &value).map_err(|error| error.to_string())
+pub fn settings_set(
+    app: AppHandle,
+    site: State<'_, HooksSite>,
+    key: String,
+    value: Value,
+) -> Result<bool, String> {
+    let changed = settings::set(&site.paths.codeisland_dir, &key, &value)
+        .map_err(|error| error.to_string())?;
+    if let Ok(stored) = settings::load(&site.paths.codeisland_dir) {
+        let _ = app.emit(SETTINGS_CHANGED_EVENT, stored);
+    }
+    Ok(changed)
 }
 
 /// Where the settings file is, for a "reveal" button.
