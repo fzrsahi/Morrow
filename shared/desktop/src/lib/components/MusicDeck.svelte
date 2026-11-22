@@ -10,6 +10,7 @@
   import {
     currentLyricIndex,
     formatTime,
+    lyricScrollY,
     progress,
     type Controls,
     type DeckState,
@@ -58,6 +59,10 @@
   );
   let current = $derived(currentLyricIndex(lyrics ?? [], positionUs));
   let synced = $derived(playing && lyrics !== null && lyrics.length > 0);
+  // The 84 pt box has 8 pt of padding at each end; 10 pt lines + 4 pt gap.
+  const LYRIC_LINE_PX = 16;
+  const LYRIC_VIEW_PX = 68;
+  let scrollY = $derived(lyricScrollY(current, lyrics?.length ?? 0, LYRIC_LINE_PX, LYRIC_VIEW_PX));
 
   function scrub(event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
@@ -164,9 +169,12 @@
       <div class="lyr msg"><PixelText text="[ NO LYRIC FEED ]" size={1.1} color="rgba(255,255,255,.4)" /></div>
     {:else}
       <div class="lyr">
-        {#each lyrics as line, i (i)}
-          <span class:cur={i === current}>{i === current ? '▶ ' : ''}{line.text}</span>
-        {/each}
+        <!-- Only the lines move: the mask and the 84 pt window stay put. -->
+        <div class="lines" style="transform: translateY({scrollY}px)">
+          {#each lyrics as line, i (i)}
+            <span class:cur={i === current}>{i === current ? '▶ ' : ''}{line.text}</span>
+          {/each}
+        </div>
       </div>
     {/if}
   </div>
@@ -326,15 +334,25 @@
     overflow: hidden;
     display: flex;
     flex-direction: column;
-    gap: 4px;
     padding: 8px 0;
     font: 500 10px system-ui, sans-serif;
     color: rgba(255, 255, 255, 0.42);
     -webkit-mask: linear-gradient(transparent, #000 25%, #000 75%, transparent);
     mask: linear-gradient(transparent, #000 25%, #000 75%, transparent);
   }
+  .lines {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    transition: transform 220ms ease-out;
+  }
   .lyr span {
     white-space: nowrap;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lines {
+      transition: none;
+    }
   }
   .lyr .cur {
     color: var(--cyan);

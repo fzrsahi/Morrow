@@ -92,6 +92,41 @@ export function currentLyricIndex(lines: LyricLine[], positionUs: number): numbe
   return current;
 }
 
+/** The lyric service is asked by artist, title and duration; album keeps two
+ *  editions with the same name apart. Playback fields are not part of it. */
+export function lyricKey(track: Track): string {
+  return [track.artist, track.title, track.album, track.length_us ?? ''].join('\u0000');
+}
+
+/** `undefined` means "never asked"; `null` is a real answer: no lyrics exist.
+ *  Both the lines and the absence are kept so re-opening the tab never reasks
+ *  the service, and returning to an earlier track gets its lines straight back. */
+export class LyricCache {
+  private readonly answers = new Map<string, LyricLine[] | null>();
+
+  get(track: Track): LyricLine[] | null | undefined {
+    return this.answers.get(lyricKey(track));
+  }
+
+  put(track: Track, lines: LyricLine[] | null): void {
+    this.answers.set(lyricKey(track), lines);
+  }
+}
+
+/** Pixel offset for the line list (positive early, negative later): the active
+ *  line's centre sits at the centre of the 84 pt lyric box (68 pt of content
+ *  under its 8 pt padding). The box's fixed mask fades whatever runs past its
+ *  top or bottom edge. */
+export function lyricScrollY(
+  index: number,
+  lineCount: number,
+  lineHeight: number,
+  viewportHeight: number,
+): number {
+  if (index < 0 || lineCount <= 0) return 0;
+  return viewportHeight / 2 - (index + 0.5) * lineHeight;
+}
+
 /** A player that cannot seek/skip reports Can*=false; show those buttons off. */
 export function controls(track: Track | null): Controls {
   if (track === null || track.status === 'Stopped') {
