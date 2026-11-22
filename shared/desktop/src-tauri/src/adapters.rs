@@ -86,6 +86,18 @@ pub fn fullscreen() -> bool {
     return false;
 }
 
+/// Whether Windows' quiet time is active: the same notification state that
+/// answers `fullscreen`, read for the moon in the collapsed bar (#197). There
+/// is no quiet-hours clock in the Linux shell yet, so it stays false there.
+#[tauri::command]
+pub fn quiet_hours() -> bool {
+    #[cfg(windows)]
+    return morrow_platform::windows::fullscreen::state()
+        == morrow_platform::windows_rules::NotificationState::QuietTime;
+    #[cfg(unix)]
+    return false;
+}
+
 /// The pointer, in screen pixels.
 #[tauri::command]
 pub fn pointer_position() -> Option<(i32, i32)> {

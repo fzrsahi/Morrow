@@ -104,6 +104,18 @@ pub fn set_island_size(
     .map_err(|e| e.to_string())
 }
 
+/// Hide the island while a fullscreen app is in front, show it again after
+/// (#197). The tight-fit window owns the visibility; the DOM stays laid out so
+/// `set_island_size` and the card rectangles keep their meaning.
+#[tauri::command]
+pub fn island_visible(window: WebviewWindow, visible: bool) -> Result<(), String> {
+    if visible {
+        window.show().map_err(|e| e.to_string())
+    } else {
+        window.hide().map_err(|e| e.to_string())
+    }
+}
+
 /// A rectangle in the window, in logical pixels.
 #[derive(serde::Deserialize)]
 pub struct Rect {

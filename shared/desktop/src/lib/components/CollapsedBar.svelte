@@ -7,8 +7,8 @@
   import PixelIcon from './PixelIcon.svelte';
   import { COLLAPSED, PALETTE } from '../tokens';
 
-  type Props = { sessionCount: number; prehover?: boolean };
-  let { sessionCount, prehover = false }: Props = $props();
+  type Props = { sessionCount: number; prehover?: boolean; quiet?: boolean };
+  let { sessionCount, prehover = false, quiet = false }: Props = $props();
 
   let state = $derived(sessionCount > 0 ? 'idle' : 'empty');
 </script>
@@ -19,10 +19,25 @@
   </span>
   <span class="gap"></span>
   <span class="wing">
-    {#if state === 'empty'}
+    {#if state === 'empty' && !quiet}
       <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
     {:else}
       <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
+    {/if}
+    {#if quiet}
+      <!-- #197: canvas #collapsed-ambient, quiet frame. The moon is a line
+           icon (no bitmap in pixel-icons.json), coloured with the #180 token. -->
+      <svg
+        class="moon"
+        viewBox="0 0 16 16"
+        width="10"
+        height="10"
+        fill={PALETTE.textMuted}
+        aria-label="quiet hours"
+        role="img"
+      >
+        <path d="M12.5 10.5A5 5 0 0 1 6 3.8a5 5 0 1 0 6.5 6.7z" />
+      </svg>
     {/if}
   </span>
 </div>
@@ -55,6 +70,10 @@
   }
   .gap {
     flex: 1 0 96px;
+  }
+  /* #197 quiet-hours moon (the GIF/zz stand-in was replaced by Mascot in #181). */
+  .moon {
+    flex: none;
   }
   @media (prefers-reduced-motion: reduce) {
     .col {

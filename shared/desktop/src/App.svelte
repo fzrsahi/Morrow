@@ -5,6 +5,7 @@
   // passes on the user's Approve / Deny.
   import { onMount, tick } from 'svelte';
   import { Channel, invoke } from '@tauri-apps/api/core';
+  import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
   import Header from './lib/components/Header.svelte';
   import PixelText from './lib/components/PixelText.svelte';
@@ -84,6 +85,13 @@
   let openTimer: ReturnType<typeof setTimeout>;
   let closeTimer: ReturnType<typeof setTimeout>;
   let quitTimer: ReturnType<typeof setTimeout>;
+
+  // #197: the three scene facts, and which adapters can read them here.
+  let ambient = $state<AmbientState>({ fullscreen: false, locked: false, quiet: false });
+  let support = $state<AmbientSupport>({ fullscreenDetection: false, screenLock: false });
+  let view = $derived(ambientView(ambient, support));
+  let pollTimer: ReturnType<typeof setTimeout> | undefined;
+  const POLL_MS = 1000;
 
   function answer(id: number, decision: Decision) {
     invoke('answer_permission', { id, decision });
@@ -215,10 +223,57 @@
     try {
       capabilities = await invoke<CapabilityRow[]>('capabilities');
       autostart = await invoke<AutostartStatus>('autostart_status');
+      const supported = (feature: string) =>
+        capabilities.some(
+          (row) => row.feature === feature && 'Supported' in row.capability,
+        );
+      support = {
+        fullscreenDetection: supported('Fullscreen detection'),
+        screenLock: supported('Screen lock'),
+      };
+      schedulePoll();
     } catch (error) {
       hooksError = String(error);
     }
   }
+
+  // #197: ask only the adapters this machine can answer. Read the lock first:
+  // a screen that just locked must not run a content probe on this tick.
+  async function pollOnce() {
+    const next: Partial<AmbientState> = {};
+    const p = pollPlan(view, support);
+    if (!p.active) return;
+    if (p.screenLocked) {
+      next.locked = (await invoke<boolean | null>('screen_locked')) === true;
+    }
+    const after = pollPlan(ambientView({ ...ambient, ...next }, support), support);
+    if (after.fullscreen) next.fullscreen = await invoke<boolean>('fullscreen');
+    if (after.quietHours) next.quiet = await invoke<boolean>('quiet_hours');
+    Object.assign(ambient, next);
+  }
+
+  // A recursive timeout, not an interval: when the plan has no probes left
+  // there is no next tick at all, and unmount clears the one in flight.
+  function schedulePoll() {
+    if (pollTimer !== undefined) clearTimeout(pollTimer);
+    pollTimer = undefined;
+    if (!pollPlan(view, support).active) return;
+    pollTimer = setTimeout(async () => {
+      pollTimer = undefined;
+      try {
+        await pollOnce();
+      } finally {
+        schedulePoll();
+      }
+    }, POLL_MS);
+  }
+
+  // The window, not the DOM, hides for a fullscreen app: the island keeps its
+  // measured size so card rectangles and the tight-fit chain stay intact.
+  $effect(() => {
+    const hidden = view.hidden;
+    invoke('island_visible', { visible: !hidden }).catch(() => {});
+  });
 
   async function toggleAutostart() {
     await run(() => invoke('autostart_set', { enabled: !autostart?.installed }));
@@ -288,6 +343,8 @@
       clearTimeout(openTimer);
       clearTimeout(closeTimer);
       clearTimeout(quitTimer);
+      if (pollTimer !== undefined) clearTimeout(pollTimer);
+      pollTimer = undefined;
     };
   });
 
@@ -308,6 +365,7 @@
   class="island"
   class:open={expanded}
   class:closing
+  class:locked={view.suspended}
   data-variant={variant}
   data-phase={fit.phase}
   {style}
@@ -319,7 +377,7 @@
 >
   {#if !expanded && !closing}
     <button class="toggle" onclick={openPanel} aria-label="Open the Morrow panel">
-      <CollapsedBar sessionCount={sessions.length} {prehover} />
+      <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} />
     </button>
   {/if}
   <div class="panel-content" class:visible={expanded || closing} bind:this={panelContent}>
@@ -420,6 +478,14 @@
   .island[data-variant='C']::after {
     right: -10px;
     border-radius: 0 0 10px 0;
+  }
+  /* #197: a locked screen is drawn but inert — no sound (none is wired yet),
+     no animation, no content probes. The lock watch itself is still polled so
+     the island can come back on unlock. Reduced-motion stays honoured in the
+     components; this rule is independent of that preference. */
+  .island.locked :global(*) {
+    animation: none !important;
+    transition: none !important;
   }
   .toggle {
     display: block;
