@@ -1,0 +1,75 @@
+{
+  "claude" : {
+    "empty_expected" : null,
+    "empty_transcript" : "{\"type\":\"user\",\"message\":{\"content\":\"Hi\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"\",\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"\",\"content\":[{\"type\":\"text\",\"text\":\"Later\"}]}}",
+    "named_expected" : "model-x",
+    "named_transcript" : "{\"type\":\"user\",\"message\":{\"content\":\"Hi\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"\",\"content\":[{\"type\":\"text\",\"text\":\"Hello\"}]}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"model-x\",\"content\":[{\"type\":\"text\",\"text\":\"Later\"}]}}"
+  },
+  "cursor" : {
+    "expected" : {
+      "messages" : [
+        {
+          "is_user" : false,
+          "text" : "Added the bar"
+        },
+        {
+          "is_user" : true,
+          "text" : "Narrow it to open issues"
+        },
+        {
+          "is_user" : false,
+          "text" : "Filtered"
+        }
+      ]
+    },
+    "transcript" : "{\"role\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Add a filter bar\"}]}}\n{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Added the bar\"}]}}\n{\"role\":\"user\",\"message\":{\"content\":\"Narrow it to open issues\"}}\n{\"role\":\"assistant\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Filtered\"}]}}"
+  },
+  "gemini" : {
+    "expected" : {
+      "messages" : [
+        {
+          "is_user" : false,
+          "text" : "In src/router.ts"
+        },
+        {
+          "is_user" : true,
+          "text" : "Open it"
+        },
+        {
+          "is_user" : false,
+          "text" : "Opened"
+        }
+      ],
+      "model" : "gemini-2.5-pro",
+      "session_id" : "gem-1"
+    },
+    "session" : "{\n  \"sessionId\": \"gem-1\",\n  \"model\": \"gemini-2.5-pro\",\n  \"messages\": [\n    {\"type\": \"user\", \"content\": \"Where is the router?\"},\n    {\"type\": \"gemini\", \"content\": \"In src/router.ts\"},\n    {\"type\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"Open it\"}]},\n    {\"type\": \"gemini\", \"content\": \"Opened\"}\n  ]\n}"
+  },
+  "project_dir" : [
+    {
+      "app_encoded" : "Users-dev-projects-morrow",
+      "encoded" : "-Users-dev-projects-morrow",
+      "path" : "/Users/dev/projects/morrow"
+    },
+    {
+      "app_encoded" : "Users-dev-My-Project",
+      "encoded" : "-Users-dev-My-Project",
+      "path" : "/Users/dev/My Project"
+    },
+    {
+      "app_encoded" : "Users-dev-na-ve",
+      "encoded" : "-Users-dev-na-ve",
+      "path" : "/Users/dev/naïve"
+    },
+    {
+      "app_encoded" : "C:\\Users\\dev\\morrow",
+      "encoded" : "C:\\Users\\dev\\morrow",
+      "path" : "C:\\Users\\dev\\morrow"
+    },
+    {
+      "app_encoded" : "",
+      "encoded" : "-",
+      "path" : "/"
+    }
+  ]
+}

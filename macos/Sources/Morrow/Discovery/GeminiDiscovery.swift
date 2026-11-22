@@ -129,10 +129,34 @@ enum GeminiDiscovery {
               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             return (((path as NSString).lastPathComponent as NSString).deletingPathExtension, nil, [])
         }
+        let text = String(data: data, encoding: .utf8) ?? ""
+        return (
+            sessionId(fromTranscript: text)
+                ?? (((path as NSString).lastPathComponent as NSString).deletingPathExtension),
+            model(fromTranscript: text),
+            recentMessages(fromTranscript: text)
+        )
+    }
 
-        let sessionId = (json["sessionId"] as? String)
-            ?? (((path as NSString).lastPathComponent as NSString).deletingPathExtension)
-        let model = json["model"] as? String
+    /// The session id in a Gemini session file (#245), if it names one.
+    static func sessionId(fromTranscript text: String) -> String? {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["sessionId"] as? String
+    }
+
+    /// The model a Gemini session file names (#245).
+    static func model(fromTranscript text: String) -> String? {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        return json["model"] as? String
+    }
+
+    /// The last three turns of a Gemini session file (#245). Split out so the
+    /// port can be given the same bytes the platform read.
+    static func recentMessages(fromTranscript text: String) -> [ChatMessage] {
+        guard let data = text.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [] }
         let messages = (json["messages"] as? [[String: Any]]) ?? []
 
         var combined: [(Int, ChatMessage)] = []
@@ -150,6 +174,6 @@ enum GeminiDiscovery {
         }
 
         combined.sort { $0.0 < $1.0 }
-        return (sessionId, model, Array(combined.suffix(3).map { $0.1 }))
+        return Array(combined.suffix(3).map { $0.1 })
     }
 }
