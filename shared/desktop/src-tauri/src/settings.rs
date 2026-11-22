@@ -30,6 +30,16 @@ pub fn capabilities() -> Vec<capability::Row> {
             row.capability = outcome;
         }
     }
+    // #197: `fullscreen` has no probe behind it off Windows — it returns
+    // false on every Linux session, X11 included. The generic table would
+    // still promise "Supported" there; say so instead, and keep the island
+    // visible. Windows keeps the probe's own answer from the table.
+    #[cfg(not(windows))]
+    if let Some(row) = rows.iter_mut().find(|row| row.feature == Feature::Fullscreen.name()) {
+        row.capability = capability::Capability::Unsupported(
+            "fullscreen detection is Windows-only; the island stays visible".into(),
+        );
+    }
     rows
 }
 
@@ -103,4 +113,23 @@ pub fn settings_set(site: State<'_, HooksSite>, key: String, value: Value) -> Re
 #[tauri::command]
 pub fn settings_path(site: State<'_, HooksSite>) -> PathBuf {
     settings::path(&site.paths.codeisland_dir)
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fullscreen_detection_says_not_supported_off_windows() {
+        let rows = capabilities();
+        let row = rows
+            .iter()
+            .find(|row| row.feature == Feature::Fullscreen.name())
+            .expect("a Fullscreen detection row");
+        assert_eq!(row.capability.label(), "Not supported");
+        assert!(
+            row.capability.reason().is_some_and(|reason| !reason.is_empty()),
+            "an unsupported capability has to say why"
+        );
+    }
 }

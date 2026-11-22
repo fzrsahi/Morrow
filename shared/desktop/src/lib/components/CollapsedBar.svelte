@@ -6,8 +6,8 @@
   import PixelIcon from './PixelIcon.svelte';
   import { COLLAPSED, MOTION, PALETTE } from '../tokens';
 
-  type Props = { sessionCount: number; prehover?: boolean };
-  let { sessionCount, prehover = false }: Props = $props();
+  type Props = { sessionCount: number; prehover?: boolean; quiet?: boolean };
+  let { sessionCount, prehover = false, quiet = false }: Props = $props();
 
   // The GIF is a stand-in for the Swift mascot; the asset lives in the shared
   // docs tree so the port does not duplicate binary files.
@@ -24,10 +24,25 @@
   </span>
   <span class="gap"></span>
   <span class="wing">
-    {#if state === 'empty'}
+    {#if state === 'empty' && !quiet}
       <PixelText text="IDLE" size={1.3} color={PALETTE.textMuted} />
     {:else}
       <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
+    {/if}
+    {#if quiet}
+      <!-- #197: canvas #collapsed-ambient, quiet frame. The moon is a line
+           icon (no bitmap in pixel-icons.json), coloured with the #180 token. -->
+      <svg
+        class="moon"
+        viewBox="0 0 16 16"
+        width="10"
+        height="10"
+        fill={PALETTE.textMuted}
+        aria-label="quiet hours"
+        role="img"
+      >
+        <path d="M12.5 10.5A5 5 0 0 1 6 3.8a5 5 0 1 0 6.5 6.7z" />
+      </svg>
     {/if}
   </span>
 </div>
@@ -74,6 +89,9 @@
     height: 100%;
     object-fit: contain;
     image-rendering: pixelated;
+  }
+  .moon {
+    flex: none;
   }
   .zz {
     position: absolute;
