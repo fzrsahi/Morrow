@@ -7,6 +7,7 @@
 #   ./scripts/setup-linux-runner.sh           # Run or restart the runner
 #   ./scripts/setup-linux-runner.sh --dry-run # Print configuration and docker command
 #   ./scripts/setup-linux-runner.sh --status  # Check status and recent logs
+#   ./scripts/setup-linux-runner.sh --check-heal # Detect auth expiry and auto-heal
 #   ./scripts/setup-linux-runner.sh --stop    # Stop runner container
 # ==============================================================================
 set -euo pipefail
@@ -29,6 +30,7 @@ if [ "$ACTION" = "--dry-run" ]; then
     echo "  Max Workflows: $MAX_WORKFLOWS"
     echo "  Labels:        $FILTER_LABELS"
     echo "  Hostname:      $HOSTNAME_ID"
+    echo "  Watchdog:      supports --check-heal auto-restart"
     echo ""
     echo "Docker Execution Command:"
     cat <<EOF
@@ -54,9 +56,32 @@ if [ "$ACTION" = "--status" ]; then
         echo ""
         echo "==> Recent Logs:"
         docker logs --tail 20 "$RUNNER_NAME" || true
+        if docker logs --tail 30 "$RUNNER_NAME" 2>&1 | grep -qE "Unauthenticated|token is expired"; then
+            echo ""
+            echo "⚠️  WARNING: Runner is reporting authentication failure (expired JWT token)!"
+            echo "Run './scripts/setup-linux-runner.sh --check-heal' to heal."
+            exit 1
+        fi
     else
         echo "Runner container '$RUNNER_NAME' does not exist."
+        exit 1
     fi
+    exit 0
+fi
+
+if [ "$ACTION" = "--check-heal" ]; then
+    if ! docker ps -a --filter "name=^/${RUNNER_NAME}$" --format '{{.Names}}' | grep -q "^${RUNNER_NAME}$"; then
+        echo "==> Runner container '$RUNNER_NAME' not found. Starting it..."
+        exec "$0" start
+    fi
+    RECENT_LOGS=$(docker logs --tail 30 "$RUNNER_NAME" 2>&1 || true)
+    if echo "$RECENT_LOGS" | grep -qE "Unauthenticated|token is expired"; then
+        echo "⚠️  Detected authentication failure on '$RUNNER_NAME'. Self-healing runner..."
+        docker restart "$RUNNER_NAME" >/dev/null 2>&1
+        echo "✅ Runner '$RUNNER_NAME' restarted with refreshed session token."
+        exit 0
+    fi
+    echo "Runner '$RUNNER_NAME' is healthy."
     exit 0
 fi
 

@@ -64,6 +64,7 @@ if [ -f "$SETUP_SCRIPT" ]; then
     assert_contains "dry-run binds to host.docker.internal:9090" "host.docker.internal:9090" "$DRY_RUN_OUT"
     assert_contains "dry-run restricts concurrency to 1" "WOODPECKER_MAX_WORKFLOWS=1" "$DRY_RUN_OUT"
     assert_contains "dry-run configures linux/amd64 platform label" "platform=linux/amd64" "$DRY_RUN_OUT"
+    assert_contains "dry-run references check-heal capability" "--check-heal" "$DRY_RUN_OUT"
 else
     echo "  [FAIL] setup-linux-runner.sh does not exist"
     FAILED=$((FAILED + 1))
