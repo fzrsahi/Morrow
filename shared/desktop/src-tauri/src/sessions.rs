@@ -251,6 +251,44 @@ impl Sessions {
         self.apply_with_intents(payload, now_ms).effects
     }
 
+    /// A session that was **found**, not announced (#261).
+    ///
+    /// Until now a session could only be born from a hook, so a panel opened
+    /// after a restart stayed empty until the next hook arrived — and a session
+    /// whose hook never carried a pid was never pruned. This is the other way in,
+    /// and it deliberately produces the same `SessionSnapshot` a hook does, so
+    /// the card, the tier order and the pruner cannot tell the difference.
+    ///
+    /// Returns `false` and changes nothing when the session already exists. A
+    /// discovered row is by definition older than whatever a hook last said:
+    /// overwriting would take a card that is WORKING back to DONE, and take a
+    /// permission prompt's place in the tier order with it. "Scan never wins" is
+    /// the rule; the hook is the more specific witness.
+    pub fn insert_discovered(&mut self, hit: &morrow_core::discovery::DiscoveryHit) -> bool {
+        if self.inner.contains_key(&hit.session_id) {
+            return false;
+        }
+        let modified_at = hit.modified_at.unwrap_or_default() as f64 / 1000.0;
+        let mut snapshot = SessionSnapshot::new(Timestamp(modified_at));
+        snapshot.status = AgentStatus::Idle;
+        // The agent the reader named, not the one a hook would have named: a
+        // scan knows which store it read.
+        snapshot.source = hit.source.to_owned();
+        snapshot.cwd = (!hit.cwd.is_empty()).then(|| hit.cwd.clone());
+        snapshot.model = hit.model.clone();
+        snapshot.recent_messages = hit.recent_messages.clone();
+        snapshot.transcript_path = hit.transcript_path.clone();
+        snapshot.cli_pid = hit.pid;
+        // The `Close`-less shape: a hook names the session; a scan only guesses
+        // from the agent's own store, so the source comes with the hit.
+        self.inner.insert(hit.session_id.clone(), snapshot);
+        self.transcript_paths
+            .entry(hit.session_id.clone())
+            .or_insert_with(|| hit.transcript_path.clone().unwrap_or_default());
+        self.branches.remove(&hit.session_id);
+        true
+    }
+
     /// The transcript paths the hooks reported, for the shell's tailer.
     pub fn transcript_paths(&self) -> Vec<(String, String)> {
         self.transcript_paths
@@ -300,6 +338,11 @@ impl Sessions {
         self.branches.remove(session_id);
         self.transcript_paths.remove(session_id);
         self.live_replies.remove(session_id);
+    }
+
+    /// The home this store reduces against, which is where discovery looks.
+    pub fn home_directory(&self) -> String {
+        self.home_directory.clone()
     }
 
     /// No sessions left to watch.
@@ -393,6 +436,98 @@ mod tests {
 
     fn hook(json: &str) -> HookPayload {
         decode_payload(json.as_bytes()).unwrap()
+    }
+
+    fn discovered(
+        session_id: &str,
+        cwd: &str,
+        model: Option<&str>,
+    ) -> morrow_core::discovery::DiscoveryHit {
+        morrow_core::discovery::DiscoveryHit {
+            session_id: session_id.to_owned(),
+            source: "claude",
+            cwd: cwd.to_owned(),
+            model: model.map(str::to_owned),
+            modified_at: Some(5_000),
+            recent_messages: vec![
+                morrow_core::reduce::ChatMessage::new(true, "Add a filter bar"),
+                morrow_core::reduce::ChatMessage::new(false, "Added the bar"),
+            ],
+            transcript_path: Some(format!("/home/u/.claude/projects/p/{session_id}.jsonl")),
+            ..morrow_core::discovery::DiscoveryHit::default()
+        }
+    }
+
+    /// Backfill and hooks must produce the same card, or the panel would look
+    /// different depending on which arrived first.
+    #[test]
+    fn a_discovered_session_becomes_an_ordinary_card() {
+        let mut sessions = Sessions::default();
+        assert!(sessions.insert_discovered(&discovered("a", "/home/u/project", Some("model-x"))));
+
+        let rows = sessions.snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "a");
+        assert_eq!(rows[0].source, "claude");
+        assert_eq!(rows[0].cwd, "/home/u/project");
+        assert_eq!(rows[0].cwd_name, "project");
+        assert_eq!(rows[0].model, "model-x");
+        assert_eq!(rows[0].updated_at, 5_000);
+        // DONE, not IDLE: a transcript whose last word is the assistant's is a
+        // finished turn, which is exactly what the card tier "done" means. A
+        // session with no usable turn at all stays IDLE.
+        assert_eq!(rows[0].status, CardStatus::Done);
+    }
+
+    /// A discovered session with nothing to show is IDLE, not a blank DONE card.
+    #[test]
+    fn a_discovered_session_with_no_turns_is_idle() {
+        let mut sessions = Sessions::default();
+        let mut hit = discovered("a", "/home/u/project", None);
+        hit.recent_messages.clear();
+        sessions.insert_discovered(&hit);
+        assert_eq!(sessions.snapshot()[0].status, CardStatus::Idle);
+    }
+
+    /// The rule that keeps a scan from fighting a hook: a discovered row is
+    /// always the older witness, so it never overwrites one.
+    #[test]
+    fn a_scan_never_overwrites_a_session_a_hook_already_reported() {
+        let mut sessions = Sessions::default();
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"PreToolUse","cwd":"/home/u/a"}"#),
+            20,
+        );
+        let before = sessions.snapshot();
+
+        assert!(
+            !sessions.insert_discovered(&discovered("a", "/home/u/elsewhere", Some("stale"))),
+            "the second sighting must be refused"
+        );
+        assert_eq!(sessions.snapshot(), before);
+    }
+
+    #[test]
+    fn a_discovered_session_is_added_once() {
+        let mut sessions = Sessions::default();
+        assert!(sessions.insert_discovered(&discovered("a", "/home/u/p", None)));
+        assert!(!sessions.insert_discovered(&discovered("a", "/home/u/p", None)));
+        assert_eq!(sessions.snapshot().len(), 1);
+    }
+
+    /// A hook arriving after the scan still owns the card: the discovered row is
+    /// a starting point, not a lock.
+    #[test]
+    fn a_hook_arriving_after_the_scan_still_updates_the_card() {
+        let mut sessions = Sessions::default();
+        sessions.insert_discovered(&discovered("a", "/home/u/p", Some("model-x")));
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"PreToolUse","cwd":"/home/u/p"}"#),
+            30,
+        );
+        let rows = sessions.snapshot();
+        assert_eq!(rows[0].last_event, "PreToolUse");
+        assert_eq!(rows[0].updated_at, 30);
     }
 
     #[test]

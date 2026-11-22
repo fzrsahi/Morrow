@@ -316,11 +316,67 @@ impl Feed {
 
     /// Sends snapshots to `channel` from now on, the current one first. A
     /// reloaded frontend subscribes again and replaces the old channel.
+    ///
+    /// **Attach is when discovery runs** (#261). A panel that just appeared has
+    /// nothing to show and every session an agent already has is invisible until
+    /// its next hook, so the scan happens here rather than on a timer: the store
+    /// is read when somebody is looking, and not otherwise.
     pub fn subscribe(&self, channel: Channel<Snapshot>) {
+        {
+            let mut state = self.lock();
+            state.channel = Some(channel);
+            state.dirty = true;
+            self.changed.notify_one();
+        }
+        self.backfill();
+    }
+
+    /// One discovery scan, integrated as ordinary sessions.
+    ///
+    /// Deliberately outside the lock while it reads the stores — a scan walks
+    /// `~/.claude/projects` and reads tails — and inside it only to insert. A hook
+    /// that arrives during the scan wins: `insert_discovered` refuses a session
+    /// that already exists, so a WORKING card is never taken back to IDLE by a
+    /// row the scan read a moment ago.
+    ///
+    /// Returns how many sessions were added, which is what the test asserts.
+    pub fn backfill(&self) -> usize {
+        self.backfill_with(crate::discovery::claude_roots, crate::discovery::scan_once)
+    }
+
+    /// `backfill` with the roots and the scan injected, so a test runs it against
+    /// a scratch tree and no real `~`.
+    pub fn backfill_with(
+        &self,
+        roots: impl FnOnce(&std::path::Path) -> Vec<String>,
+        scan: impl FnOnce(&[String]) -> morrow_core::discovery::scan::ScanResult,
+    ) -> usize {
+        let home = {
+            let state = self.lock();
+            state.sessions.home_directory()
+        };
+        let roots = roots(std::path::Path::new(&home));
+        if roots.is_empty() {
+            return 0;
+        }
+        let result = scan(&roots);
         let mut state = self.lock();
-        state.channel = Some(channel);
-        state.dirty = true;
-        self.changed.notify_one();
+        let mut added = 0;
+        for hit in &result.hits {
+            if state.sessions.insert_discovered(hit) {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            state.dirty = true;
+            // A discovered session with a pid deserves the same liveness watch a
+            // hook-born one gets (#198); one without keeps its card until the
+            // store stops changing, which is what `Watches` already does for a
+            // session that has no capturable pid.
+            self.prune_changed.notify_one();
+            self.changed.notify_one();
+        }
+        added
     }
 
     /// One liveness round. The adapters are injected so the decision can be
@@ -456,6 +512,89 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+
+    /// The AC of #261, at the feed: a panel that has just appeared shows the
+    /// sessions the agent already has, **before** any hook arrives.
+    #[test]
+    fn backfill_shows_sessions_before_any_hook_arrives() {
+        let feed = Feed::default();
+        assert!(feed.snapshot().sessions.is_empty(), "nothing to show yet");
+
+        let added = feed.backfill_with(
+            |_home| vec!["/roots/one".to_owned(), "/roots/two".to_owned()],
+            |roots| {
+                assert_eq!(roots, &["/roots/one".to_owned(), "/roots/two".to_owned()]);
+                morrow_core::discovery::scan::ScanResult {
+                    hits: vec![
+                        discovered("found-a", "/home/u/a"),
+                        discovered("found-b", "/home/u/b"),
+                    ],
+                    ..Default::default()
+                }
+            },
+        );
+
+        assert_eq!(added, 2);
+        let rows = feed.snapshot().sessions;
+        let mut ids: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["found-a", "found-b"]);
+        assert!(
+            rows.iter().all(|row| row.last_event.is_empty()),
+            "a discovered session has no hook event, and the card must not claim one"
+        );
+    }
+
+    /// A hook that lands during the scan owns the card: the scan must not take a
+    /// WORKING session back to DONE.
+    #[test]
+    fn a_hook_that_lands_first_survives_the_backfill() {
+        let feed = Feed::default();
+        feed.record(
+            &decode_payload(
+                br#"{"session_id":"found-a","hook_event_name":"PreToolUse","cwd":"/home/u/a","tool_name":"Bash"}"#,
+            )
+            .unwrap(),
+        );
+
+        let added = feed.backfill_with(
+            |_home| vec!["/roots/one".to_owned()],
+            |_roots| morrow_core::discovery::scan::ScanResult {
+                hits: vec![discovered("found-a", "/home/u/elsewhere")],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(added, 0, "the discovered row is the older witness");
+        let rows = feed.snapshot().sessions;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].last_event, "PreToolUse");
+    }
+
+    /// A store that is not there adds nothing and does not mark the feed dirty.
+    #[test]
+    fn an_empty_scan_changes_nothing() {
+        let feed = Feed::default();
+        assert_eq!(
+            feed.backfill_with(
+                |_home| Vec::new(),
+                |_roots| panic!("a scan must not run when there are no roots"),
+            ),
+            0
+        );
+        assert!(feed.snapshot().sessions.is_empty());
+    }
+
+    fn discovered(session_id: &str, cwd: &str) -> morrow_core::discovery::DiscoveryHit {
+        morrow_core::discovery::DiscoveryHit {
+            session_id: session_id.to_owned(),
+            source: "claude",
+            cwd: cwd.to_owned(),
+            modified_at: Some(1_000),
+            transcript_path: Some(format!("/roots/{session_id}.jsonl")),
+            ..morrow_core::discovery::DiscoveryHit::default()
+        }
+    }
 
     const REPLY: &str =
         r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Adding filters"}]}}"#;
