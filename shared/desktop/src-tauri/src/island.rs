@@ -4,11 +4,14 @@
 //! Clicks outside the island land on the app underneath because the window
 //! is not there; no click-through API is used.
 
+use std::sync::Arc;
+
 use tauri::{
     App, Manager, PhysicalPosition, PhysicalSize, PhysicalUnit, PixelUnit, Runtime, State,
     WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowSizeConstraints,
 };
 
+use crate::feed::Feed;
 use crate::position::{self, MonitorGeometry};
 
 pub const LABEL: &str = "island";
@@ -156,7 +159,14 @@ pub fn reset<R: Runtime>(
 /// (#197). The tight-fit window owns the visibility; the DOM stays laid out so
 /// `set_island_size` and the card rectangles keep their meaning.
 #[tauri::command]
-pub fn island_visible(window: WebviewWindow, visible: bool) -> Result<(), String> {
+pub fn island_visible(
+    window: WebviewWindow,
+    visible: bool,
+    feed: State<'_, Arc<Feed>>,
+) -> Result<(), String> {
+    // #192: the same visibility change gates transcript polling; a hidden
+    // panel must not keep reading JSONL files in the background.
+    feed.set_visible(visible);
     if visible {
         window.show().map_err(|e| e.to_string())
     } else {

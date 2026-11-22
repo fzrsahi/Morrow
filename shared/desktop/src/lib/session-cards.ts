@@ -70,6 +70,16 @@ export function timeLabel(updatedAtMs: number, nowMs: number): string {
   return `${Math.floor(hours / 24)}D`;
 }
 
+/**
+ * The one line the card's reply row paints (#192). A streaming transcript
+ * line wins over the reply the hook reported; everything else on the card —
+ * status, tool, prompt, tier — still comes from the hook fields alone.
+ */
+export function liveReply(session: Session): string {
+  const live = session.live_reply?.trim() ?? '';
+  return live || session.last_assistant_message;
+}
+
 /** Middle-truncated label for the workspace dock (44 pt max in the canvas). */
 export function middleTruncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;

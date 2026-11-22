@@ -11,6 +11,7 @@
   import {
     STATUS_META,
     branchLabel,
+    liveReply,
     mascotStatus,
     subLabel,
     taskGauge,
@@ -87,6 +88,7 @@
         {#each group.sessions as session (session.session_id)}
           {@const meta = STATUS_META[session.status]}
           {@const approval = approvals.find((card) => card.session_id === session.session_id)}
+          {@const reply = liveReply(session)}
           {@const branch = branchLabel(session.git_branch, session.git_is_worktree)}
           {#if density === 'compact'}
             <li class="crow" style="--sc:{meta.color}">
@@ -246,7 +248,7 @@
                 {/if}
                 {#if session.last_assistant_message}
                   <div class="pline reply">
-                    <b style="color:{meta.color}">●</b><span>{session.last_assistant_message}</span>
+                    <b style="color:{meta.color}">●</b><span>{reply}</span>
                   </div>
                 {/if}
                 {#if session.recap}
@@ -267,8 +269,7 @@
       </svg>
     </button>
   {/if}
-{/if}
-<style>
+{/if}<style>
   .list {
     display: flex;
     flex-direction: column;

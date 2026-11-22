@@ -8,6 +8,7 @@ import {
   activeSession,
   branchLabel,
   collapsedWidth,
+  liveReply,
   mascotStatus,
   middleTruncate,
   subLabel,
@@ -29,6 +30,7 @@ const session = (over: Partial<Session> = {}): Session => ({
   tool_description: '',
   last_user_prompt: '',
   last_assistant_message: '',
+  live_reply: '',
   model: '',
   cwd: '',
   term_app: '',
@@ -118,6 +120,34 @@ describe('collapsed bar width (#collapsed-working)', () => {
     expect(collapsedWidth(session({ current_tool: 'A very long tool name' }))).toBeLessThanOrEqual(
       460,
     );
+  });
+});
+
+describe('live transcript reply row (#192)', () => {
+  test('the newest transcript text wins over the finished hook reply', () => {
+    expect(
+      liveReply(
+        session({
+          last_assistant_message: 'Shipped; all tests pass.',
+          live_reply: 'Adding the date filter…',
+        }),
+      ),
+    ).toBe('Adding the date filter…');
+  });
+
+  test('an empty tail falls back to the reply the hook reported', () => {
+    expect(
+      liveReply(session({ last_assistant_message: 'Shipped', live_reply: '' })),
+    ).toBe('Shipped');
+    expect(liveReply(session({ live_reply: '   ' }))).toBe('');
+  });
+
+  test('the transcript never changes the status or tool data beside the reply row', () => {
+    const s = session({ live_reply: 'Still typing…', current_tool: 'Bash', status: 'working' });
+    expect(liveReply(s)).toBe('Still typing…');
+    expect(s.status).toBe('working');
+    expect(s.current_tool).toBe('Bash');
+    expect(s.last_assistant_message).toBe('');
   });
 });
 

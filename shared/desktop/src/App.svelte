@@ -539,7 +539,7 @@
     sessions
       .map(
         (s) =>
-          `${s.session_id}:${s.status}:${s.current_tool}:${s.tool_description}:${s.last_user_prompt}:${s.last_assistant_message}:${s.updated_at}:${s.git_branch}:${s.git_is_worktree}:${s.tasks_done}:${s.tasks_total}:${s.task_active}:${s.subagent_count}:${s.recap}`,
+          `${s.session_id}:${s.status}:${s.current_tool}:${s.tool_description}:${s.last_user_prompt}:${s.last_assistant_message}:${s.live_reply}:${s.updated_at}:${s.git_branch}:${s.git_is_worktree}:${s.tasks_done}:${s.tasks_total}:${s.task_active}:${s.subagent_count}:${s.recap}`,
       )
       .join('|'),
   );
