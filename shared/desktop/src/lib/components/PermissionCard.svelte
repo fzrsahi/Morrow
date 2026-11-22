@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Mascot from './Mascot.svelte';
+  import { MASCOT_SIZES } from '../mascots';
   import type { Card, Decision } from '../types';
 
   type Props = { card: Card; onAnswer: (id: number, decision: Decision) => void };
@@ -7,6 +9,10 @@
 
 <!-- data-card / .approve / .deny are the E2E-1 smoke seam: keep them intact. -->
 <section class="card" data-card={card.id}>
+  <div class="ctx">
+    <Mascot source={card.source} status="working" size={MASCOT_SIZES.compact} />
+    <span class="cwd">{card.source}</span>
+  </div>
   <div class="tool"><span class="source">{card.source}</span> {card.tool_name}</div>
   {#if card.summary}<div class="summary">{card.summary}</div>{/if}
   <div class="actions">
@@ -19,6 +25,16 @@
   .card {
     padding: 8px 0 0;
     border-top: 1px solid #222;
+  }
+  .ctx {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #8e8e93;
+  }
+  .cwd {
+    font-family: ui-monospace, monospace;
+    font-size: 11px;
   }
   .tool {
     font-weight: 600;
