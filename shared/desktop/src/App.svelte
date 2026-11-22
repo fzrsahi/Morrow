@@ -50,6 +50,7 @@
     sessionFilterFromSettings,
   } from './lib/settings';
   import { activeSession, collapsedWidth } from './lib/session-cards';
+  import type { TerminalOutcome } from './lib/terminal-jump';
   import {
     COLLAPSED_MUSIC_WIDTH,
     LyricCache,
@@ -86,6 +87,9 @@
   // on a request the shell no longer holds shows a notice before it drops.
   let hiddenIds = $state<number[]>([]);
   let gone = $state<{ card: Card }[]>([]);
+  // #187: the jump outcome belongs to the session, so it survives the card
+  // being answered and re-issued. The card itself stays in the queue.
+  let jumpOutcomes = $state<Record<string, TerminalOutcome>>({});
   // #188: the option being answered, held while the shell writes the reply so
   // a click (or a number key) shows the canvas' selected row until it lands.
   let selected = $state<{ id: number; label: string } | null>(null);
@@ -242,6 +246,23 @@
 
   function hide(id: number) {
     if (!hiddenIds.includes(id)) hiddenIds = [...hiddenIds, id];
+  }
+
+  // #187 — a click on the card's context row asks the shell to raise the
+  // session's terminal window (or copy its path). The shell owns the outcome;
+  // the card only draws it. No card is removed here.
+  async function jumpToTerminal(session: Session) {
+    try {
+      const outcome = await invoke<TerminalOutcome>('terminal_activate', {
+        app: session.term_app || null,
+        tty: session.tty_path || null,
+        cwd: session.cwd || null,
+        pid: session.cli_pid,
+      });
+      jumpOutcomes = { ...jumpOutcomes, [session.session_id]: outcome };
+    } catch (error) {
+      hooksError = String(error);
+    }
   }
 
   // #199 — Settings moved to its own window; the header gear only asks the
@@ -754,7 +775,7 @@
               .map((option) => `${option.label}/${option.description}`)
               .join(',')}`
           : '';
-        return `${card.id}:${card.tool_name}:${JSON.stringify(card.tool_input)}:${question}`;
+        return `${card.id}:${card.tool_name}:${JSON.stringify(card.tool_input)}:${question}:${JSON.stringify(jumpOutcomes[card.session_id] ?? null)}`;
       })
       .join('|'),
   );
@@ -906,8 +927,10 @@
               total={visibleCards.length}
               {hotkeySupported}
               gone={gone.some((g) => g.card.id === card.id)}
+              outcome={jumpOutcomes[card.session_id] ?? null}
               onAnswer={answer}
               onHide={hide}
+              onJump={jumpToTerminal}
             />
           {/if}
         {/each}
