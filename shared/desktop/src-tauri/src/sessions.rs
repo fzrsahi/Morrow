@@ -220,7 +220,7 @@ impl Sessions {
             let stale = self
                 .branches
                 .get(session_id)
-                .map_or(true, |(seen, _)| seen != &cwd)
+                .is_none_or(|(seen, _)| seen != &cwd)
                 || event.event_name == "Stop";
             if stale {
                 let info = (!cwd.is_empty())
@@ -633,8 +633,10 @@ mod tests {
         );
         assert_eq!(sessions.snapshot()[0].live_reply, "");
 
-        let mut delta = ScanDelta::default();
-        delta.last_user_prompt = Some("Add filters".into());
+        let mut delta = ScanDelta {
+            last_user_prompt: Some("Add filters".into()),
+            ..ScanDelta::default()
+        };
         assert!(
             !sessions.apply_transcript_delta("a", &delta),
             "a prompt alone shows nothing"
@@ -660,8 +662,10 @@ mod tests {
         assert_eq!(sessions.snapshot()[0].live_reply, "Wired the bar");
 
         // A new turn supersedes the old reply, and a gone session forgets it.
-        let mut next_turn = ScanDelta::default();
-        next_turn.last_user_prompt = Some("Ship it".into());
+        let next_turn = ScanDelta {
+            last_user_prompt: Some("Ship it".into()),
+            ..ScanDelta::default()
+        };
         sessions.apply_transcript_delta("a", &next_turn);
         assert_eq!(sessions.snapshot()[0].live_reply, "");
         sessions.apply(

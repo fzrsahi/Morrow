@@ -547,6 +547,7 @@ mod tests {
         assert!(feed.snapshot().completion.is_none());
     }
 
+    #[test]
     fn a_dead_session_takes_its_cards_with_it() {
         let scratch = Scratch::new();
         let path = scratch.file();

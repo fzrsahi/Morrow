@@ -389,7 +389,7 @@ impl Permissions {
         if self
             .held
             .get(&id)
-            .map_or(true, |(card, _)| question_count(card) != answers.len())
+            .is_none_or(|(card, _)| question_count(card) != answers.len())
         {
             return false;
         }
