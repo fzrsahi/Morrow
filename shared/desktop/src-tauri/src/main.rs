@@ -63,6 +63,13 @@ fn answer_question(feed: State<'_, Arc<Feed>>, id: u64, answer: String) -> bool 
     feed.answer_question(id, &answer)
 }
 
+/// #190: the wizard's answers, one string per question in request order. The
+/// reply is built by the same `question_reply`, so its bytes are #188's shape.
+#[tauri::command]
+fn answer_questions(feed: State<'_, Arc<Feed>>, id: u64, answers: Vec<String>) -> bool {
+    feed.answer_questions(id, answers)
+}
+
 /// #188: Skip closes the card without answering it — deny for AskUserQuestion.
 #[tauri::command]
 fn skip_question(feed: State<'_, Arc<Feed>>, id: u64) -> bool {
@@ -115,6 +122,7 @@ fn main() -> ExitCode {
             subscribe,
             answer_permission,
             answer_question,
+            answer_questions,
             skip_question,
             session_dismiss,
             island::set_island_size,
