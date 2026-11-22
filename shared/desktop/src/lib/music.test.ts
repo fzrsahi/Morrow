@@ -7,11 +7,14 @@ import {
   COLLAPSED_MUSIC_WIDTH,
   COLLAPSED_NO_MUSIC_WIDTH,
   REFRESH_MS,
+  LyricCache,
   collapsedWidth,
   controls,
   currentLyricIndex,
   deckState,
   formatTime,
+  lyricKey,
+  lyricScrollY,
   localPosition,
   progress,
   refreshPlan,
@@ -150,6 +153,61 @@ describe('the collapsed music wing', () => {
   test('a track widens the tight-fit window for the wing', () => {
     expect(COLLAPSED_MUSIC_WIDTH).toBe(292);
     expect(collapsedWidth(playing)).toBe(COLLAPSED_MUSIC_WIDTH);
+  });
+});
+
+describe('lyrics are cached per track', () => {
+  test('the key ignores playback position and status', () => {
+    expect(lyricKey(playing)).toBe(lyricKey({ ...playing, position_us: 0, status: 'Paused' }));
+  });
+
+  test('the key changes with the fields the lyric service asks about', () => {
+    expect(lyricKey({ ...playing, title: 'Other' })).not.toBe(lyricKey(playing));
+    expect(lyricKey({ ...playing, artist: 'Other' })).not.toBe(lyricKey(playing));
+    expect(lyricKey({ ...playing, album: 'Other' })).not.toBe(lyricKey(playing));
+    expect(lyricKey({ ...playing, length_us: 240_000_000 })).not.toBe(lyricKey(playing));
+  });
+
+  test('a fresh track is a cache miss', () => {
+    expect(new LyricCache().get(playing)).toBeUndefined();
+  });
+
+  test('an answer is reused when the same track is read again', () => {
+    const cache = new LyricCache();
+    cache.put(playing, lyrics);
+    expect(cache.get({ ...playing, position_us: 0, status: 'Paused' })).toEqual(lyrics);
+  });
+
+  test('the service having no lyrics is cached as null, not a miss', () => {
+    const cache = new LyricCache();
+    cache.put(playing, null);
+    expect(cache.get(playing)).toBeNull();
+  });
+
+  test('two tracks keep their own answers', () => {
+    const other = { ...playing, title: 'Other' };
+    const cache = new LyricCache();
+    cache.put(playing, lyrics);
+    cache.put(other, null);
+    expect(cache.get(playing)).toEqual(lyrics);
+    expect(cache.get(other)).toBeNull();
+  });
+});
+
+describe('the active lyric scrolls to the middle of the box', () => {
+  // 16 pt per line in a 68 pt content box: line centres at 8, 40, 72 pt;
+  // the box centre is 34 pt, hence offsets of +26, -6 and -38 pt.
+  test('the first line sits below centre before the song gets going', () => {
+    expect(lyricScrollY(0, 5, 16, 68)).toBe(26);
+  });
+
+  test('a middle line is centred wherever it falls in the list', () => {
+    expect(lyricScrollY(2, 5, 16, 68)).toBe(-6);
+    expect(lyricScrollY(4, 5, 16, 68)).toBe(-38);
+  });
+
+  test('no lyric feed has nothing to scroll', () => {
+    expect(lyricScrollY(-1, 0, 16, 68)).toBe(0);
   });
 });
 
