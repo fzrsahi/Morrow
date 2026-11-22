@@ -25,6 +25,7 @@
 
 pub mod agent_tasks;
 pub mod attention;
+pub mod config_roots;
 pub mod digest;
 pub mod discovery;
 pub mod git;
