@@ -6,7 +6,9 @@
 //! runs today.
 
 use std::collections::HashMap;
+use std::path::Path;
 
+use morrow_core::git::{self, Disk, DiskEntry, GitBranchInfo};
 use morrow_core::intake::SourceCatalog;
 use morrow_core::reduce::{
     AgentStatus, HookEvent, ReduceContext, SessionSnapshot, SideEffect, Timestamp, reduce_event,
@@ -89,6 +91,31 @@ pub struct Session {
     pub term_app: String,
     pub tty_path: String,
     pub cli_pid: Option<i32>,
+    /// Checked-out branch of `cwd`, resolved by `morrow_core::git::read`.
+    pub git_branch: String,
+    /// The checkout is a linked worktree; the card marks it with ⧉.
+    pub git_is_worktree: bool,
+    /// The agent's own checklist projected from `SessionSnapshot.agent_tasks`.
+    pub tasks_done: usize,
+    pub tasks_total: usize,
+    pub task_active: String,
+    pub subagent_count: usize,
+    /// Idle-only recap from `SessionSnapshot::visible_recap`.
+    pub recap: String,
+}
+
+/// The core reader walks `.git` without spawning `git`; the shell supplies the
+/// disk it walks (`std::fs`), as a detached read would on macOS.
+struct StdDisk;
+
+impl Disk for StdDisk {
+    fn entry(&self, path: &Path) -> Option<DiskEntry> {
+        match std::fs::metadata(path) {
+            Ok(meta) if meta.is_dir() => Some(DiskEntry::Directory),
+            Ok(_) => std::fs::read_to_string(path).ok().map(DiskEntry::File),
+            Err(_) => None,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -97,6 +124,9 @@ pub struct Sessions {
     last_events: HashMap<String, String>,
     sources: SourceCatalog,
     home_directory: String,
+    /// Last branch reading per session: `(cwd at the time, reading)`. A new
+    /// cwd (or a Stop, where the turn may have switched branches) re-reads it.
+    branches: HashMap<String, (String, Option<GitBranchInfo>)>,
 }
 
 impl Sessions {
@@ -129,10 +159,25 @@ impl Sessions {
             if let SideEffect::RemoveSession { session_id } = effect {
                 self.inner.remove(session_id);
                 self.last_events.remove(session_id);
+                self.branches.remove(session_id);
             }
         }
         let card_id = event.session_id.as_deref().unwrap_or("default");
-        if self.inner.contains_key(card_id) {
+        if let Some(snap) = self.inner.get(card_id) {
+            let cwd = snap.cwd.clone().unwrap_or_default();
+            let stale = self
+                .branches
+                .get(card_id)
+                .map_or(true, |(seen, _)| seen != &cwd)
+                || event.event_name == "Stop";
+            if stale {
+                // Never probe the process' own directory for a session with
+                // no cwd: `git::read("")` would start from a relative `.git`.
+                let info = (!cwd.is_empty())
+                    .then(|| git::read(&cwd, &StdDisk))
+                    .flatten();
+                self.branches.insert(card_id.to_owned(), (cwd, info));
+            }
             self.last_events
                 .insert(card_id.to_owned(), event.event_name);
         }
@@ -145,31 +190,49 @@ impl Sessions {
         let mut sessions: Vec<Session> = self
             .inner
             .iter()
-            .map(|(session_id, snap)| Session {
-                session_id: session_id.clone(),
-                source: snap.source.clone(),
-                last_event: self
-                    .last_events
+            .map(|(session_id, snap)| {
+                let branch = self
+                    .branches
                     .get(session_id)
-                    .cloned()
-                    .unwrap_or_default(),
-                cwd_name: snap
-                    .cwd
-                    .as_deref()
-                    .map(basename)
-                    .unwrap_or_default()
-                    .to_owned(),
-                updated_at: (snap.last_activity.0 * 1000.0).round().max(0.0) as u64,
-                status: card_status(snap),
-                current_tool: snap.current_tool().unwrap_or_default().to_owned(),
-                tool_description: or_empty(&snap.tool_description),
-                last_user_prompt: or_empty(&snap.last_user_prompt),
-                last_assistant_message: or_empty(&snap.last_assistant_message),
-                model: or_empty(&snap.model),
-                cwd: or_empty(&snap.cwd),
-                term_app: or_empty(&snap.term_app),
-                tty_path: or_empty(&snap.tty_path),
-                cli_pid: snap.cli_pid,
+                    .and_then(|(_, info)| info.as_ref());
+                let tasks = &snap.agent_tasks;
+                Session {
+                    session_id: session_id.clone(),
+                    source: snap.source.clone(),
+                    last_event: self
+                        .last_events
+                        .get(session_id)
+                        .cloned()
+                        .unwrap_or_default(),
+                    cwd_name: snap
+                        .cwd
+                        .as_deref()
+                        .map(basename)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    updated_at: (snap.last_activity.0 * 1000.0).round().max(0.0) as u64,
+                    status: card_status(snap),
+                    current_tool: snap.current_tool().unwrap_or_default().to_owned(),
+                    tool_description: or_empty(&snap.tool_description),
+                    last_user_prompt: or_empty(&snap.last_user_prompt),
+                    last_assistant_message: or_empty(&snap.last_assistant_message),
+                    model: or_empty(&snap.model),
+                    cwd: or_empty(&snap.cwd),
+                    term_app: or_empty(&snap.term_app),
+                    tty_path: or_empty(&snap.tty_path),
+                    cli_pid: snap.cli_pid,
+                    git_branch: branch.map_or_else(String::new, |i| i.branch.clone()),
+                    git_is_worktree: branch.is_some_and(|i| i.is_worktree),
+                    tasks_done: tasks.completed_count(),
+                    tasks_total: tasks.items.len(),
+                    task_active: tasks
+                        .current()
+                        .map_or_else(String::new, |task| task.progress_label().to_owned()),
+                    subagent_count: snap.subagents.len(),
+                    recap: snap
+                        .visible_recap()
+                        .map_or_else(String::new, |r| r.text.clone()),
+                }
             })
             .collect();
         sessions.sort_by(|a, b| {
@@ -232,6 +295,13 @@ mod tests {
                 term_app: String::new(),
                 tty_path: String::new(),
                 cli_pid: None,
+                git_branch: String::new(),
+                git_is_worktree: false,
+                tasks_done: 0,
+                tasks_total: 0,
+                task_active: String::new(),
+                subagent_count: 0,
+                recap: String::new(),
             }]
         );
     }
@@ -401,6 +471,103 @@ mod tests {
     }
 
     #[test]
+    fn context_fields_follow_the_core_snapshot_and_refresh_on_cwd_change() {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        use morrow_core::agent_tasks::{AgentTaskItem, AgentTaskList, AgentTaskStatus};
+        use morrow_core::reduce::{AgentStatus, SubagentState, Timestamp};
+        use morrow_core::session_recap::SessionRecap;
+
+        // Two real checkouts: a primary one and a linked worktree, so the
+        // branch comes from the core reader and the worktree mark is honest.
+        let root = std::env::temp_dir().join(format!(
+            "morrow-184-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        ));
+        let primary = root.join("primary");
+        let primary_git = primary.join(".git");
+        std::fs::create_dir_all(&primary_git).unwrap();
+        std::fs::write(primary_git.join("HEAD"), "ref: refs/heads/feat/dashboard\n").unwrap();
+        let worktree = root.join("linked");
+        let worktree_meta = root.join(".git/worktrees/wt");
+        std::fs::create_dir_all(&worktree_meta).unwrap();
+        std::fs::write(
+            worktree_meta.join("HEAD"),
+            "ref: refs/heads/exp/feature-store\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}\n", worktree_meta.display()),
+        )
+        .unwrap();
+
+        let mut sessions = Sessions::default();
+        sessions.apply(
+            &hook(&format!(
+                r#"{{"session_id":"a","hook_event_name":"SessionStart","cwd":"{}"}}"#,
+                primary.display()
+            )),
+            10,
+        );
+        let snap = sessions.inner.get_mut("a").expect("session a");
+        snap.status = AgentStatus::Idle;
+        snap.agent_tasks = AgentTaskList::restored(
+            vec![
+                AgentTaskItem {
+                    id: "1".into(),
+                    task_id: None,
+                    create_op_id: None,
+                    title: "Wire filters".into(),
+                    active_form: Some("Wiring filters".into()),
+                    status: AgentTaskStatus::Completed,
+                },
+                AgentTaskItem {
+                    id: "2".into(),
+                    task_id: None,
+                    create_op_id: None,
+                    title: "Ship it".into(),
+                    active_form: Some("Shipping it".into()),
+                    status: AgentTaskStatus::InProgress,
+                },
+            ],
+            None,
+        );
+        snap.subagents.insert(
+            "sub-1".into(),
+            SubagentState::new("sub-1", "general-purpose", Timestamp(10.0)),
+        );
+        snap.recap = Some(SessionRecap::new("Wired the filters", Timestamp(9.0)));
+
+        let row = &sessions.snapshot()[0];
+        assert_eq!(row.git_branch, "feat/dashboard");
+        assert!(!row.git_is_worktree);
+        assert_eq!(row.tasks_done, 1);
+        assert_eq!(row.tasks_total, 2);
+        assert_eq!(row.task_active, "Shipping it");
+        assert_eq!(row.subagent_count, 1);
+        assert_eq!(row.recap, "Wired the filters");
+
+        // A new cwd on the same session re-reads the branch through the core.
+        sessions.apply(
+            &hook(&format!(
+                r#"{{"session_id":"a","hook_event_name":"PreToolUse","tool_name":"Bash","cwd":"{}"}}"#,
+                worktree.display()
+            )),
+            20,
+        );
+        let row = &sessions.snapshot()[0];
+        assert_eq!(row.git_branch, "exp/feature-store");
+        assert!(row.git_is_worktree);
+
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn needs_you_first_then_working_newest_first_within_each_tier() {
         let mut sessions = Sessions::default();
         sessions.apply(
@@ -412,7 +579,9 @@ mod tests {
             10,
         );
         sessions.apply(
-            &hook(r#"{"session_id":"thinking","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#),
+            &hook(
+                r#"{"session_id":"thinking","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#,
+            ),
             20,
         );
         sessions.apply(
@@ -423,7 +592,10 @@ mod tests {
             &hook(r#"{"session_id":"done","hook_event_name":"UserPromptSubmit","prompt":"hi"}"#),
             31,
         );
-        sessions.apply(&hook(r#"{"session_id":"done","hook_event_name":"Stop"}"#), 32);
+        sessions.apply(
+            &hook(r#"{"session_id":"done","hook_event_name":"Stop"}"#),
+            32,
+        );
         sessions.apply(
             &hook(r#"{"session_id":"idle","hook_event_name":"SessionStart"}"#),
             40,

@@ -353,14 +353,15 @@
     };
   });
 
-  // #183: a card's words can change while its count stays the same, so the
-  // fit trigger reads the rendered fields too. It still goes through this
-  // one path; IslandFit drops a size that has not changed.
+  // #183/#184: a card's words can change while its count stays the same, so
+  // the fit trigger reads every rendered field — including the branch, task
+  // progress, subagent count and recap — too. It still goes through this one
+  // path; IslandFit drops a size that has not changed.
   let sessionContent = $derived(
     sessions
       .map(
         (s) =>
-          `${s.session_id}:${s.status}:${s.current_tool}:${s.tool_description}:${s.last_user_prompt}:${s.last_assistant_message}:${s.updated_at}`,
+          `${s.session_id}:${s.status}:${s.current_tool}:${s.tool_description}:${s.last_user_prompt}:${s.last_assistant_message}:${s.updated_at}:${s.git_branch}:${s.git_is_worktree}:${s.tasks_done}:${s.tasks_total}:${s.task_active}:${s.subagent_count}:${s.recap}`,
       )
       .join('|'),
   );
