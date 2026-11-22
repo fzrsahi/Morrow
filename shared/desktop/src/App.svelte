@@ -7,7 +7,14 @@
   import { Channel, invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { GONE_NOTICE_MS } from './lib/approval';
-  import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './lib/ambient';
+  import {
+    ambientView,
+    pollPlan,
+    probesActive,
+    type AmbientState,
+    type AmbientSupport,
+  } from './lib/ambient';
+  import { isSupported } from './lib/capabilities';
   import CollapsedBar from './lib/components/CollapsedBar.svelte';
   import CompletionCard from './lib/components/CompletionCard.svelte';
   import Header from './lib/components/Header.svelte';
@@ -643,8 +650,10 @@
 
   // Only a machine with a System volume adapter asks for the level. It keeps
   // reading while the bar is collapsed: an OS-level change must raise the HUD.
+  // A locked screen stops the reads too — no sound, no animation, no probe
+  // (#197); the effect resumes the meter when the screen unlocks.
   $effect(() => {
-    if (!volumeCapable) return;
+    if (!volumeCapable || !probesActive(view)) return;
     void readVolume();
     const timer = setInterval(() => void readVolume(), VOLUME_POLL_MS);
     return () => clearInterval(timer);
@@ -695,7 +704,7 @@
   // Only the open Music tab schedules work: a position tick and a slow player
   // re-read. Both timers die on tab switch, collapse, lock or unmount.
   $effect(() => {
-    const plan = refreshPlan(tab, expanded && !view.suspended);
+    const plan = refreshPlan(tab, expanded && probesActive(view));
     if (!plan.active) return;
     void readTrack();
     tickTimer = setInterval(() => {
@@ -721,16 +730,14 @@
       // #199: the table itself lives in the Settings window; the island only
       // needs to know which ambient adapters it may ask.
       const rows = await invoke<CapabilityRow[]>('capabilities');
-      const supported = (feature: string) =>
-        rows.some((row) => row.feature === feature && 'Supported' in row.capability);
       support = {
-        fullscreenDetection: supported('Fullscreen detection'),
-        screenLock: supported('Screen lock'),
+        fullscreenDetection: isSupported(rows, 'Fullscreen detection'),
+        screenLock: isSupported(rows, 'Screen lock'),
       };
       // #201: a machine without notify-send must not claim to remind.
-      notificationsCapable = supported('Notifications');
+      notificationsCapable = isSupported(rows, 'Notifications');
       // #186: shortcut hints are only honest when a global hotkey can fire.
-      hotkeySupported = supported('Global hotkey');
+      hotkeySupported = isSupported(rows, 'Global hotkey');
       // #195: no HUD (and no volume poll) on a machine without the adapter.
       volumeCapable = volumeSupported(rows);
       schedulePoll();
@@ -813,10 +820,13 @@
   }
 
   // The window, not the DOM, hides for a fullscreen app: the island keeps its
-  // measured size so card rectangles and the tight-fit chain stay intact.
+  // measured size so card rectangles and the tight-fit chain stay intact. A
+  // locked screen is different: the window stays drawn, only content probes
+  // (including transcript tails in the shell) stop until it unlocks (#197).
   $effect(() => {
     const hidden = view.hidden;
     invoke('island_visible', { visible: !hidden }).catch(() => {});
+    invoke('set_probes_active', { active: probesActive(view) }).catch(() => {});
   });
 
   // #201: arm one wake-up for the earliest due follow-up. The pure scheduler

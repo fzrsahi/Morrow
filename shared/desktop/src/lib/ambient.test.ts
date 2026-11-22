@@ -2,7 +2,13 @@
 // The polling loop in App.svelte calls the commands this module says to call;
 // the shell owns the actual window hide/show.
 import { describe, expect, test } from 'bun:test';
-import { ambientView, pollPlan, type AmbientState, type AmbientSupport } from './ambient';
+import {
+  ambientView,
+  pollPlan,
+  probesActive,
+  type AmbientState,
+  type AmbientSupport,
+} from './ambient';
 
 const windows: AmbientSupport = { fullscreenDetection: true, screenLock: true };
 const linux: AmbientSupport = { fullscreenDetection: false, screenLock: true };
@@ -58,5 +64,15 @@ describe('pollPlan (#197)', () => {
   test('polling stops when no adapter needs a probe', () => {
     const none: AmbientSupport = { fullscreenDetection: false, screenLock: false };
     expect(pollPlan(ambientView(awake, none), none).active).toBe(false);
+  });
+});
+
+describe('probesActive (#197)', () => {
+  test('an awake screen allows content probes', () => {
+    expect(probesActive(ambientView(awake, windows))).toBe(true);
+  });
+
+  test('a locked screen stops every content probe: volume, music and transcript tails', () => {
+    expect(probesActive(ambientView({ ...awake, locked: true }, windows))).toBe(false);
   });
 });

@@ -29,6 +29,15 @@ export type AmbientView = {
   suspended: boolean;
 };
 
+/**
+ * Every content probe (volume HUD reads, music deck reads and transcript
+ * tails) stops while the screen is locked; only the lock watch stays. The
+ * island window itself stays drawn — see `hidden` for the fullscreen case.
+ */
+export function probesActive(view: AmbientView): boolean {
+  return !view.suspended;
+}
+
 export type PollPlan = {
   fullscreen: boolean;
   quietHours: boolean;
@@ -47,8 +56,9 @@ export function ambientView(state: AmbientState, support: AmbientSupport): Ambie
 
 export function pollPlan(view: AmbientView, support: AmbientSupport): PollPlan {
   // The lock watch is the one probe that must keep running while locked: it is
-  // how the island learns it may wake again. Everything else is a content
-  // probe and stops on lock. On a machine with no fullscreen detection the
+  // how the island learns it may wake again. Everything else — fullscreen,
+  // quiet hours, the volume meter and transcript tails — is a content probe
+  // and stops on lock. On a machine with no fullscreen detection the
   // Windows notification-state probes (fullscreen, quiet hours) are never
   // scheduled at all, and with no lock watch either the loop is not needed.
   const watchState = support.fullscreenDetection && !view.suspended;

@@ -18,7 +18,7 @@ use tauri::ipc::Channel;
 
 use crate::completion::{self, SnapshotCompletion};
 use crate::permissions::{Card, Decision, Permissions};
-use crate::prune::{SessionProcess, Watches};
+use crate::prune::{Pid, SessionProcess, Watches};
 use crate::sessions::{Session, Sessions};
 use crate::transcripts::Tails;
 
@@ -35,9 +35,9 @@ pub struct Snapshot {
 
 /// One push per 1/60 s at most.
 const FRAME: Duration = Duration::from_micros(16_667);
-/// How often a visible panel looks for new transcript bytes. The feed still
-/// coalesces the resulting pushes to `FRAME`; a hidden panel does not wake at
-/// all (see the pusher below).
+/// How often a visible, unlocked panel looks for new transcript bytes. The
+/// feed still coalesces the resulting pushes to `FRAME`; a hidden or locked
+/// panel does not wake at all (see the pusher below).
 const TAIL_POLL: Duration = Duration::from_millis(200);
 
 /// One liveness round per second: well inside the five seconds a dead CLI
@@ -61,9 +61,12 @@ struct State {
     channel: Option<Channel<Snapshot>>,
     /// The frontend has not seen the latest snapshot.
     dirty: bool,
-    /// The island window is showing (#197 hides it for fullscreen/lock). Only
-    /// a visible panel tails transcripts.
+    /// The island window is showing (#197 hides it for fullscreen). Only a
+    /// visible panel tails transcripts.
     visible: bool,
+    /// #197: a locked screen suspends content probes without hiding the
+    /// window. Independent of `visible` so fullscreen hiding is unchanged.
+    probes_active: bool,
     tails: Tails,
 }
 
@@ -77,6 +80,7 @@ impl Default for State {
             channel: None,
             dirty: false,
             visible: true,
+            probes_active: true,
             tails: Tails::default(),
         }
     }
@@ -166,12 +170,26 @@ impl Feed {
         self.changed.notify_one();
     }
 
+    /// #197: suspend content probes on a locked screen without touching the
+    /// window. As with hiding, the attachments go: resuming backfills from the
+    /// tail instead of replaying a stale offset.
+    pub fn set_probes_active(&self, active: bool) {
+        let mut state = self.lock();
+        if state.probes_active == active {
+            return;
+        }
+        state.probes_active = active;
+        if !active {
+            state.tails = Tails::default();
+        }
+    }
+
     /// Read whatever the visible panel's sessions have appended. Called by
-    /// the pusher on its timeout, never from a hidden panel; hooks still
-    /// arrive and are reduced regardless of visibility.
+    /// the pusher on its timeout, never from a hidden or locked panel; hooks
+    /// still arrive and are reduced regardless of visibility.
     pub fn poll_transcripts(&self) {
         let mut state = self.lock();
-        if !state.visible {
+        if !state.visible || !state.probes_active {
             return;
         }
         let paths = state.sessions.transcript_paths();
@@ -255,7 +273,7 @@ impl Feed {
     /// exercised without real processes; `prune_dead` supplies the shell's.
     fn prune_with(
         &self,
-        capture: impl FnMut(i32) -> Option<Watch>,
+        capture: impl FnMut(Pid) -> Option<Watch>,
         alive: impl FnMut(Watch) -> bool,
     ) {
         let mut state = self.lock();
@@ -324,10 +342,11 @@ impl Feed {
                     let (snapshot, channel) = {
                         let mut state = feed.lock();
                         while !(state.dirty && state.channel.is_some()) {
-                            if state.visible {
-                                // Only a showing panel wakes on its own: that
-                                // wake is the transcript poll. A hidden one
-                                // waits for a hook or a subscribe instead.
+                            if state.visible && state.probes_active {
+                                // Only a showing, unlocked panel wakes on its
+                                // own: that wake is the transcript poll. A
+                                // hidden or locked one waits for a hook or a
+                                // subscribe instead.
                                 let (next, elapsed) = feed
                                     .changed
                                     .wait_timeout(state, TAIL_POLL)
@@ -465,6 +484,33 @@ mod tests {
         ));
         assert!(feed.lock().sessions.snapshot().is_empty());
         assert!(!feed.lock().tails.has("a"));
+    }
+
+    #[test]
+    fn suspending_probes_stops_tails_without_hiding_the_island() {
+        let scratch = Scratch::new();
+        let path = scratch.file();
+        fs::write(&path, format!("{REPLY}\n")).expect("write transcript");
+        let feed = Feed::default();
+        feed.record(&hook(&format!(
+            r#"{{"session_id":"a","hook_event_name":"SessionStart","transcript_path":"{}"}}"#,
+            path.display()
+        )));
+
+        // A locked screen suspends content probes but leaves the window drawn.
+        feed.set_probes_active(false);
+        append(&path, NEXT_REPLY);
+        feed.poll_transcripts();
+        assert_eq!(live_reply(&feed), "", "no reads while probes are suspended");
+        assert!(feed.lock().visible, "the island stays visible while locked");
+
+        feed.set_probes_active(true);
+        feed.poll_transcripts();
+        assert_eq!(
+            live_reply(&feed),
+            "Wired the bar",
+            "resuming picks up what was appended while locked"
+        );
     }
 
     #[test]
