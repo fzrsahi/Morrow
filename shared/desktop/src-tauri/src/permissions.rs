@@ -45,8 +45,19 @@ pub struct QuestionOption {
     pub description: String,
 }
 
-/// The question a card shows. Single choice only in #188 — #189/#190 add
-/// typing and the multi-question wizard.
+/// One step of a multi-question request (#190). Each maps to one entry in
+/// `tool_input.questions`, so the panel's wizard and the reply stay aligned.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct QuestionPrompt {
+    pub question: String,
+    pub header: String,
+    pub options: Vec<QuestionOption>,
+    pub multi_select: bool,
+}
+
+/// The question a card shows. #188 keeps the first question's fields; #190
+/// adds every prompt of the request for the wizard. The reply bytes are still
+/// built from `tool_input` by [`question_reply`], so they are unchanged.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct QuestionCard {
     pub question: String,
@@ -55,6 +66,65 @@ pub struct QuestionCard {
     /// How the hook was answered: AskUserQuestion needs `updatedInput.answers`,
     /// a Notification question needs a flat `answer`.
     pub from_permission: bool,
+    /// #190: true when the question accepts more than one pick.
+    pub multi_select: bool,
+    /// #190: every question in one request, in order.
+    pub prompts: Vec<QuestionPrompt>,
+}
+
+/// One `questions[]` entry of an AskUserQuestion request (#190).
+fn prompt_from(value: &Value) -> QuestionPrompt {
+    let question = value
+        .get("question")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let header = value
+        .get("header")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
+    let multi_select = value
+        .get("multiSelect")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let options = value
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .map(|value| QuestionOption {
+                    label: value
+                        .get("label")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    description: value
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    QuestionPrompt {
+        question,
+        header,
+        options,
+        multi_select,
+    }
+}
+
+/// A single prompt from a flat question + string options (Notification / legacy).
+fn flat_prompt(text: &str, options: Vec<QuestionOption>) -> QuestionPrompt {
+    QuestionPrompt {
+        question: text.to_owned(),
+        header: String::new(),
+        options,
+        multi_select: false,
+    }
 }
 
 /// Parse the hook into the question the panel draws, if it is one.
@@ -64,16 +134,19 @@ fn question(payload: &HookPayload) -> Option<QuestionCard> {
         description: String::new(),
     };
     if let Some(text) = notification_question(payload) {
-        let options = payload
+        let options: Vec<QuestionOption> = payload
             .get("options")
             .and_then(Value::as_array)
             .map(|values| values.iter().filter_map(Value::as_str).map(option).collect())
             .unwrap_or_default();
+        let prompt = flat_prompt(text, options);
         return Some(QuestionCard {
             question: text.to_owned(),
             header: String::new(),
-            options,
+            options: prompt.options.clone(),
             from_permission: false,
+            multi_select: false,
+            prompts: vec![prompt],
         });
     }
     if payload.hook_event_name() != "PermissionRequest" {
@@ -89,37 +162,14 @@ fn question(payload: &HookPayload) -> Option<QuestionCard> {
             .get("question")
             .and_then(Value::as_str)
             .filter(|text| !text.is_empty())?;
-        let header = first
-            .get("header")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let options = first
-            .get("options")
-            .and_then(Value::as_array)
-            .map(|values| {
-                values
-                    .iter()
-                    .map(|value| QuestionOption {
-                        label: value
-                            .get("label")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                        description: value
-                            .get("description")
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_owned(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
+        let prompts: Vec<QuestionPrompt> = questions.iter().map(prompt_from).collect();
         return Some(QuestionCard {
             question: text.to_owned(),
-            header,
-            options,
+            header: prompts[0].header.clone(),
+            options: prompts[0].options.clone(),
             from_permission: true,
+            multi_select: prompts[0].multi_select,
+            prompts,
         });
     }
     // Legacy shape: `question` plus an array of string options.
@@ -132,11 +182,14 @@ fn question(payload: &HookPayload) -> Option<QuestionCard> {
         .and_then(Value::as_array)
         .map(|values| values.iter().filter_map(Value::as_str).map(option).collect())
         .unwrap_or_default();
+    let prompt = flat_prompt(text, options);
     Some(QuestionCard {
         question: text.to_owned(),
         header: String::new(),
-        options,
+        options: prompt.options.clone(),
         from_permission: true,
+        multi_select: false,
+        prompts: vec![prompt],
     })
 }
 
@@ -164,6 +217,15 @@ fn answer_keys(questions: &[Value]) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// How many questions a held request asks. A wizard has one answer per entry;
+/// Notification and legacy questions have exactly one.
+fn question_count(card: &Card) -> usize {
+    card.tool_input
+        .get("questions")
+        .and_then(Value::as_array)
+        .map_or(1, Vec::len)
 }
 
 /// The reply bytes for one or more question picks. The wrapper and key order
@@ -301,9 +363,25 @@ impl Permissions {
     /// #188: a picked option sends `allow` with `updatedInput.answers` keyed
     /// by question text (or a flat `answer` for a Notification question).
     pub fn answer_question(&mut self, id: u64, pick: &str) -> bool {
+        self.answer_questions(id, vec![pick.to_owned()])
+    }
+
+    /// #190: one answer per question of a wizard request, in question order.
+    /// Refuses a set that does not match this request's question count — such
+    /// answers were collected for another request and would answer the wrong
+    /// CLI. The card stays held so the user can answer the right one.
+    pub fn answer_questions(&mut self, id: u64, answers: Vec<String>) -> bool {
+        if self
+            .held
+            .get(&id)
+            .map_or(true, |(card, _)| question_count(card) != answers.len())
+        {
+            return false;
+        }
         match self.held.remove(&id) {
             Some((card, answer)) => {
-                answer.send(question_reply(&card, &[(0, pick.to_owned())])).is_ok()
+                let picks: Vec<(usize, String)> = answers.into_iter().enumerate().collect();
+                answer.send(question_reply(&card, &picks)).is_ok()
             }
             None => false,
         }
@@ -369,6 +447,7 @@ mod tests {
     /// their text on purpose — Swift's dedup golden uses these very strings.
     const ASK_TWO: &str = r#"{"session_id":"s","hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"重复的问题","header":"偏好","options":[{"label":"A","description":""}]},{"question":"重复的问题","header":"其他","options":[{"label":"D","description":""}]}]}}"#;
     const ASK_NO_HEADER: &str = r#"{"session_id":"s","hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"没有 header","options":[{"label":"B","description":""}]}]}}"#;
+    const ASK_MULTI: &str = r#"{"session_id":"s","hook_event_name":"PermissionRequest","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which filters?","header":"Filters","multiSelect":true,"options":[{"label":"Date range","description":""},{"label":"Customer","description":""}]}]}}"#;
     const NOTIFY_QUESTION: &str = r#"{"session_id":"s","hook_event_name":"Notification","message":"Claude needs your input","question":"Continue?","options":["Yes","No"]}"#;
 
     /// A held question card, as the panel sees it.
@@ -431,6 +510,78 @@ mod tests {
         .unwrap();
         assert!(reply.contains(r#""answers":{"没有 header":"B"}"#), "{reply}");
         assert!(!reply.contains(r#""header":"#), "{reply}");
+    }
+
+    /// #190: the wizard collects one answer per question, but the reply it
+    /// sends is byte for byte the #188 reply — same keys, same dedup, same
+    /// `answer` — only with more entries in `answers`.
+    #[test]
+    fn wizard_answers_keep_the_single_question_reply_shape() {
+        let mut permissions = Permissions::default();
+        let (tx, rx) = mpsc::channel();
+        let id = permissions.hold(&hook(ASK_TWO), tx);
+        assert!(permissions.answer_questions(id, vec!["A".into(), "D".into()]));
+        assert_eq!(
+            String::from_utf8(rx.try_recv().unwrap()).unwrap(),
+            r#"{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow","updatedInput":{"questions":[{"question":"重复的问题","header":"偏好","options":[{"label":"A","description":""}]},{"question":"重复的问题","header":"其他","options":[{"label":"D","description":""}]}],"answers":{"重复的问题":"A","重复的问题_2":"D"},"answer":"A"}}}}"#
+        );
+        assert!(permissions.cards().is_empty());
+    }
+
+    /// #190: a multi-select joins its labels into ONE string value, as macOS
+    /// `confirmMultiSelect()` does — the answers map stays `[String: String]`.
+    #[test]
+    fn a_multi_select_answer_is_one_joined_string_value() {
+        let mut permissions = Permissions::default();
+        let (tx, rx) = mpsc::channel();
+        let id = permissions.hold(&hook(ASK_MULTI), tx);
+        assert!(permissions.answer_questions(id, vec!["Date range, Customer".into()]));
+        let reply = String::from_utf8(rx.try_recv().unwrap()).unwrap();
+        assert!(
+            reply.contains(r#""answers":{"Which filters?":"Date range, Customer"}"#),
+            "{reply}"
+        );
+    }
+
+    #[test]
+    fn a_card_exposes_every_question_and_the_multi_select_flag() {
+        let two = question_card(ASK_TWO);
+        let card = two.question.as_ref().unwrap();
+        assert_eq!(card.prompts.len(), 2);
+        assert_eq!(card.prompts[0].question, "重复的问题");
+        assert_eq!(card.prompts[1].header, "其他");
+        assert!(!card.multi_select);
+
+        let multi = question_card(ASK_MULTI);
+        let card = multi.question.as_ref().unwrap();
+        assert!(card.multi_select);
+        assert!(card.prompts[0].multi_select);
+        assert_eq!(card.prompts[0].options[1].label, "Customer");
+    }
+
+    /// #190: a set of answers that is not one per this request's questions is
+    /// refused and leaves the card held — the panel can never answer one
+    /// session's question with another request's wizard answers.
+    #[test]
+    fn wizard_answers_reach_only_their_own_request() {
+        let mut permissions = Permissions::default();
+        let (tx1, rx1) = mpsc::channel();
+        let (tx2, rx2) = mpsc::channel();
+        let first = permissions.hold(&hook(ASK_TWO), tx1);
+        let second = permissions.hold(&hook(ASK_NO_HEADER), tx2);
+
+        assert!(!permissions.answer_questions(first, vec!["A".into()]));
+        assert_eq!(rx1.try_recv(), Err(TryRecvError::Empty));
+        assert!(permissions.cards().iter().any(|c| c.id == first));
+
+        assert!(permissions.answer_questions(second, vec!["B".into()]));
+        assert_eq!(rx1.try_recv(), Err(TryRecvError::Empty));
+        assert!(permissions.answer_questions(first, vec!["A".into(), "D".into()]));
+        assert!(String::from_utf8(rx1.try_recv().unwrap())
+            .unwrap()
+            .contains(r#""重复的问题_2":"D""#));
+        assert!(rx2.try_recv().is_ok(), "the other request got its own reply");
+        assert!(permissions.cards().is_empty());
     }
 
     #[test]

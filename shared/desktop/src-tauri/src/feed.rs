@@ -210,6 +210,11 @@ impl Feed {
         self.change(|state| state.permissions.answer_question(id, pick))
     }
 
+    /// #190: one answer per question of a wizard request, in question order.
+    pub fn answer_questions(&self, id: u64, answers: Vec<String>) -> bool {
+        self.change(|state| state.permissions.answer_questions(id, answers))
+    }
+
     /// #188: the question card was skipped, not answered.
     pub fn skip_question(&self, id: u64) -> bool {
         self.change(|state| state.permissions.skip_question(id))

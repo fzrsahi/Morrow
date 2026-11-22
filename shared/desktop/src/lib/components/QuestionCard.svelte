@@ -1,14 +1,16 @@
 <script lang="ts">
   // #188 — the single-choice Question card of sections #question /
-  // #collapsed-attention. The shell holds the hook and writes the answer;
-  // this component only draws the options and forwards the pick / Skip / Hide.
+  // #collapsed-attention. The shell holds the hook and writes the answer.
+  // #190 — #question-multi: multi-select rows and the multi-question wizard.
+  // This component only draws the current prompt and forwards the actions;
+  // the shell owns the per-request wizard state and builds the reply.
   import Mascot from './Mascot.svelte';
   import PixelIcon from './PixelIcon.svelte';
   import { GONE_NOTICE, SHORTCUTS, queueLabel, shortcutHint } from '../approval';
   import { MASCOT_SIZES } from '../mascots';
   import { PALETTE } from '../tokens';
   import type { QuestionCardView } from '../question';
-  import type { Session } from '../types';
+  import type { QuestionPrompt, Session } from '../types';
 
   type Props = {
     card: QuestionCardView;
@@ -17,10 +19,23 @@
     position?: number;
     total?: number;
     hotkeySupported?: boolean;
-    /** The label being answered (click or number key): held for the in-flight reply. */
-    selected?: string | null;
+    /** The prompt shown at the current wizard step. */
+    prompt: QuestionPrompt;
+    /** n/total chip; empty for a single-question request. */
+    chip?: string;
+    /** Indices picked at this step (multi-select may hold several). */
+    picks?: number[];
+    canBack?: boolean;
+    /** Confirm / Next is enabled only when the current step has a pick. */
+    canAdvance?: boolean;
+    isLast?: boolean;
     gone?: boolean;
+    /** #188: a click answers a single-choice question at once. */
     onPick: (id: number, label: string) => void;
+    /** #190: toggle an option of the current prompt. */
+    onToggle: (id: number, index: number) => void;
+    onBack: (id: number) => void;
+    onAdvance: (id: number) => void;
     onSkip: (id: number) => void;
     onHide: (id: number) => void;
   };
@@ -30,9 +45,17 @@
     position = 1,
     total = 1,
     hotkeySupported = false,
-    selected = null,
+    prompt,
+    chip = '',
+    picks = [],
+    canBack = false,
+    canAdvance = false,
+    isLast = true,
     gone = false,
     onPick,
+    onToggle,
+    onBack,
+    onAdvance,
     onSkip,
     onHide,
   }: Props = $props();
@@ -40,6 +63,7 @@
   let hovered = $state(-1);
   let queue = $derived(queueLabel(position, total));
   let hideKey = $derived(shortcutHint(SHORTCUTS.hide, hotkeySupported));
+  let immediate = $derived(!prompt.multi_select && chip === '');
 </script>
 
 <!-- data-card is the E2E-1 seam, shared with the approval card. -->
@@ -66,22 +90,34 @@
   {/if}
   <div class="qh">
     <span class="qmark">?</span>
-    {#if card.question.header}<span class="tagq">{card.question.header}</span>{/if}
-    <span class="qt">{card.question.question}</span>
+    {#if prompt.header}<span class="tagq">{prompt.header}</span>{/if}
+    <span class="qt">{prompt.question}</span>
+    {#if chip}<span class="prog">{chip}</span>{/if}
   </div>
   <div class="opts">
-    {#each card.question.options as option, i (i)}
+    {#each prompt.options as option, i (i)}
       <button
         class="opt"
         class:hov={hovered === i}
-        class:sel={selected === option.label}
-        disabled={gone || selected !== null}
+        class:sel={picks.includes(i)}
+        disabled={gone}
+        aria-pressed={prompt.multi_select ? picks.includes(i) : undefined}
         onpointerenter={() => (hovered = i)}
         onpointerleave={() => (hovered = -1)}
-        onclick={() => onPick(card.id, option.label)}
+        onclick={() => (immediate ? onPick(card.id, option.label) : onToggle(card.id, i))}
       >
         <span class="mk">▸</span>
-        <span class="ix">{i + 1}.</span>
+        {#if prompt.multi_select}
+          <span class="cb" aria-hidden="true">
+            {#if picks.includes(i)}
+              <svg viewBox="0 0 16 16" width="9" height="9">
+                <path d="M3.5 8.5l3 3 6-7" stroke="#000" stroke-width="2" fill="none" />
+              </svg>
+            {/if}
+          </span>
+        {:else}
+          <span class="ix">{i + 1}.</span>
+        {/if}
         <span class="body">
           <span class="ol">{option.label}</span>
           {#if option.description}<span class="od">{option.description}</span>{/if}
@@ -90,10 +126,22 @@
     {/each}
   </div>
   <div class="acts">
+    {#if canBack}
+      <button class="btn q back" disabled={gone} onclick={() => onBack(card.id)}>
+        <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden="true">
+          <path d="M9.5 4L5.5 8l4 4" stroke="currentColor" stroke-width="1.5" fill="none" />
+        </svg>
+        Back
+      </button>
+    {/if}
     <span class="sp"></span>
     <button class="btn q" disabled={gone} onclick={() => onHide(card.id)}
       >Hide{#if hideKey}<kbd>{hideKey}</kbd>{/if}</button>
     <button class="btn s" disabled={gone} onclick={() => onSkip(card.id)}>Skip</button>
+    {#if !immediate}
+      <button class="btn p" disabled={gone || !canAdvance} onclick={() => onAdvance(card.id)}
+        >{isLast ? 'Confirm' : 'Next'}</button>
+    {/if}
   </div>
 </section>
 
@@ -271,6 +319,52 @@
   }
   .s:hover:not(:disabled) {
     background: rgba(255, 255, 255, 0.08);
+  }
+  /* #190 — wizard progress chip (#question-multi). */
+  .prog {
+    margin-left: auto;
+    padding: 1px 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.1);
+    color: rgba(255, 255, 255, 0.6);
+    font: 700 var(--f-badge) ui-monospace, monospace;
+  }
+  /* #190 — multi-select checkbox, blue when picked. */
+  .cb {
+    display: inline-grid;
+    place-items: center;
+    width: 11px;
+    height: 11px;
+    border-radius: 2px;
+    box-shadow: inset 0 0 0 1.2px rgba(255, 255, 255, 0.55);
+  }
+  .opt.sel .cb {
+    background: var(--qblue);
+    box-shadow: none;
+  }
+  .btn.back {
+    padding: 6px 8px;
+    gap: 4px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.75);
+  }
+  .btn.back:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.07);
+  }
+  .btn.p {
+    padding: 6px 14px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--allow);
+  }
+  .btn.p:hover:not(:disabled) {
+    background: var(--allow);
+    filter: brightness(1.08);
+  }
+  .btn.p:disabled {
+    background: rgba(41, 128, 61, 0.22);
+    color: rgba(255, 255, 255, 0.35);
+    cursor: default;
   }
   kbd {
     padding: 1px 4px;

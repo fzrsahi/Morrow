@@ -49,6 +49,14 @@ export type ToolInput = Record<string, unknown> | null;
 /** #188 — one OptionRow of a Question card. */
 export type QuestionOption = { label: string; description: string };
 
+/** #190 — one step of a multi-question request. */
+export type QuestionPrompt = {
+  question: string;
+  header: string;
+  options: QuestionOption[];
+  multi_select: boolean;
+};
+
 /** #188 — the question a card draws (AskUserQuestion or Notification). */
 export type QuestionCard = {
   question: string;
@@ -56,6 +64,10 @@ export type QuestionCard = {
   options: QuestionOption[];
   /** AskUserQuestion replies need `updatedInput.answers`; Notification does not. */
   from_permission: boolean;
+  /** #190: true when this question accepts more than one pick. */
+  multi_select: boolean;
+  /** #190: every question in one request; empty for a single question. */
+  prompts: QuestionPrompt[];
 };
 
 export type Card = {
