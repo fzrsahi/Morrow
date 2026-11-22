@@ -18,10 +18,10 @@
     quiet?: boolean;
     /** First working/thinking session from the shell's ordered list. */
     active?: Session | null;
-    /** #186: approvals the user hid are still pending — the bell stays. */
-    hiddenApprovals?: number;
-    /** #188: hidden questions keep the amber `?` of canvas #collapsed-attention. */
-    hiddenQuestions?: number;
+    /** #186/#201: approvals still waiting (hidden or followed up) keep the bell. */
+    hintedApprovals?: number;
+    /** #188/#201: questions still waiting keep the amber `?` of #collapsed-attention. */
+    hintedQuestions?: number;
     /** #193: currently playing track; null leaves the #183 bar untouched. */
     track?: Track | null;
     /** #191: last turn finished — canvas #collapsed-attention's cyan check. */
@@ -34,8 +34,8 @@
     prehover = false,
     quiet = false,
     active = null,
-    hiddenApprovals = 0,
-    hiddenQuestions = 0,
+    hintedApprovals = 0,
+    hintedQuestions = 0,
     track = null,
     glance = false,
     glanceLabel = '',
@@ -142,8 +142,9 @@
     {:else}
       <PixelIcon name="workspace" size={1.5} color={PALETTE.textDim} />
     {/if}
-    {#if hiddenApprovals > 0}
-      <!-- #186: canvas #collapsed-attention — a request was hidden, not answered. -->
+    {#if hintedApprovals > 0}
+      <!-- #186/#201: canvas #collapsed-attention — a request still waits: it was
+           hidden, or its follow-up notification has gone out. -->
       <svg
         class="bell"
         viewBox="0 0 16 16"
@@ -155,21 +156,21 @@
         stroke-linecap="round"
         stroke-linejoin="round"
         role="img"
-        aria-label="{hiddenApprovals} hidden approvals waiting"
+        aria-label="{hintedApprovals} approvals waiting"
       >
         <path d="M4 11V7.5a4 4 0 0 1 8 0V11l1 1.2H3z" />
         <path d="M6.8 13.6a1.3 1.3 0 0 0 2.4 0" />
       </svg>
     {/if}
-    {#if hiddenQuestions > 0}
-      <!-- #188: canvas #collapsed-attention's `question-dismissed`: the user
-           hid the card, so the question bubble waits without pulsing. -->
+    {#if hintedQuestions > 0}
+      <!-- #188/#201: canvas #collapsed-attention's question bubble: the card
+           was hidden or its follow-up went out, so the question still waits. -->
       <svg
         class="qbubble"
         viewBox="0 0 15 14"
         width="15"
         height="14"
-        aria-label="{hiddenQuestions} hidden questions waiting"
+        aria-label="{hintedQuestions} questions waiting"
         role="img"
       >
         <path
