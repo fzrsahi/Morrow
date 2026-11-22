@@ -30,6 +30,8 @@ export type Session = {
   term_app: string;
   tty_path: string;
   cli_pid: number | null;
+  /** #187 — remote sessions have no local window; the jump icon is hidden. */
+  is_remote: boolean;
   /** #184 — checked-out branch, empty when the cwd is not a git checkout. */
   git_branch: string;
   /** Linked worktree; the card appends ⧉ to the branch. */

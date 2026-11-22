@@ -100,6 +100,9 @@ pub struct Session {
     pub term_app: String,
     pub tty_path: String,
     pub cli_pid: Option<i32>,
+    /// A remote session has no window on this machine; the card hides its jump
+    /// icon (#187).
+    pub is_remote: bool,
     /// Checked-out branch of `cwd`, resolved by `morrow_core::git::read`.
     pub git_branch: String,
     /// The checkout is a linked worktree; the card marks it with ⧉.
@@ -342,6 +345,7 @@ impl Sessions {
                     term_app: or_empty(&snap.term_app),
                     tty_path: or_empty(&snap.tty_path),
                     cli_pid: snap.cli_pid,
+                    is_remote: snap.is_remote(),
                     git_branch: branch.map_or_else(String::new, |i| i.branch.clone()),
                     git_is_worktree: branch.is_some_and(|i| i.is_worktree),
                     tasks_done: tasks.completed_count(),
@@ -435,6 +439,7 @@ mod tests {
                 term_app: String::new(),
                 tty_path: String::new(),
                 cli_pid: None,
+                is_remote: false,
                 git_branch: String::new(),
                 git_is_worktree: false,
                 tasks_done: 0,
@@ -444,6 +449,18 @@ mod tests {
                 recap: String::new(),
             }]
         );
+    }
+
+    #[test]
+    fn a_remote_session_is_marked_so_its_card_hides_the_jump_icon() {
+        let mut sessions = Sessions::default();
+        sessions.apply(
+            &hook(
+                r#"{"session_id":"r","hook_event_name":"SessionStart","cwd":"/srv/app","_remote_host_id":"devbox"}"#,
+            ),
+            10,
+        );
+        assert!(sessions.snapshot()[0].is_remote);
     }
 
     #[test]
