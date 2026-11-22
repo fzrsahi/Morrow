@@ -49,6 +49,9 @@ pub enum Feature {
     TerminalActivator,
     TerminalVisibility,
     Anchoring,
+    /// #196: whether the app may place the panel itself (X11/Windows), or the
+    /// compositor owns window position (Wayland).
+    IslandReposition,
     ProcessTable,
     GlobalHotkey,
     PointerMonitor,
@@ -74,6 +77,7 @@ impl Feature {
         Feature::SystemVolume,
         Feature::TerminalActivator,
         Feature::TerminalVisibility,
+        Feature::IslandReposition,
         Feature::ProcessTable,
         Feature::GlobalHotkey,
         Feature::PointerMonitor,
@@ -100,6 +104,7 @@ impl Feature {
             Self::TerminalActivator => "Jump to terminal",
             Self::TerminalVisibility => "Terminal visibility",
             Self::Anchoring => "Panel anchoring",
+            Self::IslandReposition => "Island repositioning",
             Self::ProcessTable => "Process table",
             Self::GlobalHotkey => "Global hotkey",
             Self::PointerMonitor => "Pointer outside the island",
@@ -180,6 +185,21 @@ impl Feature {
                 crate::compositor::Anchoring::Available => Capability::Supported,
                 crate::compositor::Anchoring::Unavailable(reason) => Capability::Degraded(reason),
             },
+            // A window manager honours a placement request; on Wayland the
+            // compositor places surfaces, so drag is stated, not simulated.
+            Self::IslandReposition => {
+                if environment.is_x11() {
+                    Capability::Supported
+                } else if environment.is_wayland() {
+                    Capability::Unsupported(
+                        "Wayland lets the compositor place windows; the island stays at the top centre here".into(),
+                    )
+                } else {
+                    Capability::Unsupported(
+                        "no display: there is nowhere to move the island".into(),
+                    )
+                }
+            }
             Self::ProcessTable => Capability::Supported,
             Self::GlobalHotkey => {
                 if environment.is_x11() {
@@ -330,6 +350,8 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         // A Win32 window can be topsmost and non-activating; there is no
         // separate anchoring protocol to lack.
         Feature::Anchoring => Capability::Supported,
+        // SetWindowPos: Windows lets the app place its own window.
+        Feature::IslandReposition => Capability::Supported,
         Feature::ProcessTable => Capability::Supported,
         Feature::GlobalHotkey => Capability::Supported,
         // `GetCursorPos` is global on Windows, unlike on Wayland.
@@ -413,7 +435,11 @@ impl Environment {
             .map_or_else(|| home.join(".config"), std::path::PathBuf::from);
         let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
             .map_or_else(|| home.join(".claude"), std::path::PathBuf::from);
-        let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+        let session_type = std::env::var("XDG_SESSION_TYPE").ok().or_else(|| {
+            std::env::var_os("WAYLAND_DISPLAY")
+                .is_some()
+                .then(|| "wayland".to_owned())
+        });
         Self {
             os: Os::current(),
             session_type,
@@ -433,6 +459,12 @@ impl Environment {
             .as_deref()
             .is_some_and(|kind| kind.eq_ignore_ascii_case("x11"))
             || (self.session_type.is_none() && std::env::var_os("DISPLAY").is_some())
+    }
+
+    fn is_wayland(&self) -> bool {
+        self.session_type
+            .as_deref()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("wayland"))
     }
 
     fn has_bus(&self) -> bool {

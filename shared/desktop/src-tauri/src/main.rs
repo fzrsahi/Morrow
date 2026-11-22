@@ -10,8 +10,11 @@ mod island;
 mod listener;
 mod music;
 mod permissions;
+mod peek_window;
+mod position;
 mod sessions;
 mod settings;
+mod settings_window;
 mod tray;
 #[cfg(windows)]
 mod windows_panel;
@@ -70,6 +73,7 @@ fn main() -> ExitCode {
     }
 
     let hooks_site = hooks::site();
+    let position = position::Store::new(&hooks_site.paths.codeisland_dir);
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
     Feed::spawn_pusher(Arc::clone(&feed), move |sessions, cards| {
@@ -83,10 +87,14 @@ fn main() -> ExitCode {
         .manage(feed)
         .manage(hooks_site)
         .manage(Smoke(smoke))
+        .manage(position)
         .invoke_handler(tauri::generate_handler![
             subscribe,
             answer_permission,
             island::set_island_size,
+            island::move_island,
+            island::commit_island_position,
+            island::reset_island_position,
             island::smoke_card,
             island::quit,
             island::island_visible,
@@ -107,6 +115,8 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            settings_window::open_settings,
+            peek_window::close_peek,
             music::music_track,
             music::music_position,
             music::music_play_pause,
@@ -130,6 +140,7 @@ fn main() -> ExitCode {
         ])
         .setup(|app| {
             island::create(app)?;
+            peek_window::maybe_show(app)?;
             tray::create(app);
             hotkey::install(app.handle());
             Ok(())
