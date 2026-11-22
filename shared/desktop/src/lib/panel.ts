@@ -25,6 +25,11 @@ export const OPEN_BOTTOM_RADIUS = 24;
 export const COLLAPSED_BOTTOM_RADIUS = 12;
 export const COLLAPSE_DELAY_MS = MOTION.dwell * 1000;
 export const QUIT_CONFIRM_MS = 3000;
+/** #196: the collapsed bar needs 4 px before a pointer move is a drag, so a
+ *  click still reaches the button and opens the panel. */
+export const DRAG_THRESHOLD_PX = 4;
+/** #196: an island returned within this radius of home is top-centre again. */
+export const SNAP_HOME_PX = 24;
 
 /** B clears the GNOME top bar; A is the only variant that covers the clock. */
 export function resolveVariant(query: string | null | undefined): PanelVariant {
@@ -180,6 +185,54 @@ export class CollapseGate {
   shouldCollapse(now: number, blocked: boolean, dwell = COLLAPSE_DELAY_MS): boolean {
     return !blocked && this.leftAt !== null && now - this.leftAt >= dwell;
   }
+}
+
+export type Point = { x: number; y: number };
+export type Offset = Point;
+
+/** Decides whether a pointer gesture on the collapsed bar is a click or a drag.
+ *  The DOM forwards pointer events; the threshold stays here so it can be
+ *  tested without a window. Distances are in CSS (logical) pixels. */
+export class DragGate {
+  private start: Point | null = null;
+  private active = false;
+
+  get dragging(): boolean {
+    return this.active;
+  }
+
+  down(x: number, y: number): void {
+    this.start = { x, y };
+    this.active = false;
+  }
+
+  /** Returns true once the gesture has crossed the threshold. */
+  move(x: number, y: number): boolean {
+    if (this.start === null) return false;
+    if (!this.active && Math.hypot(x - this.start.x, y - this.start.y) >= DRAG_THRESHOLD_PX) {
+      this.active = true;
+    }
+    return this.active;
+  }
+
+  /** The pointer movement since pointerdown, in logical pixels. */
+  delta(x: number, y: number): Offset {
+    if (this.start === null) return { x: 0, y: 0 };
+    return { x: x - this.start.x, y: y - this.start.y };
+  }
+
+  /** Returns true when the gesture was a drag, so the click must be swallowed. */
+  up(): boolean {
+    const wasDrag = this.active;
+    this.start = null;
+    this.active = false;
+    return wasDrag;
+  }
+}
+
+/** A small offset is the user failing to land exactly on home, not a new spot. */
+export function snapOffset(offset: Offset, radius = SNAP_HOME_PX): Offset {
+  return Math.hypot(offset.x, offset.y) <= radius ? { x: 0, y: 0 } : offset;
 }
 
 /** Power button: the first click becomes QUIT?, the second confirms within 3 s. */

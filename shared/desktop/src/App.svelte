@@ -18,10 +18,13 @@
     OPEN_TRANSITION,
     OPEN_WIDTH,
     CollapseGate,
+    DragGate,
     IslandFit,
     QuitGate,
     islandShape,
     resolveVariant,
+    snapOffset,
+    type Offset,
     type PanelTab,
     type SessionFilter,
     type Size,
@@ -65,6 +68,9 @@
   const fit = new IslandFit();
   const collapseGate = new CollapseGate();
   const quitGate = new QuitGate();
+  const drag = new DragGate();
+  let dragging = $state(false);
+  let suppressClick = false;
   let hoverTimer: ReturnType<typeof setTimeout>;
   let collapseTimer: ReturnType<typeof setTimeout>;
   let openTimer: ReturnType<typeof setTimeout>;
@@ -173,6 +179,9 @@
   }
 
   function onPointerEnter() {
+    // #182's dwell must not fire mid-drag: a pointer leaving the pill on its
+    // way to another spot is not the user leaving the island.
+    if (dragging) return;
     clearTimeout(collapseTimer);
     collapseGate.enter();
     if (fit.phase === 'collapsed') {
@@ -183,12 +192,66 @@
   }
 
   function onPointerLeave() {
+    if (dragging) return;
     clearTimeout(hoverTimer);
     prehover = false;
     collapseGate.leave(performance.now());
     collapseTimer = setTimeout(() => {
       if (collapseGate.shouldCollapse(performance.now(), cards.length > 0)) closePanel();
     }, COLLAPSE_DELAY_MS);
+  }
+
+  // #196: the collapsed bar is the drag handle. Pointer capture keeps moves
+  // arriving after the pointer leaves the small pill.
+  function onBarPointerDown(event: PointerEvent) {
+    if (event.button !== 0) return;
+    drag.down(event.clientX, event.clientY);
+    (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
+  }
+
+  function onBarPointerMove(event: PointerEvent) {
+    if (!drag.move(event.clientX, event.clientY)) return;
+    if (!dragging) {
+      // A dwell timer from pointerenter may already be in flight: the drag
+      // wins, and must not let #182 open the panel under the pointer.
+      clearTimeout(hoverTimer);
+      clearTimeout(openTimer);
+      clearTimeout(collapseTimer);
+      prehover = false;
+    }
+    dragging = true;
+    invoke('move_island', drag.delta(event.clientX, event.clientY)).catch(
+      (error) => (hooksError = String(error)),
+    );
+  }
+
+  function onBarPointerUp(event: PointerEvent) {
+    (event.currentTarget as HTMLElement).releasePointerCapture?.(event.pointerId);
+    const moved = drag.delta(event.clientX, event.clientY);
+    if (!drag.up()) return;
+    const offset: Offset = snapOffset(moved);
+    // Apply the snapped spot first, then write it: the file and the window
+    // agree even if the app is closed immediately afterwards.
+    invoke('move_island', offset)
+      .then(() => invoke('commit_island_position'))
+      .catch((error) => (hooksError = String(error)));
+    // A click still follows pointerup; it belongs to the drag, not the toggle.
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false), 0);
+    dragging = false;
+  }
+
+  function onBarPointerCancel() {
+    drag.up();
+    dragging = false;
+  }
+
+  function onBarClick() {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    openPanel();
   }
 
   function onQuit() {
@@ -331,6 +394,7 @@
   class="island"
   class:open={expanded}
   class:closing
+  class:dragging
   class:locked={view.suspended}
   data-variant={variant}
   data-phase={fit.phase}
@@ -343,8 +407,17 @@
   role="presentation"
 >
   {#if !expanded && !closing}
-    <button class="toggle" onclick={openPanel} aria-label="Open the Morrow panel">
+    <button
+      class="toggle"
+      onclick={onBarClick}
+      onpointerdown={onBarPointerDown}
+      onpointermove={onBarPointerMove}
+      onpointerup={onBarPointerUp}
+      onpointercancel={onBarPointerCancel}
+      aria-label="Open the Morrow panel"
+    >
       <CollapsedBar sessionCount={sessions.length} {prehover} quiet={view.quiet} {active} />
+      <span class="grip" aria-hidden="true"></span>
     </button>
   {/if}
   <div class="panel-content" class:visible={expanded || closing} bind:this={panelContent}>
@@ -412,6 +485,14 @@
   .island[data-variant='B'].open {
     border-radius: 24px;
   }
+  /* #196: a dragged island is still the same pill, just elsewhere; the
+     dashed "home" slot exists only on the canvas, not on the user's screen. */
+  .island.dragging {
+    cursor: grabbing;
+    box-shadow:
+      0 18px 40px rgba(0, 0, 0, 0.55),
+      inset 0 0 0 1.2px rgba(0, 245, 212, 0.55);
+  }
   .island[data-variant='C']::before,
   .island[data-variant='C']::after {
     content: '';
@@ -439,6 +520,7 @@
   }
   .toggle {
     display: block;
+    position: relative;
     width: 100%;
     height: 34px;
     margin: 0;
@@ -448,7 +530,24 @@
     color: inherit;
     font: inherit;
     text-align: inherit;
-    cursor: default;
+    cursor: grab;
+  }
+  .toggle .grip {
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    width: 28px;
+    height: 3px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.28);
+    transform: translateX(-50%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+  }
+  .toggle:hover .grip,
+  .island.dragging .grip {
+    opacity: 1;
   }
   .panel-content {
     position: absolute;

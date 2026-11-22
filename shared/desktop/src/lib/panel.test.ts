@@ -5,13 +5,17 @@
 import { describe, expect, test } from 'bun:test';
 import {
   COLLAPSE_DELAY_MS,
+  DRAG_THRESHOLD_PX,
   QUIT_CONFIRM_MS,
+  SNAP_HOME_PX,
   CollapseGate,
+  DragGate,
   IslandFit,
   QuitGate,
   containsPoint,
   islandShape,
   resolveVariant,
+  snapOffset,
   springTransition,
 } from './panel';
 import { MOTION } from './tokens';
@@ -152,6 +156,57 @@ describe('quit confirmation', () => {
     gate.click(1000);
     expect(gate.click(1000 + QUIT_CONFIRM_MS + 1)).toBe('armed');
     expect(gate.click(2000 + QUIT_CONFIRM_MS + 1)).toBe('quit');
+  });
+});
+
+describe('drag gesture (#196)', () => {
+  test('a pointer that moves less than 4 px never becomes a drag', () => {
+    const drag = new DragGate();
+    drag.down(100, 100);
+    expect(drag.move(103, 100)).toBe(false);
+    expect(drag.dragging).toBe(false);
+    // A click leaves the collapsed bar alone and still opens the panel.
+    expect(drag.up()).toBe(false);
+  });
+
+  test('movement reaches the drag threshold at exactly 4 px', () => {
+    const drag = new DragGate();
+    drag.down(100, 100);
+    expect(DRAG_THRESHOLD_PX).toBe(4);
+    expect(drag.move(100 + DRAG_THRESHOLD_PX, 100)).toBe(true);
+    expect(drag.dragging).toBe(true);
+    expect(drag.up()).toBe(true);
+  });
+
+  test('a finished drag resets the gate for the next gesture', () => {
+    const drag = new DragGate();
+    drag.down(100, 100);
+    drag.move(140, 100);
+    expect(drag.up()).toBe(true);
+    expect(drag.dragging).toBe(false);
+    drag.down(200, 200);
+    expect(drag.move(201, 200)).toBe(false);
+    expect(drag.up()).toBe(false);
+  });
+
+  test('the gate reports the pointer delta for the live window move', () => {
+    const drag = new DragGate();
+    drag.down(100, 100);
+    drag.move(112, 94);
+    expect(drag.delta(112, 94)).toEqual({ x: 12, y: -6 });
+    drag.up();
+    expect(drag.delta(112, 94)).toEqual({ x: 0, y: 0 });
+  });
+
+  test('an offset within 24 px of home snaps back to top-centre', () => {
+    expect(SNAP_HOME_PX).toBe(24);
+    expect(snapOffset({ x: 20, y: 0 })).toEqual({ x: 0, y: 0 });
+    expect(snapOffset({ x: 16, y: 16 })).toEqual({ x: 0, y: 0 });
+  });
+
+  test('an offset outside 24 px stays where the user left it', () => {
+    expect(snapOffset({ x: 24.1, y: 0 })).toEqual({ x: 24.1, y: 0 });
+    expect(snapOffset({ x: 18, y: 18 })).toEqual({ x: 18, y: 18 });
   });
 });
 

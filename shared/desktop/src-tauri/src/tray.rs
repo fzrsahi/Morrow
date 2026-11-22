@@ -38,8 +38,15 @@ pub fn create(app: &App) {
 fn build(app: &App) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show or hide the island", true, None::<&str>)?;
     let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let reset = MenuItem::with_id(
+        app,
+        "reset-position",
+        "Reset island position",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit Morrow", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &settings, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &settings, &reset, &quit])?;
 
     TrayIconBuilder::with_id("morrow")
         .tooltip("Morrow")
@@ -52,11 +59,28 @@ fn build(app: &App) -> tauri::Result<()> {
                     eprintln!("morrow-app: cannot open Settings ({error})");
                 }
             }
+            "reset-position" => reset_position(app),
             "quit" => app.exit(0),
             _ => {}
         })
         .build(app)?;
     Ok(())
+}
+
+/// #196: forget this monitor's offset and refit. The menu item does its work
+/// in the shell, so no frontend round-trip (or context menu) is needed.
+fn reset_position(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window(island::LABEL) else {
+        return;
+    };
+    let result = island::reset(
+        &window,
+        &app.state::<crate::position::Store>(),
+        app.state::<crate::island::Smoke>().0,
+    );
+    if let Err(error) = result {
+        eprintln!("morrow-app: cannot reset island position: {error}");
+    }
 }
 
 /// Show the island if it is hidden, hide it if it is showing.
