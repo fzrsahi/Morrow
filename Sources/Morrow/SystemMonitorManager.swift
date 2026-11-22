@@ -17,12 +17,14 @@ public enum PowerSourceKind: String, Sendable, Equatable {
 
 public enum PowerBannerState: Sendable, Equatable {
     case charging(kind: PowerSourceKind, watts: Int?, timeToFullMinutes: Int?)
+    case onHold(kind: PowerSourceKind)
     case fullyCharged(kind: PowerSourceKind)
     case lowBattery(percent: Int)
 
     public var title: String {
         switch self {
         case .charging: return "Charging"
+        case .onHold: return "Charging On Hold"
         case .fullyCharged: return "Fully Charged"
         case .lowBattery: return "Low Battery"
         }
@@ -39,6 +41,8 @@ public enum PowerBannerState: Sendable, Equatable {
                 parts.append(h > 0 ? "\(h)h \(m)m left" : "\(m)m left")
             }
             return parts.joined(separator: " · ")
+        case .onHold(let kind):
+            return "\(kind.label) · Optimized charging"
         case .fullyCharged(let kind):
             return "\(kind.label) · 100% charged"
         case .lowBattery:
@@ -380,6 +384,8 @@ public final class SystemMonitorManager: ObservableObject {
             let bannerState: PowerBannerState
             if !isCharging && isAC && (isCharged || curCapacity >= 99) {
                 bannerState = .fullyCharged(kind: adapterKind)
+            } else if !isCharging && isAC {
+                bannerState = .onHold(kind: adapterKind)
             } else if !isCharging && !isAC && curCapacity <= 20 {
                 bannerState = .lowBattery(percent: curCapacity)
             } else {
