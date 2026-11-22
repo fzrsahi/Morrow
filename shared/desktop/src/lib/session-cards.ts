@@ -99,3 +99,30 @@ export function activeSession(sessions: Session[]): Session | null {
     sessions.find((s) => s.status === 'working' || s.status === 'thinking') ?? null
   );
 }
+
+// #184 — the context elements of the canvas #list-comfortable card. The shell
+// resolves the branch and the counts; these are only their drawn words.
+
+/** Swift appends ⧉ to a linked worktree's branch (NotchPanelView.swift:4625). */
+export function branchLabel(branch: string, isWorktree: boolean): string {
+  if (!branch) return '';
+  return isWorktree ? `${branch} ⧉` : branch;
+}
+
+/** Twelve segments: filled below the canvas' rounded share, one current. */
+export function taskGauge(done: number, total: number): Array<'on' | 'cur' | 'off'> {
+  if (total <= 0) return Array(12).fill('off');
+  const filled = Math.round((done / total) * 12);
+  return Array.from({ length: 12 }, (_, i) =>
+    i < filled ? 'on' : i === filled ? 'cur' : 'off',
+  );
+}
+
+export function taskLabel(done: number, total: number): string {
+  return `[${done}/${total} TASKS]`;
+}
+
+/** No badge at all when the session has no subagents. */
+export function subLabel(count: number): string {
+  return count > 0 ? `+${count} SUB` : '';
+}

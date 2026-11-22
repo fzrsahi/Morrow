@@ -6,9 +6,13 @@ import { describe, expect, test } from 'bun:test';
 import {
   STATUS_META,
   activeSession,
+  branchLabel,
   collapsedWidth,
   mascotStatus,
   middleTruncate,
+  subLabel,
+  taskGauge,
+  taskLabel,
   timeLabel,
   toolColor,
 } from './session-cards';
@@ -30,6 +34,13 @@ const session = (over: Partial<Session> = {}): Session => ({
   term_app: '',
   tty_path: '',
   cli_pid: null,
+  git_branch: '',
+  git_is_worktree: false,
+  tasks_done: 0,
+  tasks_total: 0,
+  task_active: '',
+  subagent_count: 0,
+  recap: '',
   ...over,
 });
 
@@ -124,5 +135,30 @@ describe('short labels', () => {
       'customer-onb..v2-migration',
     );
     expect(middleTruncate('web-app', 26)).toBe('web-app');
+  });
+});
+
+// #184 — the context row of the canvas #list-comfortable card.
+describe('session card context', () => {
+  test('a linked worktree carries the ⧉ marker, a primary checkout does not', () => {
+    expect(branchLabel('feat/dashboard', false)).toBe('feat/dashboard');
+    expect(branchLabel('exp/feature-store', true)).toBe('exp/feature-store ⧉');
+    expect(branchLabel('', true)).toBe('');
+  });
+
+  test('the task gauge is twelve segments with the current one in amber', () => {
+    // Canvas: f = round(2/5 * 12) = 5; segments below f are on, f is current.
+    expect(taskGauge(2, 5)).toEqual([
+      'on', 'on', 'on', 'on', 'on', 'cur',
+      'off', 'off', 'off', 'off', 'off', 'off',
+    ]);
+    expect(taskGauge(5, 5)).toEqual(Array(12).fill('on'));
+    expect(taskGauge(0, 0)).toEqual(Array(12).fill('off'));
+  });
+
+  test('task and subagent counts read exactly like the canvas badges', () => {
+    expect(taskLabel(2, 5)).toBe('[2/5 TASKS]');
+    expect(subLabel(2)).toBe('+2 SUB');
+    expect(subLabel(0)).toBe('');
   });
 });

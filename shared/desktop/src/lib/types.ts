@@ -28,6 +28,17 @@ export type Session = {
   term_app: string;
   tty_path: string;
   cli_pid: number | null;
+  /** #184 — checked-out branch, empty when the cwd is not a git checkout. */
+  git_branch: string;
+  /** Linked worktree; the card appends ⧉ to the branch. */
+  git_is_worktree: boolean;
+  /** Agent's own checklist; `tasks_total === 0` hides the task row. */
+  tasks_done: number;
+  tasks_total: number;
+  task_active: string;
+  subagent_count: number;
+  /** Idle-only turn recap, empty while the session is working. */
+  recap: string;
 };
 
 export type Card = {
