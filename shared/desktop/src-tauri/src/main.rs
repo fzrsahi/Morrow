@@ -10,6 +10,7 @@ mod island;
 mod listener;
 mod music;
 mod permissions;
+mod position;
 mod sessions;
 mod settings;
 mod tray;
@@ -70,6 +71,7 @@ fn main() -> ExitCode {
     }
 
     let hooks_site = hooks::site();
+    let position = position::Store::new(&hooks_site.paths.codeisland_dir);
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
     Feed::spawn_pusher(Arc::clone(&feed), move |sessions, cards| {
@@ -83,10 +85,14 @@ fn main() -> ExitCode {
         .manage(feed)
         .manage(hooks_site)
         .manage(Smoke(smoke))
+        .manage(position)
         .invoke_handler(tauri::generate_handler![
             subscribe,
             answer_permission,
             island::set_island_size,
+            island::move_island,
+            island::commit_island_position,
+            island::reset_island_position,
             island::smoke_card,
             island::quit,
             island::island_visible,
