@@ -139,6 +139,13 @@ impl Sessions {
         effects
     }
 
+    /// #185: the ✕ on a session card. The session is gone until a hook starts
+    /// it again; its last event goes with it so no stale label survives.
+    pub fn remove(&mut self, session_id: &str) {
+        self.inner.remove(session_id);
+        self.last_events.remove(session_id);
+    }
+
     /// NEEDS YOU first, then working/thinking, then the rest; newest first
     /// inside a tier and by session id on a tie, so the order is stable.
     pub fn snapshot(&self) -> Vec<Session> {
@@ -201,6 +208,24 @@ mod tests {
 
     fn hook(json: &str) -> HookPayload {
         decode_payload(json.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn removing_a_session_keeps_the_others_and_their_order() {
+        let mut sessions = Sessions::default();
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"SessionStart","cwd":"/home/u/a"}"#),
+            10,
+        );
+        sessions.apply(
+            &hook(r#"{"session_id":"b","hook_event_name":"PreToolUse","cwd":"/home/u/b"}"#),
+            20,
+        );
+        sessions.remove("a");
+        let rows = sessions.snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "b");
+        assert_eq!(rows[0].last_event, "PreToolUse");
     }
 
     #[test]
