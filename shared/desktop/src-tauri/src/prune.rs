@@ -6,17 +6,21 @@ use std::collections::HashMap;
 
 use morrow_platform::process::Watch;
 
+/// A process id as the hook reports it. `Watch` widens it to i64 for the
+/// platform adapter; keeping one alias here avoids mixing the two locally.
+pub type Pid = i32;
+
 /// A session's CLI pid, as the feed knows it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionProcess {
     pub session_id: String,
-    pub pid: Option<i32>,
+    pub pid: Option<Pid>,
 }
 
 /// The watches held for the sessions currently on the panel.
 #[derive(Debug, Default)]
 pub struct Watches {
-    held: HashMap<String, (i32, Watch)>,
+    held: HashMap<String, (Pid, Watch)>,
 }
 
 impl Watches {
@@ -25,7 +29,7 @@ impl Watches {
     pub fn reconcile(
         &mut self,
         sessions: &[SessionProcess],
-        mut capture: impl FnMut(i32) -> Option<Watch>,
+        mut capture: impl FnMut(Pid) -> Option<Watch>,
         mut alive: impl FnMut(Watch) -> bool,
     ) -> Vec<String> {
         for session in sessions {
@@ -66,14 +70,14 @@ impl Watches {
 mod tests {
     use super::*;
 
-    fn watch(pid: i32, start_time: u64) -> Watch {
+    fn watch(pid: Pid, start_time: u64) -> Watch {
         Watch {
             pid: pid as i64,
             start_time,
         }
     }
 
-    fn session(id: &str, pid: Option<i32>) -> SessionProcess {
+    fn session(id: &str, pid: Option<Pid>) -> SessionProcess {
         SessionProcess {
             session_id: id.to_owned(),
             pid,
@@ -81,8 +85,8 @@ mod tests {
     }
 
     /// The fake machine: a pid names whichever start time it holds now.
-    fn alive_in(current: &HashMap<i32, u64>, w: Watch) -> bool {
-        current.get(&(w.pid as i32)) == Some(&w.start_time)
+    fn alive_in(current: &HashMap<Pid, u64>, w: Watch) -> bool {
+        current.get(&(w.pid as Pid)) == Some(&w.start_time)
     }
 
     #[test]
@@ -131,7 +135,7 @@ mod tests {
         let mut watches = Watches::default();
         let mut captured = Vec::new();
         {
-            let mut capture = |pid: i32| {
+            let mut capture = |pid: Pid| {
                 captured.push(pid);
                 Some(watch(pid, 7))
             };

@@ -4,6 +4,7 @@
 // owns the wake-up and the `notify_send` call; this module only decides what is
 // due and when to wake, so the policy is testable on an injected clock.
 
+import type { AmbientState } from './ambient';
 import type { Card } from './types';
 
 /**
@@ -13,14 +14,12 @@ import type { Card } from './types';
  */
 export const FOLLOW_UP_MS = 60_000;
 
-/** What the shell and the ambient poll say about delivering a reminder now. */
-export type ReminderRoom = {
+/** What the shell and the ambient poll say about delivering a reminder now.
+ *  `locked` and `quiet` are the ambient scene's own fields, not a second
+ *  definition of them (#33 review). */
+export type ReminderRoom = Pick<AmbientState, 'locked' | 'quiet'> & {
   /** Capability "Notifications" is Supported (never Degraded/Unsupported). */
   capable: boolean;
-  /** The screen is locked: no sound, no notification. */
-  locked: boolean;
-  /** Quiet hours: no notification. */
-  quiet: boolean;
 };
 
 /** One `notify_send` call, paired with the card it reminds about. */

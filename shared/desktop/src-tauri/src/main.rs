@@ -49,6 +49,14 @@ fn subscribe(feed: State<'_, Arc<Feed>>, channel: Channel<Snapshot>) {
     feed.subscribe(channel);
 }
 
+/// #197: a locked screen suspends content probes (transcript tails) but does
+/// not hide the island window. The frontend owns the lock watch; the shell
+/// only gates its own probes.
+#[tauri::command]
+fn set_probes_active(feed: State<'_, Arc<Feed>>, active: bool) {
+    feed.set_probes_active(active);
+}
+
 /// The user's Approve or Deny on card `id`. False if the request is no
 /// longer held (answered already, or its hook gone).
 #[tauri::command]
@@ -120,6 +128,7 @@ fn main() -> ExitCode {
         .manage(position)
         .invoke_handler(tauri::generate_handler![
             subscribe,
+            set_probes_active,
             answer_permission,
             answer_question,
             answer_questions,

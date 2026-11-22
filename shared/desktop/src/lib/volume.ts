@@ -2,6 +2,7 @@
 // (music.rs); this module never asks for the volume itself. It maps a reading
 // to the canvas #volume meter and says when the HUD should be on screen.
 
+import { isSupported } from './capabilities';
 import type { CapabilityRow } from './types';
 
 /** 12 segments: 0–7 cyan, 8–9 amber, 10–11 red (#volume notes). */
@@ -38,7 +39,7 @@ export function readout(volume: Volume): string {
 /** A device without a volume adapter must not get a HUD that cannot answer a
  *  click. Only a plain `Supported` row counts; `Degraded` still hides it. */
 export function volumeSupported(rows: CapabilityRow[]): boolean {
-  return rows.some((row) => row.feature === 'System volume' && 'Supported' in row.capability);
+  return isSupported(rows, 'System volume');
 }
 
 /** Change detection and the 1.5 s dwell, on the webview's clock. The first
