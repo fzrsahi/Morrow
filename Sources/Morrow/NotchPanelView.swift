@@ -1367,9 +1367,20 @@ struct NotchPanelView: View {
     @ViewBuilder
     private func chargingAmbientLayer<S: Shape>(for shape: S) -> some View {
         if signals.showChargingBanner && !appState.surface.isExpanded {
-            let wingY: CGFloat = hasNotch ? 0.12 : 0.04
+            let wingY: CGFloat = 0.0
             ZStack {
-                // Left & right wing glows (visible beside physical M2 notch & upper edge)
+                // Flush top-edge wash so there is no black band above the glow
+                shape.fill(
+                    LinearGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.55),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: UnitPoint(x: 0.5, y: 0.26)
+                    )
+                )
+                // Left & right wing glows (flush to top corners beside physical M2 notch)
                 shape.fill(
                     EllipticalGradient(
                         colors: [
@@ -1401,9 +1412,9 @@ struct NotchPanelView: View {
                             chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.75),
                             Color.clear
                         ],
-                        center: UnitPoint(x: 0.5, y: hasNotch ? 0.20 : 0.03),
+                        center: UnitPoint(x: 0.5, y: hasNotch ? 0.14 : 0.02),
                         startRadiusFraction: 0.04,
-                        endRadiusFraction: 0.56
+                        endRadiusFraction: 0.54
                     )
                 )
 
