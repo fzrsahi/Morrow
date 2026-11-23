@@ -282,6 +282,17 @@ impl StoreReader for CodexRollouts {
 /// Where VS Code keeps extension storage, per OS.
 ///
 /// Cline is an extension inside VS Code, not a CLI, so its store lives under
+/// The Windows half of `vscode_user_dir`, with the variable injected so a
+/// redirected profile is covered by a unit test on macOS and Linux too.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn vscode_user_dir_from_appdata(appdata: Option<&std::ffi::OsStr>, home: &Path) -> PathBuf {
+    match appdata {
+        Some(raw) if !raw.is_empty() => Path::new(raw).join("Code/User"),
+        // The old default still works for a plain local profile.
+        _ => home.join("AppData/Roaming/Code/User"),
+    }
+}
+
 /// VS Code's own per-user directory: `~/Library/Application Support` on macOS,
 /// `~/.config` on Linux, `%APPDATA%` on Windows.
 fn vscode_user_dir(home: &Path) -> PathBuf {
@@ -291,8 +302,10 @@ fn vscode_user_dir(home: &Path) -> PathBuf {
     }
     #[cfg(target_os = "windows")]
     {
-        // `home` is the roaming profile; VS Code writes to Roaming, not Local.
-        home.join("AppData/Roaming/Code/User")
+        // Folder redirection and roaming profiles move AppDATA away from the
+        // home directory; VS Code follows the variable, so must we. Kept in a
+        // helper so the rule is testable on every host (#278).
+        vscode_user_dir_from_appdata(std::env::var_os("APPDATA").as_deref(), home)
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -415,7 +428,9 @@ impl FlatStore {
             "codebuddy" => morrow_core::discovery::flat_store::codebuddy_recent(&tail),
             "droid" => {
                 // Factory keeps the model in a sidecar: `x.jsonl` → `x.settings.json`.
-                let settings = path.to_string_lossy().replace(".jsonl", ".settings.json");
+                // Only the file name: a parent directory may itself end in
+                // `.jsonl`, and rewriting that path pointed at nothing (#278).
+                let settings = path.with_extension("settings.json");
                 let model = std::fs::read_to_string(&settings).ok().and_then(|json| {
                     morrow_core::discovery::flat_store::factory_model_from_settings(&json)
                 });
@@ -1544,6 +1559,48 @@ mod tests {
         assert_eq!(hits[0].session_id, "cb-1");
         assert_eq!(hits[0].model.as_deref(), Some("claude-sonnet"));
         assert_eq!(hits[0].pid, Some(88));
+    }
+
+    #[test]
+    fn a_redirected_appdata_is_used_and_the_plain_profile_still_works() {
+        use std::ffi::OsStr;
+        let home = Path::new("/home/dev");
+        assert_eq!(
+            vscode_user_dir_from_appdata(Some(OsStr::new("/mnt/roaming/AppData")), home),
+            Path::new("/mnt/roaming/AppData/Code/User")
+        );
+        assert_eq!(
+            vscode_user_dir_from_appdata(None, home),
+            home.join("AppData/Roaming/Code/User")
+        );
+    }
+
+    #[test]
+    fn a_factory_sidecar_is_found_even_when_a_parent_directory_ends_in_jsonl() {
+        let scratch = Scratch::new("factory.jsonl");
+        let cwd = "/home/dev/project";
+        let project = scratch
+            .0
+            .join(".factory/sessions")
+            .join(morrow_core::discovery::project_dir::encoded(cwd));
+        std::fs::create_dir_all(&project).expect("a store");
+        std::fs::write(
+            project.join("d-1.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Deploy"}]}}"#,
+        )
+        .expect("a transcript");
+        std::fs::write(
+            project.join("d-1.settings.json"),
+            r#"{"model":"gpt-5.1-codex"}"#,
+        )
+        .expect("a sidecar");
+
+        let table = vec![process_with_cwd(33, "/usr/bin/droid", "droid", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "droid").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].model.as_deref(), Some("gpt-5.1-codex"));
     }
 
     /// Factory's model lives in a sidecar file, not in the transcript.
