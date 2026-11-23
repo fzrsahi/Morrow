@@ -114,6 +114,28 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
     // being present. A row, and nothing else.
     rows.push(aiwork_status(paths, "aiwork", "AiWork"));
     rows.push(aiwork_status(paths, "aiwork-cli", "AiWork CLI"));
+    rows.push(extension_status(
+        paths,
+        "pi",
+        "Pi",
+        ".pi/agent/extensions/codeisland.ts",
+        ".pi",
+    ));
+    rows.push(extension_status(
+        paths,
+        "omp",
+        "Oh My Pi",
+        ".omp/agent/extensions/codeisland.ts",
+        ".omp",
+    ));
+    rows.push(extension_status(
+        paths,
+        "openclaw",
+        "OpenClaw",
+        ".openclaw/codeisland-plugin/index.ts",
+        ".openclaw",
+    ));
+    rows.push(dsh_status(paths));
     rows
 }
 
@@ -242,8 +264,13 @@ pub fn install_target_with(
         "minimax" => return install_minimax(paths, stamp, command),
         "cline" => return install_cline(paths, &format!("{command} --source cline")),
         "mimo" => return install_mimo(paths, stamp),
+        "pi" => return install_extension(paths, "pi", stamp, crate::plugins::PI),
+        "omp" => return install_extension(paths, "omp", stamp, crate::plugins::OMP),
+        "openclaw" => return install_extension(paths, "openclaw", stamp, crate::plugins::OPENCLAW),
         // Nothing to write: AiWork has no hooks, so "install" is the row itself.
         "aiwork" | "aiwork-cli" => return Ok(Some(Report::default())),
+        // The plugin is third-party; the row is the feature.
+        "dsh" => return Ok(None),
         _ => {}
     }
     let Some(target) = targets::target_for(source) else {
@@ -305,6 +332,9 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
         "minimax" => return uninstall_minimax(paths),
         "cline" => return uninstall_cline(paths),
         "mimo" => return uninstall_mimo(paths),
+        "pi" | "omp" | "openclaw" => return uninstall_extension(paths, source),
+        // Nothing of ours to remove: the plugin is the user's.
+        "dsh" => return Ok(None),
         "aiwork" | "aiwork-cli" => return Ok(None),
         _ => {}
     }
@@ -638,6 +668,107 @@ fn in_path(binary: &str) -> bool {
             })
         })
         .unwrap_or(false)
+}
+
+/// The extension file each source loads, and the directory that proves the CLI is
+/// there.
+const EXTENSIONS: &[(&str, &str)] = &[
+    ("pi", ".pi/agent/extensions/codeisland.ts"),
+    ("omp", ".omp/agent/extensions/codeisland.ts"),
+    ("openclaw", ".openclaw/codeisland-plugin/index.ts"),
+];
+
+/// `pi`'s extension, `omp`'s, `openclaw`'s: three artefacts with one shape.
+pub fn extension_status(
+    paths: &Paths,
+    source: &'static str,
+    name: &'static str,
+    relative: &str,
+    marker: &str,
+) -> TargetStatus {
+    let path = paths.home.join(relative);
+    TargetStatus {
+        source,
+        name,
+        detected: paths.home.join(marker).is_dir(),
+        installed: read_text(&path)
+            .ok()
+            .flatten()
+            .is_some_and(|text| morrow_core::installer::extension::is_ours(&text)),
+        path,
+    }
+}
+
+fn install_extension(
+    paths: &Paths,
+    source: &str,
+    stamp: &str,
+    bundled: &str,
+) -> Result<Option<Report>, Error> {
+    let Some((_, relative)) = EXTENSIONS.iter().find(|(name, _)| *name == source) else {
+        return Ok(None);
+    };
+    let status = extension_status(paths, "", "", relative, "");
+    if !status.detected {
+        return Ok(None);
+    }
+    // A bridge that is not there yet is still the right path to name: the
+    // extension checks for it at load and stays quiet until it appears.
+    let bridge = paths.bridge.to_string_lossy().into_owned();
+    let text =
+        morrow_core::installer::extension::with_bridge_path(bundled, &bridge).ok_or_else(|| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("the bundled {source} extension no longer names its bridge line once"),
+            ))
+        })?;
+    let path = paths.home.join(relative);
+    if read_text(&path)?.as_deref() == Some(text.as_str()) {
+        return Ok(Some(Report::default()));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let existing = read_text(&path)?;
+    let mut report = Report::default();
+    if existing.is_some() {
+        report.backup = back_up(&path, stamp)?;
+    }
+    fs::write(&path, text)?;
+    report.settings_changed = true;
+    Ok(Some(report))
+}
+
+fn uninstall_extension(paths: &Paths, source: &str) -> Result<Option<Report>, Error> {
+    let Some((_, relative)) = EXTENSIONS.iter().find(|(name, _)| *name == source) else {
+        return Ok(None);
+    };
+    let path = paths.home.join(relative);
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    if !morrow_core::installer::extension::is_ours(&existing) {
+        return Ok(None);
+    }
+    fs::remove_file(&path)?;
+    Ok(Some(Report {
+        settings_changed: true,
+        ..Report::default()
+    }))
+}
+
+/// DSH is bridged by a third-party plugin the user installs themselves
+/// (`dsh-island`), so there is nothing for this installer to write — only a row.
+pub fn dsh_status(paths: &Paths) -> TargetStatus {
+    TargetStatus {
+        source: "dsh",
+        name: "DSH",
+        detected: paths.home.join(".dsh").is_dir(),
+        // The plugin is not ours to check: if DSH is there, the bridge it listens
+        // for is the same socket every other source uses.
+        installed: paths.home.join(".dsh").is_dir(),
+        path: paths.home.join(".dsh"),
+    }
 }
 
 /// The one environment lookup the target table needs, in one place so it can be
