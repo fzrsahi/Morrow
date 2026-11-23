@@ -32,6 +32,7 @@ pub mod codex_rules;
 pub mod config_roots;
 pub mod digest;
 pub mod discovery;
+pub mod display_only_wait;
 pub mod follow_up;
 pub mod git;
 pub mod installer;
