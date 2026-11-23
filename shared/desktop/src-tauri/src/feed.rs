@@ -392,18 +392,49 @@ impl Feed {
         self.backfill_with(scan)
     }
 
-    /// Polls the policy forever. One second of granularity is enough for a
-    /// five-second gap, and it costs a mutex read when nothing is due.
+    /// Asks the policy forever, woken by the stores themselves where the OS allows
+    /// it (#286).
+    ///
+    /// The watcher is not a replacement for the clock: an append inside a file
+    /// already on disk may not be reported (the fallback arm cannot see it, and
+    /// inotify's `IN_MODIFY` is not a promise about a finished write). So the loop
+    /// keeps its own tick, and a change only brings the next question forward.
     pub fn spawn_discovery(feed: Arc<Self>) {
         thread::Builder::new()
             .name("morrow-discovery".into())
             .spawn(move || {
+                let mut watcher = feed.watcher();
                 loop {
-                    thread::sleep(Duration::from_millis(250));
+                    // A watcher that reports a change wakes the loop early; one
+                    // that does not, or one the OS refused, is a 250 ms sleep.
+                    let moved = watcher
+                        .as_mut()
+                        .map(|watcher| watcher.wait(Duration::from_millis(250)))
+                        .unwrap_or_else(|| {
+                            thread::sleep(Duration::from_millis(250));
+                            false
+                        });
+                    if !moved {
+                        thread::sleep(Duration::from_millis(250));
+                    }
                     feed.tick_discovery(now_ms());
                 }
             })
             .expect("spawn the discovery thread");
+    }
+
+    /// An event source over every store a reader knows about, or `None` where the
+    /// OS refuses — in which case the timer is the whole answer and discovery
+    /// still works, only later.
+    fn watcher(&self) -> Option<morrow_watch::Watcher> {
+        let home = std::path::PathBuf::from(self.lock().sessions.home_directory());
+        let config_dir = crate::hooks::claude_config_dir(
+            &home,
+            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+        )
+        .unwrap_or_else(|| home.join(".claude"));
+        let roots = morrow_watch::default_roots(&home, &config_dir);
+        morrow_watch::Watcher::new(&roots).ok()
     }
 
     /// One discovery scan, integrated as ordinary sessions.
