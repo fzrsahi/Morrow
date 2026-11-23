@@ -13,7 +13,10 @@
 //! the credential read stay in the platform shells; what is here is the value
 //! semantics they interpret.
 
+use std::fmt;
+
 use serde::Serialize;
+use serde::ser::SerializeStruct;
 use serde_json::Value;
 
 use crate::reduce::Timestamp;
@@ -411,6 +414,68 @@ pub fn interpret_response(
     }
 }
 
+/// `ClaudeOAuthCredential`, as Claude Code stores it. The token is a secret:
+/// [`fmt::Debug`] and `serde::Serialize` deliberately redact/omit it so it can
+/// never reach a log line or a persisted state blob.
+#[derive(Clone, PartialEq)]
+pub struct Credential {
+    /// Bearer token. Never format or serialize this value.
+    pub access_token: String,
+    pub subscription_type: Option<String>,
+    pub expires_at: Option<Timestamp>,
+}
+
+impl fmt::Debug for Credential {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Credential")
+            .field("access_token", &"<redacted>")
+            .field("subscription_type", &self.subscription_type)
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
+}
+
+impl Serialize for Credential {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut state = serializer.serialize_struct("Credential", 2)?;
+        // No `access_token` field: serialized state contains no secret.
+        state.serialize_field("subscription_type", &self.subscription_type)?;
+        state.serialize_field("expires_at", &self.expires_at.map(|at| at.0))?;
+        state.end()
+    }
+}
+
+impl Credential {
+    /// Swift `ClaudeCredentialStore.parse(_:)`: the
+    /// `{"claudeAiOauth":{…}}` shape in the keychain / `.credentials.json`.
+    pub fn parse(data: &[u8]) -> Option<Self> {
+        let value: Value = serde_json::from_slice(data).ok()?;
+        let oauth = value.get("claudeAiOauth")?.as_object()?;
+        let access_token = oauth
+            .get("accessToken")
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())?;
+        Some(Self {
+            access_token: access_token.to_owned(),
+            subscription_type: oauth
+                .get("subscriptionType")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            expires_at: oauth
+                .get("expiresAt")
+                .and_then(Value::as_f64)
+                .map(|milliseconds| Timestamp(milliseconds / 1000.0)),
+        })
+    }
+
+    /// Swift `fetch(using:)`: a known-expired token is never sent; it is
+    /// reported as `unauthorized` before any request.
+    pub fn is_expired(&self, now: Timestamp) -> bool {
+        self.expires_at.is_some_and(|expires_at| expires_at <= now)
+    }
+}
+
 /// `ClaudeQuotaScheduler.Config`: all intervals in seconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SchedulerConfig {
@@ -796,6 +861,25 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn credential_parse_and_token_hygiene() {
+        let json = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-abc","refreshToken":"r","expiresAt":1788472382000,"subscriptionType":"max"}}"#;
+        let credential = Credential::parse(json.as_bytes()).unwrap();
+        assert_eq!(credential.access_token, "sk-ant-oat01-abc");
+        assert_eq!(credential.subscription_type.as_deref(), Some("max"));
+        assert_eq!(credential.expires_at.unwrap().0, 1_788_472_382.0);
+        assert!(credential.is_expired(Timestamp(1_788_472_382.0)));
+        assert!(!credential.is_expired(Timestamp(1_788_472_381.0)));
+        assert!(Credential::parse(br#"{"claudeAiOauth":{"accessToken":""}}"#).is_none());
+
+        let debug = format!("{credential:?}");
+        let serialized = serde_json::to_string(&credential).unwrap();
+        assert!(!debug.contains("sk-ant-oat01-abc"), "{debug}");
+        assert!(!serialized.contains("sk-ant-oat01-abc"), "{serialized}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!serialized.contains("access_token"));
     }
 
     // Scheduler fixtures: `ClaudeQuotaSchedulerTests`, t0 = 1_800_000_000.

@@ -22,7 +22,7 @@
 //!   them (`list`).
 //! - [`digest`]: SHA-256, for the delivery digest of a hook Cursor ran.
 //! - [`quota`]: the Claude plan-limit model, usage-response parser and pure
-//!   refresh policy, with the clock handed in.
+//!   refresh policy, with the clock and credentials handed in.
 #![forbid(unsafe_code)]
 
 pub mod agent_tasks;
