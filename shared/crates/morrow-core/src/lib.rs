@@ -29,6 +29,7 @@ pub mod attention;
 pub mod config_roots;
 pub mod digest;
 pub mod discovery;
+pub mod follow_up;
 pub mod git;
 pub mod installer;
 pub mod intake;

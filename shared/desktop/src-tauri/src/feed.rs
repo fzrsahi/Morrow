@@ -33,6 +33,9 @@ pub struct Snapshot {
     /// The last finished turn's reply, parsed into Markdown blocks by the
     /// core, and its settled presentation. `None` after the next prompt.
     pub completion: Option<SnapshotCompletion>,
+    /// Cards whose follow-up reminder already went out (#238 AC 9): the panel keeps a
+    /// bell on them until the request is answered or dropped.
+    pub reminder_ids: Vec<u64>,
 }
 
 /// One push per 1/60 s at most.
@@ -63,6 +66,9 @@ pub struct Feed {
     /// in `State` because a scan runs outside the state lock and this is
     /// internally synchronised on its own.
     scan_cache: morrow_core::scan_policy::TextCache,
+    /// #238 AC 9: the follow-up schedule, in the core. Off the `State` lock because the
+    /// reminder thread ticks while hooks are being reduced.
+    reminders: Mutex<crate::reminders::ReminderBook>,
 }
 
 impl Default for Feed {
@@ -75,6 +81,7 @@ impl Default for Feed {
             scan_cache: morrow_core::scan_policy::TextCache::new(
                 morrow_core::scan_policy::SCAN_CACHE_CAPACITY,
             ),
+            reminders: Mutex::new(crate::reminders::ReminderBook::default()),
         }
     }
 }
@@ -174,6 +181,8 @@ impl State {
             sessions: self.sessions.snapshot(),
             permissions: self.permissions.cards(),
             completion: self.completion.clone(),
+            // Set by `Feed::snapshot`, which can see the scheduler.
+            reminder_ids: Vec::new(),
         }
     }
 }
@@ -256,6 +265,15 @@ impl Feed {
                     ),
                     blocks: completion::blocks(&session.last_assistant_message),
                 });
+                // #238 AC 9: a finished turn is nudged once, and its card is the hint.
+                self.reminders
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .track_completion(
+                        session_id,
+                        completion.turn_failed,
+                        morrow_core::reduce::Timestamp(now as f64 / 1000.0),
+                    );
             }
         }
         state.dirty = true;
@@ -434,6 +452,54 @@ impl Feed {
             })
     }
 
+    /// One pass of the follow-up reminders (#238 AC 9): reconcile with the held
+    /// requests, deliver what is due, and return the ids whose bell should stay up.
+    ///
+    /// `held_back` is the lock screen or a suspended probe (#197); quiet hours live in
+    /// the frontend's settings and reach here through the same flag once they are read
+    /// by the shell.
+    pub fn tick_reminders(&self, held_back: bool, now_ms: u64) -> Vec<u64> {
+        let held = self.lock().snapshot();
+        let cards: Vec<crate::reminders::WaitingCard> = held
+            .permissions
+            .iter()
+            .map(|card| crate::reminders::WaitingCard {
+                id: card.id,
+                session_id: card.session_id.clone(),
+                question: card
+                    .question
+                    .as_ref()
+                    .map(|question| question.question.clone())
+                    .unwrap_or_default(),
+                summary: card.summary.clone(),
+                tool_name: card.tool_name.clone(),
+            })
+            .collect();
+        let mut book = self
+            .reminders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let due = book.tick(
+            &cards,
+            held_back,
+            morrow_core::reduce::Timestamp(now_ms as f64 / 1000.0),
+        );
+        for reminder in &due {
+            // The island notifies from here, not the webview: a hidden panel has no
+            // timer, and the reminder is about something the user cannot see.
+            let _ = crate::adapters::notify_send(reminder.title.clone(), reminder.body.clone());
+        }
+        book.hinted()
+    }
+
+    /// Arm the reminder interval: 0 or less turns the feature off.
+    pub fn set_reminder_interval(&self, seconds: Option<f64>) {
+        self.reminders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_interval(seconds);
+    }
+
     /// Write the session list out, at most once per save gap.
     pub fn save_sessions(&self, dir: &Path, now_ms: u64) -> bool {
         let mut state = self.lock();
@@ -496,6 +562,8 @@ impl Feed {
                 let codex_index =
                     std::fs::read_to_string(codex_home(&home).join("session_index.jsonl")).ok();
                 feed.restore_sessions(&sessions_dir, codex_index.as_deref());
+                // The interval the panel has always used; 0 in the setting turns it off.
+                feed.set_reminder_interval(Some(morrow_core::follow_up::DEFAULT_INTERVAL_SECONDS));
                 let mut watcher = feed.watcher();
                 loop {
                     // A watcher that reports a change wakes the loop early; one
@@ -513,6 +581,9 @@ impl Feed {
                     let now = now_ms();
                     feed.tick_discovery(now);
                     feed.save_sessions(&sessions_dir, now);
+                    // A locked screen suspends the probes (#197); a held-back reminder is
+                    // reported once and caught up when it ends.
+                    feed.tick_reminders(!feed.lock().probes_active, now);
                 }
             })
             .expect("spawn the discovery thread");
@@ -696,8 +767,11 @@ impl Feed {
                             }
                         }
                         state.dirty = false;
-                        let snapshot = state.snapshot();
-                        (snapshot, state.channel.clone())
+                        let channel = state.channel.clone();
+                        let mut snapshot = state.snapshot();
+                        drop(state);
+                        snapshot.reminder_ids = feed.reminder_hints();
+                        (snapshot, channel)
                     };
                     let counts = (snapshot.sessions.len(), snapshot.permissions.len());
                     if let Some(channel) = channel {
@@ -715,7 +789,17 @@ impl Feed {
     /// The current snapshot (the pusher uses `State::snapshot` directly).
     #[cfg(test)]
     pub fn snapshot(&self) -> Snapshot {
-        self.lock().snapshot()
+        let mut snapshot = self.lock().snapshot();
+        snapshot.reminder_ids = self.reminder_hints();
+        snapshot
+    }
+
+    /// The cards whose reminder already went out.
+    fn reminder_hints(&self) -> Vec<u64> {
+        self.reminders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .hinted()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {

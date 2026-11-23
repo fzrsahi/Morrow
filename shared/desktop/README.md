@@ -66,6 +66,12 @@ and `linux/ci/e2e1.sh`, and changes nothing else.
 
 ## Tests
 
+- `bun run verify` (also `shared/ci/desktop-check.sh`, which logs to
+  `dist/desktop/check.log`): `oxlint`, `svelte-check` against `tsconfig.json`,
+  `bun test`, `bun run build`. The pre-push hook and the Linux CI lane run the
+  same script. `tsconfig.json` excludes `src/**/*.test.ts`, so the tests type
+  check without `@types/bun` installed; a fixture whose shape drifts from
+  `src/lib/types.ts` is caught when it runs, not by the type check.
 - `cargo test -p morrow-app`: the reduction (`sessions.rs`), the held
   requests: approve, deny, a gone hook, the replies against
   `macos/Sources/Morrow/AppState.swift` (`permissions.rs`).

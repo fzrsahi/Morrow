@@ -16,6 +16,7 @@ mod peek_window;
 mod permissions;
 mod position;
 mod prune;
+mod reminders;
 mod sessions;
 mod settings;
 mod settings_window;
