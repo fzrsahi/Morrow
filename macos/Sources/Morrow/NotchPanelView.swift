@@ -181,6 +181,10 @@ struct NotchPanelView: View {
     let notchHeight: CGFloat
     let notchW: CGFloat
     let screenWidth: CGFloat
+    var displayModeOverride: IslandDisplayMode? = nil
+    var isFullscreenOverride: Bool? = nil
+    var isPrimaryCoordinator: Bool = true
+    var onHoverChanged: ((Bool) -> Void)? = nil
 
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
@@ -190,7 +194,10 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.collapsedWidthScale) private var collapsedWidthScale = SettingsDefaults.collapsedWidthScale
     @AppStorage(SettingsKey.islandDisplayMode) private var islandDisplayModeRaw = SettingsDefaults.islandDisplayMode
     private var displayMode: IslandDisplayMode {
-        IslandDisplayMode.resolved(from: islandDisplayModeRaw)
+        displayModeOverride ?? IslandDisplayMode.resolved(from: islandDisplayModeRaw)
+    }
+    private var isFullscreenActive: Bool {
+        isFullscreenOverride ?? appState.isFullscreenMode
     }
     @AppStorage(SettingsKey.showClaudeQuota) private var showClaudeQuota = SettingsDefaults.showClaudeQuota
     @AppStorage(SettingsKey.claudeQuotaChip) private var claudeQuotaChip = SettingsDefaults.claudeQuotaChip
@@ -361,13 +368,21 @@ struct NotchPanelView: View {
         notchHeight: CGFloat,
         notchW: CGFloat,
         screenWidth: CGFloat,
-        initialTab: ExpandedContentTab = .agents
+        initialTab: ExpandedContentTab = .agents,
+        displayModeOverride: IslandDisplayMode? = nil,
+        isFullscreenOverride: Bool? = nil,
+        isPrimaryCoordinator: Bool = true,
+        onHoverChanged: ((Bool) -> Void)? = nil
     ) {
         self.appState = appState
         self.hasNotch = hasNotch
         self.notchHeight = notchHeight
         self.notchW = notchW
         self.screenWidth = screenWidth
+        self.displayModeOverride = displayModeOverride
+        self.isFullscreenOverride = isFullscreenOverride
+        self.isPrimaryCoordinator = isPrimaryCoordinator
+        self.onHoverChanged = onHoverChanged
         if initialTab != .agents {
             self.appState.expandedTab = initialTab
         } else if ProcessInfo.processInfo.arguments.contains("workspace") {
@@ -415,6 +430,7 @@ struct NotchPanelView: View {
     }
 
     private func triggerMusicAutoPeek() {
+        guard isPrimaryCoordinator else { return }
         guard !appState.surface.isPrompting,
               expandedTab != .game,
               !appState.isGameInteractionLocked else { return }
@@ -446,6 +462,7 @@ struct NotchPanelView: View {
     }
 
     private func triggerMailAutoPeek() {
+        guard isPrimaryCoordinator else { return }
         guard !appState.surface.isPrompting else { return }
         mailAutoCollapseTimer?.invalidate()
         mailDeferCollapseOnMouseLeave = false
@@ -981,6 +998,7 @@ struct NotchPanelView: View {
     }
 
     private func handleStatusChange(_ newStatus: AgentStatus) {
+        guard isPrimaryCoordinator else { return }
         if newStatus == .idle {
             workspaceManager.refresh()
         }
@@ -1062,7 +1080,7 @@ struct NotchPanelView: View {
             musicAutoCollapseTimer = nil
             musicDeferCollapseOnMouseLeave = false
         }
-        if newTab == .workspace {
+        if isPrimaryCoordinator && newTab == .workspace {
             workspaceManager.resolveAndRefreshWorkspace(appState: appState)
         }
     }
@@ -1299,7 +1317,7 @@ struct NotchPanelView: View {
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             }
-        } else if appState.isFullscreenMode {
+        } else if isFullscreenActive {
             RoundedRectangle(cornerRadius: 7)
                 .fill(Color.black)
                 .overlay(
@@ -1735,29 +1753,35 @@ struct NotchPanelView: View {
             }
             .onAppear {
                 displayedToolStatus = showToolStatus
-                prayerManager.appState = appState
+                if isPrimaryCoordinator {
+                    prayerManager.appState = appState
+                }
             }
             .onChange(of: signals.musicTitle) { oldTitle, newTitle in
-                if !newTitle.isEmpty && newTitle != oldTitle && signals.isPlaying {
+                if isPrimaryCoordinator && !newTitle.isEmpty && newTitle != oldTitle && signals.isPlaying {
                     triggerMusicAutoPeek()
                 }
             }
             .onChange(of: signals.isPlaying) { _, isPlaying in
-                if isPlaying && expandedTab == .music && appState.surface.isExpanded {
+                if isPrimaryCoordinator && isPlaying && expandedTab == .music && appState.surface.isExpanded {
                     appState.transitionToTab(.music)
                 }
             }
             .onChange(of: appState.activeSessionId) { _, sid in
-                if let sid = sid, let cwd = appState.sessions[sid]?.cwd {
+                if isPrimaryCoordinator, let sid = sid, let cwd = appState.sessions[sid]?.cwd {
                     workspaceManager.updateCwdIfNeeded(cwd)
                 }
             }
             .onChange(of: appState.status) { _, newStatus in
                 handleStatusChange(newStatus)
-                prayerManager.checkAndFlushPendingBanner(appState: appState)
+                if isPrimaryCoordinator {
+                    prayerManager.checkAndFlushPendingBanner(appState: appState)
+                }
             }
             .onChange(of: appState.surface) { _, _ in
-                prayerManager.checkAndFlushPendingBanner(appState: appState)
+                if isPrimaryCoordinator {
+                    prayerManager.checkAndFlushPendingBanner(appState: appState)
+                }
             }
             .scaleEffect(shouldShowPrehover ? NotchHoverInteraction.prehoverScale : 1, anchor: .top)
             .contentShape(Rectangle())
@@ -1765,7 +1789,11 @@ struct NotchPanelView: View {
                 // The pointer is on the island itself — what follow-up
                 // reminders count as "reading this card" — whatever the
                 // hover then does to the surface below.
-                appState.followUps.pointerOverIsland = hovering
+                if let onHoverChanged {
+                    onHoverChanged(hovering)
+                } else {
+                    appState.followUps.pointerOverIsland = hovering
+                }
                 // Toast banners (charging / prayer mini-peek) own their own hover-hold;
                 // never auto-expand into the full session list while a toast is visible.
                 if isToastOnly {
@@ -1927,7 +1955,7 @@ struct NotchPanelView: View {
                     hoverTimer?.invalidate()
                     hoverTimer = Timer.scheduledTimer(withTimeInterval: NotchHoverInteraction.collapseDelay, repeats: false) { _ in
                         Task { @MainActor in
-                            guard !isHovered && !appState.isGameInteractionLocked else { return }
+                            guard !isHovered && !appState.followUps.pointerOverIsland && !appState.isGameInteractionLocked else { return }
                             hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .collapseDelayElapsed)
                             withAnimation(NotchAnimation.close) {
                                 appState.surface = .collapsed
@@ -1958,10 +1986,10 @@ struct NotchPanelView: View {
                     mailAutoCollapseTimer = nil
                     mailDeferCollapseOnMouseLeave = false
                 }
-                if newTab == .mail {
+                if isPrimaryCoordinator && newTab == .mail {
                     mailManager.refresh()
                 }
-                if newTab == .workspace {
+                if isPrimaryCoordinator && newTab == .workspace {
                     workspaceManager.resolveAndRefreshWorkspace(appState: appState)
                 }
             }

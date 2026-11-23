@@ -19,6 +19,72 @@ enum PanelWindowLayout {
     }
 }
 
+enum PanelFullscreenGeometry {
+    static func appKitRect(fromCGBounds cgBounds: CGRect, primaryScreenMaxY: CGFloat) -> CGRect {
+        let appKitY = primaryScreenMaxY - cgBounds.origin.y - cgBounds.height
+        return CGRect(x: cgBounds.origin.x, y: appKitY, width: cgBounds.width, height: cgBounds.height)
+    }
+
+    static func isWindowFullscreen(
+        cgBounds: CGRect,
+        primaryScreenMaxY: CGFloat,
+        targetScreenFrame: CGRect
+    ) -> Bool {
+        let rect = appKitRect(fromCGBounds: cgBounds, primaryScreenMaxY: primaryScreenMaxY)
+        let intersection = rect.intersection(targetScreenFrame)
+        guard !intersection.isNull, !intersection.isEmpty else { return false }
+        return intersection.width >= targetScreenFrame.width - 2
+            && intersection.height >= targetScreenFrame.height - 2
+    }
+
+    static func candidateWindowBounds(
+        from windowInfoList: [[String: Any]],
+        frontmostPID: pid_t,
+        excludingPID: pid_t = ProcessInfo.processInfo.processIdentifier
+    ) -> [CGRect] {
+        guard frontmostPID != excludingPID else { return [] }
+        var result: [CGRect] = []
+        for window in windowInfoList {
+            guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
+                  pid == frontmostPID,
+                  let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
+                  let bounds = window[kCGWindowBounds as String] as? [String: Any],
+                  let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  rect.width > 0,
+                  rect.height > 0 else { continue }
+            if let alpha = window[kCGWindowAlpha as String] as? NSNumber, alpha.doubleValue <= 0 {
+                continue
+            }
+            result.append(rect)
+        }
+        return result
+    }
+}
+
+struct PanelSlotPlan: Equatable {
+    let activeDisplayIDs: [String]
+    let primaryCoordinatorID: String?
+}
+
+enum PanelSlotPlanner {
+    static func plan(
+        islandEnabled: Bool,
+        displays: [DisplayDescriptor],
+        configurations: [String: DisplayConfiguration]
+    ) -> PanelSlotPlan {
+        guard islandEnabled else {
+            return PanelSlotPlan(activeDisplayIDs: [], primaryCoordinatorID: nil)
+        }
+        let activeIDs = displays
+            .filter { configurations[$0.id]?.enabled == true }
+            .map(\.id)
+        return PanelSlotPlan(
+            activeDisplayIDs: activeIDs,
+            primaryCoordinatorID: activeIDs.first
+        )
+    }
+}
+
 private let log = Logger(subsystem: "com.morrow", category: "Panel")
 
 private class KeyablePanel: NSPanel {
@@ -173,8 +239,111 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    private var panel: NSPanel?
-    private var hostingView: NotchHostingView<NotchPanelView>?
+    private final class PanelSlot {
+        let displayID: String
+        let panel: KeyablePanel
+        var hostingView: NotchHostingView<NotchPanelView>
+        var screenSignature: String
+        var configuration: DisplayConfiguration
+        var isPrimaryCoordinator: Bool
+        var isFullscreen: Bool = false
+
+        init(
+            displayID: String,
+            panel: KeyablePanel,
+            hostingView: NotchHostingView<NotchPanelView>,
+            screenSignature: String,
+            configuration: DisplayConfiguration,
+            isPrimaryCoordinator: Bool
+        ) {
+            self.displayID = displayID
+            self.panel = panel
+            self.hostingView = hostingView
+            self.screenSignature = screenSignature
+            self.configuration = configuration
+            self.isPrimaryCoordinator = isPrimaryCoordinator
+        }
+    }
+
+    private struct SettingsSnapshot: Equatable {
+        let islandEnabled: Bool
+        let displayConfigsRaw: String
+        let displayChoice: String
+        let notchHeightMode: String
+        let customNotchHeight: Double
+        let islandDisplayMode: IslandDisplayMode
+        let dynamicIslandTopOffset: Double
+        let maxVisibleSessions: Int
+        let allowHorizontalDrag: Bool
+        let avoidMenuBarIcons: Bool
+        let panelHorizontalOffset: Double
+        let hideInFullscreen: Bool
+        let hideWhenNoSession: Bool
+
+        @MainActor
+        static func current() -> SettingsSnapshot {
+            let defaults = UserDefaults.standard
+            let settings = SettingsManager.shared
+            let rawConfigs: String
+            if let str = defaults.string(forKey: SettingsKey.displayConfigurations) {
+                rawConfigs = str
+            } else if let data = defaults.data(forKey: SettingsKey.displayConfigurations),
+                      let str = String(data: data, encoding: .utf8) {
+                rawConfigs = str
+            } else {
+                rawConfigs = ""
+            }
+            return SettingsSnapshot(
+                islandEnabled: settings.islandEnabled,
+                displayConfigsRaw: rawConfigs,
+                displayChoice: settings.displayChoice,
+                notchHeightMode: settings.notchHeightMode.rawValue,
+                customNotchHeight: settings.customNotchHeight,
+                islandDisplayMode: settings.islandDisplayMode,
+                dynamicIslandTopOffset: settings.dynamicIslandTopOffset,
+                maxVisibleSessions: defaults.integer(forKey: SettingsKey.maxVisibleSessions),
+                allowHorizontalDrag: settings.allowHorizontalDrag,
+                avoidMenuBarIcons: settings.avoidMenuBarIcons,
+                panelHorizontalOffset: settings.panelHorizontalOffset,
+                hideInFullscreen: settings.hideInFullscreen,
+                hideWhenNoSession: settings.hideWhenNoSession
+            )
+        }
+    }
+
+    struct ScreenEntry {
+        let descriptor: DisplayDescriptor
+        let screen: NSScreen
+        var frameOverride: CGRect? = nil
+        var frame: CGRect { frameOverride ?? screen.frame }
+    }
+
+    var screenEntriesProvider: () -> [ScreenEntry] = {
+        ScreenDetector.screenDescriptors().map {
+            ScreenEntry(descriptor: $0.descriptor, screen: $0.screen)
+        }
+    }
+
+    var activeSlotFramesForTesting: [String: NSRect] {
+        slots.mapValues { $0.panel.frame }
+    }
+
+    var activeSlotModesForTesting: [String: IslandDisplayMode] {
+        slots.mapValues { $0.configuration.displayMode }
+    }
+
+    func syncPanelsForTesting() {
+        syncPanels(forceRebuild: false)
+    }
+
+    func tearDownAllSlotsForTesting() {
+        for id in Array(slots.keys) {
+            tearDownSlot(displayID: id)
+        }
+    }
+
+    private var slots: [String: PanelSlot] = [:]
+    private var hoveredDisplayIDs: Set<String> = []
     private let appState: AppState
 
     nonisolated static func screenHopFrames(
@@ -188,7 +357,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    private func panelSize(for screen: NSScreen) -> NSSize {
+    private func panelSize(for entry: ScreenEntry) -> NSSize {
         let desiredH = PanelHeightMetrics.desiredHeight(
             maxVisibleSessions: UserDefaults.standard.integer(forKey: SettingsKey.maxVisibleSessions)
         )
@@ -199,33 +368,26 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         // a redraw, which looked like "invisible after ~2s, reappears on hover" (#304).
         // The content is top-anchored and the session list scrolls internally, so the
         // window never needs to be taller than the visible screen.
-        let maxH = min(desiredH, screen.visibleFrame.height)
-        let screenW = screen.frame.width
+        let visibleHeight = entry.frameOverride?.height ?? entry.screen.visibleFrame.height
+        let maxH = min(desiredH, visibleHeight)
+        let screenW = entry.frame.width
         let width = min(760, screenW - 40)
         return NSSize(width: width, height: maxH)
     }
 
-    private var panelSize: NSSize {
-        panelSize(for: chosenScreen())
-    }
-
-    private var visibilityTimer: Timer?
-    private var autoScreenPoller: Timer?
     private var fullscreenPoller: Timer?
     private var isSessionObservationArmed = false
-    private var fullscreenLatch = false
+    private var hasStarted = false
     private var settingsObservers: [NSObjectProtocol] = []
+    private var defaultCenterObservers: [NSObjectProtocol] = []
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var globalClickMonitor: Any?
-    private var lastChosenScreenSignature = ""
-    private var isAnimatingScreenHop = false
+    private var dragTargetDisplayID: String?
     private var dragStartMouseX: CGFloat?
     private var dragStartPanelX: CGFloat?
     private var isDraggingPanel = false
     private var localDragMonitor: Any?
-    private var lastDisplayChoice = ""
-    private var lastNotchHeightMode = SettingsDefaults.notchHeightMode
-    private var lastCustomNotchHeight = SettingsDefaults.customNotchHeight
-    private var lastIslandDisplayMode = IslandDisplayMode.resolved(from: SettingsDefaults.islandDisplayMode)
+    private var lastSettingsSnapshot: SettingsSnapshot?
 
     init(appState: AppState) {
         self.appState = appState
@@ -265,11 +427,148 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     func showPanel() {
-        let screen = chosenScreen()
-        let contentView = makeHostingView(for: screen)
-        self.hostingView = contentView
+        syncPanels(forceRebuild: true)
 
-        let size = panelSize
+        guard !hasStarted else { return }
+        hasStarted = true
+
+        // A follow-up for the card under the pointer would remind someone who
+        // is already reading it. The island's own hover says whether the
+        // pointer is on the card (`pointerOverIsland`); the window frame —
+        // mostly transparent, and as large as the card ever gets — only
+        // backs that up against a hover flag a rebuilt view left behind.
+        appState.followUps.isPointerOverPanel = { [weak self] in
+            guard let self else { return false }
+            let mouse = NSEvent.mouseLocation
+            return self.slots.values.contains { $0.panel.isVisible && $0.panel.frame.contains(mouse) }
+        }
+
+        setupHorizontalDragMonitor()
+
+        // Screen change observer
+        let screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.syncPanels(forceRebuild: true)
+                // macOS may not have finished updating NSScreen.screens when the notification fires.
+                // Rebuild again after a short delay to pick up the final screen configuration.
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                self?.syncPanels(forceRebuild: true)
+            }
+        }
+        defaultCenterObservers.append(screenObserver)
+
+        // Active space change — check fullscreen per display
+        let spaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.syncPanels()
+            }
+        }
+        workspaceObservers.append(spaceObserver)
+
+        // Frontmost app change — refresh per-display fullscreen state and visibility
+        let appObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshFullscreenStates(updateViews: true)
+                self.updateAllPositions()
+                self.updateVisibility()
+                self.syncFullscreenPoller()
+            }
+        }
+        workspaceObservers.append(appObserver)
+
+        // Observe session changes via @Observable tracking
+        armSessionObservation()
+
+        // Observe settings changes (multi-display config, panel height)
+        observeSettingsChanges()
+
+        // Global click monitor: close panel when clicking outside all active panels
+        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.appState.surface.isExpanded else { return }
+                // Don't close during approval/question
+                switch self.appState.surface {
+                case .approvalCard, .questionCard: return
+                default: break
+                }
+                let clickLocation = NSEvent.mouseLocation
+                if self.slots.values.contains(where: { $0.panel.isVisible && $0.panel.frame.contains(clickLocation) }) {
+                    return
+                }
+                withAnimation(NotchAnimation.close) {
+                    self.appState.surface = .collapsed
+                    self.appState.cancelCompletionQueue()
+                }
+            }
+        }
+    }
+
+    private func makeNotchPanelView(
+        for entry: ScreenEntry,
+        displayID: String,
+        configuration: DisplayConfiguration,
+        isFullscreen: Bool,
+        isPrimaryCoordinator: Bool
+    ) -> NotchPanelView {
+        let hasNotch = entry.frameOverride != nil ? entry.descriptor.hasNotch : ScreenDetector.screenHasNotch(entry.screen)
+        let notchHeight = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 32 : 25) : ScreenDetector.topBarHeight(for: entry.screen)
+        let notchW = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 185 : min(max(entry.frame.width * 0.14, 160), 240)) : ScreenDetector.notchWidth(for: entry.screen)
+
+        return NotchPanelView(
+            appState: appState,
+            hasNotch: hasNotch,
+            notchHeight: notchHeight,
+            notchW: notchW,
+            screenWidth: entry.frame.width,
+            displayModeOverride: configuration.displayMode,
+            isFullscreenOverride: isFullscreen,
+            isPrimaryCoordinator: isPrimaryCoordinator,
+            onHoverChanged: { [weak self] hovering in
+                self?.updateHoverState(displayID: displayID, hovering: hovering)
+            }
+        )
+    }
+
+    private func makeHostingView(
+        for entry: ScreenEntry,
+        displayID: String,
+        configuration: DisplayConfiguration,
+        isFullscreen: Bool,
+        isPrimaryCoordinator: Bool
+    ) -> NotchHostingView<NotchPanelView> {
+        let rootView = makeNotchPanelView(
+            for: entry,
+            displayID: displayID,
+            configuration: configuration,
+            isFullscreen: isFullscreen,
+            isPrimaryCoordinator: isPrimaryCoordinator
+        )
+        let contentView = NotchHostingView(rootView: rootView)
+        contentView.onScroll = { [weak self] event in
+            guard let self else { return false }
+            return NotchNavigationManager.shared.handleScroll(event: event, appState: self.appState)
+        }
+        contentView.sizingOptions = []
+        contentView.translatesAutoresizingMaskIntoConstraints = true
+        return contentView
+    }
+
+    private func makePanel(for entry: ScreenEntry, contentView: NotchHostingView<NotchPanelView>) -> KeyablePanel {
+        let size = panelSize(for: entry)
         let panel = KeyablePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -286,282 +585,188 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.sharingType = .readOnly
+        panel.isReleasedWhenClosed = false
         panel.contentView = contentView
         panel.delegate = self
-
-        self.panel = panel
-        self.lastChosenScreenSignature = ScreenDetector.signature(for: screen)
-        // A follow-up for the card under the pointer would remind someone who
-        // is already reading it. The island's own hover says whether the
-        // pointer is on the card (`pointerOverIsland`); the window frame —
-        // mostly transparent, and as large as the card ever gets — only
-        // backs that up against a hover flag a rebuilt view left behind.
-        appState.followUps.isPointerOverPanel = { [weak self] in
-            guard let panel = self?.panel, panel.isVisible else { return false }
-            return panel.frame.contains(NSEvent.mouseLocation)
-        }
-
-        setupHorizontalDragMonitor()
-        updatePosition()
-        panel.orderFrontRegardless()
-        updateVisibility()
-
-        // Screen change observer
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.didChangeScreenParametersNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshCurrentScreen(forceRebuild: true)
-                // macOS may not have finished updating NSScreen.screens when the notification fires.
-                // Rebuild again after a short delay to pick up the final screen configuration.
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                self?.refreshCurrentScreen(forceRebuild: true)
-            }
-        }
-
-        // Active space change — check fullscreen
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.activeSpaceDidChangeNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                self.refreshCurrentScreen()
-                if self.isActiveSpaceFullscreen() {
-                    self.fullscreenLatch = true
-                    self.appState.isFullscreenMode = true
-                    self.updatePosition()
-                    self.updateVisibility()
-                    self.startFullscreenExitPoller()
-                } else {
-                    // Non-fullscreen space: clear any stale latch immediately so the panel
-                    // doesn't stay hidden for up to 1.5s while the exit poller catches up (#104).
-                    if self.fullscreenLatch {
-                        self.fullscreenLatch = false
-                        self.appState.isFullscreenMode = false
-                        self.updatePosition()
-                        self.fullscreenPoller?.invalidate()
-                        self.fullscreenPoller = nil
-                    }
-                    self.updateVisibility()
-                }
-            }
-        }
-
-        // Frontmost app change — do NOT hop screens on app focus, just update visibility if needed
-        NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor in
-                guard let self = self else { return }
-                if !self.fullscreenLatch { self.updateVisibility() }
-            }
-        }
-
-        // Observe session changes via @Observable tracking
-        armSessionObservation()
-
-        // Observe settings changes (display choice, panel height)
-        observeSettingsChanges()
-        configureAutoScreenPolling()
-
-        // Global click monitor: close panel + repost click when clicking outside
-        globalClickMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
-            Task { @MainActor in
-                guard let self = self, self.appState.surface.isExpanded else { return }
-                // Don't close during approval/question
-                switch self.appState.surface {
-                case .approvalCard, .questionCard: return
-                default: break
-                }
-                // Don't collapse if click is within the panel frame (event leaked on external display)
-                if let panelFrame = self.panel?.frame {
-                    let clickLocation = NSEvent.mouseLocation
-                    if panelFrame.contains(clickLocation) { return }
-                }
-                withAnimation(NotchAnimation.close) {
-                    self.appState.surface = .collapsed
-                    self.appState.cancelCompletionQueue()
-                }
-            }
-        }
+        return panel
     }
 
-    private func makeHostingView(for screen: NSScreen) -> NotchHostingView<NotchPanelView> {
-        let hasNotch = ScreenDetector.screenHasNotch(screen)
-        let notchHeight = ScreenDetector.topBarHeight(for: screen)
-        let notchW = ScreenDetector.notchWidth(for: screen)
+    private func slotSignature(for screen: NSScreen) -> String {
+        let base = ScreenDetector.signature(for: screen)
+        let hasNotch = ScreenDetector.screenHasNotch(screen) ? 1 : 0
+        let height = Int(ScreenDetector.topBarHeight(for: screen).rounded())
+        let notchW = Int(ScreenDetector.notchWidth(for: screen).rounded())
+        return "\(base):n\(hasNotch):h\(height):w\(notchW)"
+    }
 
-        let rootView = NotchPanelView(
-            appState: appState,
-            hasNotch: hasNotch,
-            notchHeight: notchHeight,
-            notchW: notchW,
-            screenWidth: screen.frame.width
+    private func updateHoverState(displayID: String, hovering: Bool) {
+        if hovering {
+            hoveredDisplayIDs.insert(displayID)
+        } else {
+            hoveredDisplayIDs.remove(displayID)
+        }
+        appState.followUps.pointerOverIsland = !hoveredDisplayIDs.isEmpty
+    }
+
+    private func tearDownSlot(displayID: String) {
+        guard let slot = slots.removeValue(forKey: displayID) else { return }
+        hoveredDisplayIDs.remove(displayID)
+        appState.followUps.pointerOverIsland = !hoveredDisplayIDs.isEmpty
+        if dragTargetDisplayID == displayID {
+            dragTargetDisplayID = nil
+            dragStartMouseX = nil
+            dragStartPanelX = nil
+            isDraggingPanel = false
+        }
+        slot.hostingView.onScroll = nil
+        slot.panel.contentView = nil
+        slot.panel.delegate = nil
+        slot.panel.orderOut(nil)
+        slot.panel.close()
+    }
+
+    private func syncPanels(forceRebuild: Bool = false) {
+        let entries = screenEntriesProvider()
+        let displays = entries.map(\.descriptor)
+        let entriesByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.descriptor.id, $0) })
+
+        let islandEnabled = SettingsManager.shared.islandEnabled
+        let configs = SettingsManager.shared.displayConfigurations(for: displays)
+        let plan = PanelSlotPlanner.plan(
+            islandEnabled: islandEnabled,
+            displays: displays,
+            configurations: configs
         )
-        let contentView = NotchHostingView(rootView: rootView)
-        contentView.onScroll = { [weak self] event in
-            guard let self = self else { return false }
-            return NotchNavigationManager.shared.handleScroll(event: event, appState: self.appState)
-        }
-        contentView.sizingOptions = []
-        contentView.translatesAutoresizingMaskIntoConstraints = true
-        return contentView
-    }
+        let activeSet = Set(plan.activeDisplayIDs)
 
-    /// Rebuild the SwiftUI view when the target screen changes
-    /// (notchHeight, notchWidth, hasNotch may be different)
-    private func rebuildForCurrentScreen(_ screen: NSScreen) {
-        guard let panel = panel else { return }
-        let contentView = makeHostingView(for: screen)
-        self.hostingView = contentView
-        panel.contentView = contentView
-        lastChosenScreenSignature = ScreenDetector.signature(for: screen)
-        updatePosition()
-    }
-
-    private func refreshCurrentScreen(forceRebuild: Bool = false) {
-        if isAnimatingScreenHop { return }
-
-        let screen = chosenScreen()
-        let signature = ScreenDetector.signature(for: screen)
-
-        if forceRebuild {
-            rebuildForCurrentScreen(screen)
-            return
+        for existingID in Array(slots.keys) where !activeSet.contains(existingID) {
+            tearDownSlot(displayID: existingID)
         }
 
-        if signature != lastChosenScreenSignature {
-            animateScreenHop(to: screen, signature: signature)
-        }
-    }
+        for displayID in plan.activeDisplayIDs {
+            guard let entry = entriesByID[displayID],
+                  let config = configs[displayID] else { continue }
 
-    private func animateScreenHop(to screen: NSScreen, signature: String) {
-        guard let panel = panel else {
-            rebuildForCurrentScreen(screen)
-            return
-        }
+            let isCoordinator = (displayID == plan.primaryCoordinatorID)
+            let signature = entry.frameOverride != nil
+                ? "\(entry.descriptor.id):\(Int(entry.frame.minX))x\(Int(entry.frame.minY)):\(Int(entry.frame.width))x\(Int(entry.frame.height))"
+                : slotSignature(for: entry.screen)
 
-        if !panel.isVisible || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
-            rebuildForCurrentScreen(screen)
-            panel.alphaValue = 1
-            return
-        }
+            if let slot = slots[displayID] {
+                let needsViewRefresh = forceRebuild
+                    || slot.screenSignature != signature
+                    || slot.configuration.displayMode != config.displayMode
+                    || slot.isPrimaryCoordinator != isCoordinator
 
-        isAnimatingScreenHop = true
-        let oldFrame = panel.frame
-        let newFrame = panelFrame(for: screen)
-        let motion = Self.screenHopMotion()
-        let frames = Self.screenHopFrames(oldFrame: oldFrame, newFrame: newFrame)
-        let targetSignature = signature
+                slot.configuration = config
+                slot.isPrimaryCoordinator = isCoordinator
+                slot.screenSignature = signature
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = motion.fadeOutDuration
-            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            panel.animator().alphaValue = 0
-            panel.animator().setFrame(frames.outgoing, display: true)
-        } completionHandler: { [weak self] in
-            Task { @MainActor [weak self] in
-                guard let self = self else { return }
-                guard let panel = self.panel else {
-                    self.isAnimatingScreenHop = false
-                    return
+                if needsViewRefresh {
+                    slot.hostingView.rootView = makeNotchPanelView(
+                        for: entry,
+                        displayID: displayID,
+                        configuration: config,
+                        isFullscreen: slot.isFullscreen,
+                        isPrimaryCoordinator: isCoordinator
+                    )
                 }
-
-                let targetScreen = NSScreen.screens.first {
-                    ScreenDetector.signature(for: $0) == targetSignature
-                } ?? self.chosenScreen()
-
-                self.rebuildForCurrentScreen(targetScreen)
-                panel.alphaValue = 0
-                panel.setFrame(frames.incoming, display: true)
-
-                Task { @MainActor [weak self] in
-                    try? await Task.sleep(nanoseconds: UInt64(motion.incomingPauseDuration * 1_000_000_000))
-                    guard let self = self else { return }
-                    guard let panel = self.panel else {
-                        self.isAnimatingScreenHop = false
-                        return
-                    }
-
-                    NSAnimationContext.runAnimationGroup { context in
-                        context.duration = motion.fadeInDuration
-                        context.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
-                        panel.animator().alphaValue = 1
-                        panel.animator().setFrame(newFrame, display: true)
-                    } completionHandler: { [weak self] in
-                        Task { @MainActor [weak self] in
-                            self?.lastChosenScreenSignature = targetSignature
-                            self?.isAnimatingScreenHop = false
-                        }
-                    }
-                }
+            } else {
+                let hostingView = makeHostingView(
+                    for: entry,
+                    displayID: displayID,
+                    configuration: config,
+                    isFullscreen: false,
+                    isPrimaryCoordinator: isCoordinator
+                )
+                let panel = makePanel(for: entry, contentView: hostingView)
+                slots[displayID] = PanelSlot(
+                    displayID: displayID,
+                    panel: panel,
+                    hostingView: hostingView,
+                    screenSignature: signature,
+                    configuration: config,
+                    isPrimaryCoordinator: isCoordinator
+                )
             }
         }
+
+        refreshFullscreenStates(updateViews: true, entriesByID: entriesByID)
+        updateAllPositions(entriesByID: entriesByID)
+        updateVisibility()
+        syncFullscreenPoller()
     }
 
     private func observeSettingsChanges() {
-        lastDisplayChoice = SettingsManager.shared.displayChoice
-        lastNotchHeightMode = SettingsManager.shared.notchHeightMode.rawValue
-        lastCustomNotchHeight = SettingsManager.shared.customNotchHeight
-        lastIslandDisplayMode = SettingsManager.shared.islandDisplayMode
+        lastSettingsSnapshot = SettingsSnapshot.current()
         let observer = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
-                guard let self = self else { return }
-                let newChoice = SettingsManager.shared.displayChoice
-                let newHeightMode = SettingsManager.shared.notchHeightMode.rawValue
-                let newCustomHeight = SettingsManager.shared.customNotchHeight
-                let newDisplayMode = SettingsManager.shared.islandDisplayMode
-                if newChoice != self.lastDisplayChoice {
-                    self.lastDisplayChoice = newChoice
-                    self.refreshCurrentScreen(forceRebuild: true)
-                    self.configureAutoScreenPolling()
-                } else if newHeightMode != self.lastNotchHeightMode
-                    || abs(newCustomHeight - self.lastCustomNotchHeight) > 0.001 {
-                    self.lastNotchHeightMode = newHeightMode
-                    self.lastCustomNotchHeight = newCustomHeight
-                    self.refreshCurrentScreen(forceRebuild: true)
-                } else if newDisplayMode != self.lastIslandDisplayMode {
-                    self.lastIslandDisplayMode = newDisplayMode
-                    self.updatePosition()
-                } else {
+                guard let self else { return }
+                let next = SettingsSnapshot.current()
+                guard let prev = self.lastSettingsSnapshot else {
+                    self.lastSettingsSnapshot = next
+                    self.syncPanels(forceRebuild: true)
+                    return
+                }
+                guard next != prev else { return }
+                self.lastSettingsSnapshot = next
+
+                let heightChanged = next.notchHeightMode != prev.notchHeightMode
+                    || abs(next.customNotchHeight - prev.customNotchHeight) > 0.001
+                let slotStructureChanged = next.islandEnabled != prev.islandEnabled
+                    || next.displayConfigsRaw != prev.displayConfigsRaw
+                    || next.displayChoice != prev.displayChoice
+                    || next.islandDisplayMode != prev.islandDisplayMode
+                    || abs(next.dynamicIslandTopOffset - prev.dynamicIslandTopOffset) > 0.001
+                    || heightChanged
+
+                if slotStructureChanged {
+                    self.syncPanels(forceRebuild: heightChanged)
+                    return
+                }
+
+                if next.maxVisibleSessions != prev.maxVisibleSessions
+                    || next.allowHorizontalDrag != prev.allowHorizontalDrag
+                    || next.avoidMenuBarIcons != prev.avoidMenuBarIcons
+                    || abs(next.panelHorizontalOffset - prev.panelHorizontalOffset) > 0.001 {
+                    self.updateAllPositions()
+                }
+
+                if next.hideInFullscreen != prev.hideInFullscreen
+                    || next.hideWhenNoSession != prev.hideWhenNoSession {
                     self.updateVisibility()
-                    self.updatePosition()
                 }
             }
         }
         settingsObservers.append(observer)
     }
 
-    private func configureAutoScreenPolling() {
-        autoScreenPoller?.invalidate()
-        autoScreenPoller = nil
-        // No screen hopping polling — the notch remains securely anchored to the primary/built-in screen.
+    private func currentScreenEntriesByID() -> [String: ScreenEntry] {
+        Dictionary(uniqueKeysWithValues: screenEntriesProvider().map { ($0.descriptor.id, $0) })
     }
 
-    private func updatePosition() {
-        guard let panel = panel else { return }
-        let screen = chosenScreen()
-        let target = panelFrame(for: screen)
-        // `updatePosition` runs on every hover/visibility change; a no-op
-        // `setFrame` still walks AppKit's layout and re-renders the hosting view.
-        guard panel.frame != target else { return }
-        panel.setFrame(target, display: true)
+    private func updateAllPositions(entriesByID: [String: ScreenEntry]? = nil) {
+        let lookup = entriesByID ?? currentScreenEntriesByID()
+        for (displayID, slot) in slots {
+            guard let entry = lookup[displayID] else { continue }
+            let target = panelFrame(for: entry, configuration: slot.configuration, isFullscreen: slot.isFullscreen)
+            guard slot.panel.frame != target else { continue }
+            slot.panel.setFrame(target, display: true)
+        }
     }
 
-    private func panelFrame(for screen: NSScreen) -> NSRect {
-        let size = panelSize(for: screen)
-        let screenFrame = screen.frame
-        let centeredX = centeredX(for: size, screen: screen)
+    private func panelFrame(
+        for entry: ScreenEntry,
+        configuration: DisplayConfiguration,
+        isFullscreen: Bool
+    ) -> NSRect {
+        let size = panelSize(for: entry)
+        let screenFrame = entry.frame
+        let centeredX = centeredX(for: size, frame: screenFrame)
         let dragOffset = SettingsManager.shared.allowHorizontalDrag
             ? CGFloat(SettingsManager.shared.panelHorizontalOffset)
             : 0
@@ -572,8 +777,9 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         // A user-dragged offset is an explicit choice and always wins.
         if SettingsManager.shared.avoidMenuBarIcons,
            dragOffset == 0,
-           !ScreenDetector.screenHasNotch(screen) {
-            let occupied = MenuBarIconAvoidance.occupiedMenuBarRanges(on: screen)
+           entry.frameOverride == nil,
+           !ScreenDetector.screenHasNotch(entry.screen) {
+            let occupied = MenuBarIconAvoidance.occupiedMenuBarRanges(on: entry.screen)
             desiredX = MenuBarIconAvoidance.resolvedX(
                 preferredX: desiredX,
                 panelWidth: size.width,
@@ -584,47 +790,56 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             )
         }
 
-        let x = clampedX(desiredX, panelWidth: size.width, on: screen)
-        let y = anchoredY(for: size.height, on: screen)
+        let x = clampedX(desiredX, panelWidth: size.width, frame: screenFrame)
+        let y = anchoredY(for: size.height, screenMaxY: screenFrame.maxY, configuration: configuration, isFullscreen: isFullscreen)
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
-    private func anchoredY(for panelHeight: CGFloat, on screen: NSScreen) -> CGFloat {
+    private func anchoredY(
+        for panelHeight: CGFloat,
+        screenMaxY: CGFloat,
+        configuration: DisplayConfiguration,
+        isFullscreen: Bool
+    ) -> CGFloat {
         PanelWindowLayout.anchoredY(
-            screenMaxY: screen.frame.maxY,
+            screenMaxY: screenMaxY,
             panelHeight: panelHeight,
-            displayMode: SettingsManager.shared.islandDisplayMode,
-            isFullscreenMode: appState.isFullscreenMode,
-            topOffset: SettingsManager.shared.dynamicIslandTopOffset
+            displayMode: configuration.displayMode,
+            isFullscreenMode: isFullscreen,
+            topOffset: configuration.dynamicIslandTopOffset
         )
     }
 
-    private func centeredX(for size: NSSize, screen: NSScreen) -> CGFloat {
-        screen.frame.midX - size.width / 2
+    private func centeredX(for size: NSSize, frame: CGRect) -> CGFloat {
+        frame.midX - size.width / 2
     }
 
-    private func clampedX(_ desiredX: CGFloat, panelWidth: CGFloat, on screen: NSScreen) -> CGFloat {
-        min(max(desiredX, screen.frame.minX), screen.frame.maxX - panelWidth)
+    private func clampedX(_ desiredX: CGFloat, panelWidth: CGFloat, frame: CGRect) -> CGFloat {
+        min(max(desiredX, frame.minX), frame.maxX - panelWidth)
     }
 
     private func setupHorizontalDragMonitor() {
         let dragThreshold: CGFloat = 5
 
         localDragMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
-            guard let self, let panel = self.panel,
+            guard let self,
                   SettingsManager.shared.allowHorizontalDrag,
                   self.appState.expandedTab != .game,
                   !self.appState.isGameInteractionLocked else { return event }
 
             switch event.type {
             case .leftMouseDown:
-                if event.window === panel {
+                if let matchedSlot = self.slots.values.first(where: { $0.panel === event.window }) {
+                    self.dragTargetDisplayID = matchedSlot.displayID
                     self.dragStartMouseX = NSEvent.mouseLocation.x
-                    self.dragStartPanelX = panel.frame.origin.x
+                    self.dragStartPanelX = matchedSlot.panel.frame.origin.x
                     self.isDraggingPanel = false
                 }
             case .leftMouseDragged:
-                if let startMouseX = self.dragStartMouseX,
+                if let targetID = self.dragTargetDisplayID,
+                   let slot = self.slots[targetID],
+                   let entry = self.currentScreenEntriesByID()[targetID],
+                   let startMouseX = self.dragStartMouseX,
                    let startPanelX = self.dragStartPanelX {
                     let deltaX = NSEvent.mouseLocation.x - startMouseX
                     // Only start moving after exceeding threshold
@@ -632,19 +847,26 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                         guard abs(deltaX) > dragThreshold else { return event }
                         self.isDraggingPanel = true
                     }
-                    let screen = self.chosenScreen()
-                    let size = panel.frame.size
-                    let newX = self.clampedX(startPanelX + deltaX, panelWidth: size.width, on: screen)
-                    let fixedY = self.anchoredY(for: size.height, on: screen)
-                    panel.setFrameOrigin(NSPoint(x: newX, y: fixedY))
+                    let size = slot.panel.frame.size
+                    let newX = self.clampedX(startPanelX + deltaX, panelWidth: size.width, frame: entry.frame)
+                    let fixedY = self.anchoredY(
+                        for: size.height,
+                        screenMaxY: entry.frame.maxY,
+                        configuration: slot.configuration,
+                        isFullscreen: slot.isFullscreen
+                    )
+                    slot.panel.setFrameOrigin(NSPoint(x: newX, y: fixedY))
                 }
             case .leftMouseUp:
-                if self.isDraggingPanel, let panel = self.panel {
-                    let screen = self.chosenScreen()
-                    let size = panel.frame.size
-                    let offset = panel.frame.origin.x - self.centeredX(for: size, screen: screen)
+                if self.isDraggingPanel,
+                   let targetID = self.dragTargetDisplayID,
+                   let slot = self.slots[targetID],
+                   let entry = self.currentScreenEntriesByID()[targetID] {
+                    let size = slot.panel.frame.size
+                    let offset = slot.panel.frame.origin.x - self.centeredX(for: size, frame: entry.frame)
                     SettingsManager.shared.panelHorizontalOffset = Double(offset)
                 }
+                self.dragTargetDisplayID = nil
                 self.dragStartMouseX = nil
                 self.dragStartPanelX = nil
                 self.isDraggingPanel = false
@@ -655,46 +877,66 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Choose which screen to display on based on displayChoice setting
-    private func chosenScreen() -> NSScreen {
-        let choice = SettingsManager.shared.displayChoice
+    @discardableResult
+    private func refreshFullscreenStates(
+        updateViews: Bool,
+        entriesByID: [String: ScreenEntry]? = nil
+    ) -> Bool {
+        let lookup = entriesByID ?? currentScreenEntriesByID()
+        let windowList = fullscreenCandidateWindowBounds()
+        let primaryMaxY = (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.screens.first)?.frame.maxY ?? 0
 
-        // Handle specific screen index: "screen_0", "screen_1", etc.
-        if choice.hasPrefix("screen_"),
-           let index = Int(choice.dropFirst(7)),
-           index < NSScreen.screens.count {
-            return NSScreen.screens[index]
-        }
-
-        if choice == "main", let first = NSScreen.screens.first {
-            return first
-        }
-
-        if choice == "builtin" {
-            if let notch = NSScreen.screens.first(where: { ScreenDetector.screenHasNotch($0) }) {
-                return notch
+        var anyChanged = false
+        for (displayID, slot) in slots {
+            guard let entry = lookup[displayID] else { continue }
+            let nextFullscreen = windowList.contains { cgBounds in
+                PanelFullscreenGeometry.isWindowFullscreen(
+                    cgBounds: cgBounds,
+                    primaryScreenMaxY: primaryMaxY,
+                    targetScreenFrame: entry.frame
+                )
             }
-            if let builtin = NSScreen.screens.first(where: { ScreenDetector.isBuiltinScreen($0) }) {
-                return builtin
+            if slot.isFullscreen != nextFullscreen {
+                slot.isFullscreen = nextFullscreen
+                anyChanged = true
+                if updateViews {
+                    slot.hostingView.rootView = makeNotchPanelView(
+                        for: entry,
+                        displayID: displayID,
+                        configuration: slot.configuration,
+                        isFullscreen: nextFullscreen,
+                        isPrimaryCoordinator: slot.isPrimaryCoordinator
+                    )
+                }
             }
-            return NSScreen.screens.first ?? NSScreen()
         }
-
-        // "auto" — prefer notch screen (built-in Mac screen), fallback to main screen
-        return ScreenDetector.preferredScreen
+        appState.isFullscreenMode = slots.values.contains(where: \.isFullscreen)
+        return anyChanged
     }
 
-    /// Poll every 1.5s while in fullscreen; stop when fullscreen ends
+    private func syncFullscreenPoller() {
+        if slots.values.contains(where: \.isFullscreen) {
+            if fullscreenPoller == nil {
+                startFullscreenExitPoller()
+            }
+        } else {
+            fullscreenPoller?.invalidate()
+            fullscreenPoller = nil
+        }
+    }
+
+    /// Poll every 1.5s while any display is in fullscreen; stop when all exit fullscreen
     private func startFullscreenExitPoller() {
         fullscreenPoller?.invalidate()
         let timer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] timer in
             Task { @MainActor in
-                guard let self = self else { timer.invalidate(); return }
-                if !self.isActiveSpaceFullscreen() {
-                    self.fullscreenLatch = false
-                    self.appState.isFullscreenMode = false
-                    self.updatePosition()
+                guard let self else { timer.invalidate(); return }
+                let changed = self.refreshFullscreenStates(updateViews: true)
+                if changed {
+                    self.updateAllPositions()
                     self.updateVisibility()
+                }
+                if !self.slots.values.contains(where: \.isFullscreen) {
                     timer.invalidate()
                     self.fullscreenPoller = nil
                 }
@@ -705,32 +947,38 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         fullscreenPoller = timer
     }
 
-    /// Update panel visibility based on settings
+    /// Update panel visibility across all active display slots based on settings
     private func updateVisibility() {
-        guard let panel = panel else { return }
         let settings = SettingsManager.shared
-        if settings.hideInFullscreen && fullscreenLatch {
-            panel.orderOut(nil)
-            MascotAnimationGate.shared.setPanelVisible(false)
-            return
-        }
-
         let hasActiveBanner = SystemMonitorManager.shared.showChargingBanner || PrayerTimeManager.shared.showMiniPeekBanner
-        if settings.hideWhenNoSession && appState.activeSessionCount == 0 && !hasActiveBanner {
-            panel.orderOut(nil)
+        if !settings.islandEnabled || (settings.hideWhenNoSession && appState.activeSessionCount == 0 && !hasActiveBanner) {
+            for slot in slots.values {
+                slot.panel.orderOut(nil)
+            }
             MascotAnimationGate.shared.setPanelVisible(false)
             return
         }
 
-        if !panel.isVisible {
-            panel.orderFrontRegardless()
+        var anyVisible = false
+        for slot in slots.values {
+            if settings.hideInFullscreen && slot.isFullscreen {
+                slot.panel.orderOut(nil)
+            } else {
+                if !slot.panel.isVisible {
+                    slot.panel.orderFrontRegardless()
+                }
+                anyVisible = true
+            }
         }
-        MascotAnimationGate.shared.setPanelVisible(true)
-        MascotAnimationGate.shared.setIdleSettled(isIslandSettled())
-        MascotAnimationGate.shared.setMusicPlaying(NowPlayingManager.shared.isPlaying)
-        // An expanded island is being looked at, so Now Playing may probe more often.
-        NowPlayingManager.shared.isIslandExpanded = appState.surface.isExpanded
-        MascotAnimationGate.shared.setWaitingForUser(isWaitingForUser())
+
+        MascotAnimationGate.shared.setPanelVisible(anyVisible)
+        if anyVisible {
+            MascotAnimationGate.shared.setIdleSettled(isIslandSettled())
+            MascotAnimationGate.shared.setMusicPlaying(NowPlayingManager.shared.isPlaying)
+            // An expanded island is being looked at, so Now Playing may probe more often.
+            NowPlayingManager.shared.isIslandExpanded = appState.surface.isExpanded
+            MascotAnimationGate.shared.setWaitingForUser(isWaitingForUser())
+        }
     }
 
     /// Collapsed island with nothing running — the state a Mac spends most of
@@ -750,36 +998,26 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    private func isActiveSpaceFullscreen() -> Bool {
+    private func fullscreenCandidateWindowBounds() -> [CGRect] {
         guard let frontApp = NSWorkspace.shared.frontmostApplication,
-              frontApp.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return false }
-
-        let screen = chosenScreen()
-
-        // Primary: check if frontmost app has a window covering the entire screen
-        if let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] {
-            for window in windowList {
-                guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
-                      pid == frontApp.processIdentifier,
-                      let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
-                      let bounds = window[kCGWindowBounds as String] as? [String: Any],
-                      let w = bounds["Width"] as? CGFloat,
-                      let h = bounds["Height"] as? CGFloat else { continue }
-                if w >= screen.frame.width && h >= screen.frame.height {
-                    return true
-                }
-            }
+              frontApp.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let windowList = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+              ) as? [[String: Any]] else {
+            return []
         }
 
-        return false
+        return PanelFullscreenGeometry.candidateWindowBounds(
+            from: windowList,
+            frontmostPID: frontApp.processIdentifier,
+            excludingPID: ProcessInfo.processInfo.processIdentifier
+        )
     }
 
-    /// Whether the island currently holds keyboard focus. It only becomes key
+    /// Whether any island panel currently holds keyboard focus. It only becomes key
     /// when the user clicks into it (NotchHostingView.mouseDown).
     var isPanelKeyWindow: Bool {
-        panel?.isKeyWindow == true
+        slots.values.contains { $0.panel.isKeyWindow }
     }
 
     /// Fast check: is the terminal running the active session the foreground app?
@@ -792,24 +1030,36 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowDidMove(_ notification: Notification) {
-        // Horizontal drag (setupHorizontalDragMonitor) only ever changes x, and the
-        // screen-hop animation runs under isAnimatingScreenHop. A y drifted off the
-        // top edge therefore means the system re-placed the panel — e.g. a display
-        // reconfigure clamping it below the menu bar (#263) — so snap it back.
-        guard !isDraggingPanel, !isAnimatingScreenHop, let panel = panel else { return }
-        let expectedY = anchoredY(for: panel.frame.height, on: chosenScreen())
-        guard abs(panel.frame.origin.y - expectedY) > 0.5 else { return }
+        // Horizontal drag (setupHorizontalDragMonitor) only ever changes x.
+        // A y drifted off the top edge therefore means the system re-placed the panel —
+        // e.g. a display reconfigure clamping it below the menu bar (#263) — so snap it back.
+        guard !isDraggingPanel,
+              let movedWindow = notification.object as? NSWindow,
+              let slot = slots.values.first(where: { $0.panel === movedWindow }),
+              let entry = currentScreenEntriesByID()[slot.displayID] else { return }
+        let expectedY = anchoredY(
+            for: slot.panel.frame.height,
+            screenMaxY: entry.frame.maxY,
+            configuration: slot.configuration,
+            isFullscreen: slot.isFullscreen
+        )
+        guard abs(slot.panel.frame.origin.y - expectedY) > 0.5 else { return }
         DispatchQueue.main.async { [weak self] in
-            guard let self, !self.isDraggingPanel, !self.isAnimatingScreenHop else { return }
-            self.updatePosition()
+            guard let self, !self.isDraggingPanel else { return }
+            self.updateAllPositions()
         }
     }
 
     deinit {
-        autoScreenPoller?.invalidate()
         fullscreenPoller?.invalidate()
         for observer in settingsObservers {
             NotificationCenter.default.removeObserver(observer)
+        }
+        for observer in defaultCenterObservers {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        for observer in workspaceObservers {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
         }
         if let monitor = globalClickMonitor {
             NSEvent.removeMonitor(monitor)
