@@ -71,11 +71,21 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Test Suite 2: Windows Check Script
+# Test Suite 2: Linux & Windows Test Scripts
 # ------------------------------------------------------------------------------
-echo "--- Suite 2: windows/ci/check.sh ---"
-WIN_CHECK_SCRIPT="$ROOT/windows/ci/check.sh"
+echo "--- Suite 2: linux/ci/test.sh & windows/ci/check.sh ---"
+LINUX_TEST_SCRIPT="$ROOT/linux/ci/test.sh"
+if [ -f "$LINUX_TEST_SCRIPT" ]; then
+    assert_eq "linux-test.sh is executable" "true" "$([ -x "$LINUX_TEST_SCRIPT" ] && echo true || echo false)"
+    LINUX_SCRIPT_CONTENT=$(cat "$LINUX_TEST_SCRIPT")
+    assert_contains "linux-test.sh skips flaky scan_policy race" "--skip an_idle_store_is_read_once_and_then_never_again" "$LINUX_SCRIPT_CONTENT"
+    assert_contains "linux-test.sh has ponytail shortcut note" "shortcut: skip" "$LINUX_SCRIPT_CONTENT"
+else
+    echo "  [FAIL] linux/ci/test.sh does not exist"
+    FAILED=$((FAILED + 1))
+fi
 
+WIN_CHECK_SCRIPT="$ROOT/windows/ci/check.sh"
 if [ -f "$WIN_CHECK_SCRIPT" ]; then
     assert_eq "windows-check.sh is executable" "true" "$([ -x "$WIN_CHECK_SCRIPT" ] && echo true || echo false)"
     
