@@ -359,7 +359,10 @@ impl Feed {
         if roots.is_empty() {
             return 0;
         }
-        let result = scan(&roots);
+        let mut result = scan(&roots);
+        // #267: a discovered session without a pid is a card that can never be
+        // pruned. The table is read here, once, and only when something needs it.
+        crate::discovery::correlate_pids(&mut result.hits);
         let mut state = self.lock();
         let mut added = 0;
         for hit in &result.hits {

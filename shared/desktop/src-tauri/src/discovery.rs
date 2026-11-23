@@ -91,6 +91,61 @@ fn read_tail(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// Give every hit that has no pid the process that is running it (#267).
+///
+/// Reads the process table **once**, for the whole scan: a table read per session
+/// is a `/proc` walk per session, which is the cost #246 exists to avoid.
+///
+/// A table that cannot be read, or that names no candidate, leaves the hit
+/// without a pid — the state before #266. Discovery must not fail because
+/// correlation did: an empty panel is a worse outcome than a card without a
+/// watchdog.
+pub fn correlate_pids(hits: &mut [DiscoveryHit]) {
+    if hits.iter().all(|hit| hit.pid.is_some()) {
+        return;
+    }
+    let table = morrow_platform::agent_process::table();
+    correlate_with(hits, &table, |pid| {
+        morrow_platform::process::exists(i64::from(pid))
+    });
+}
+
+/// `correlate_pids` with the table and the liveness probe injected, so the real
+/// function — not a copy of it — is what the tests exercise.
+pub fn correlate_with(
+    hits: &mut [DiscoveryHit],
+    table: &[morrow_core::agent_process::ProcessInfo],
+    alive: impl Fn(i32) -> bool,
+) {
+    let needs: Vec<morrow_core::agent_process::PidRequest> = hits
+        .iter()
+        .filter(|hit| hit.pid.is_none())
+        .map(|hit| morrow_core::agent_process::PidRequest {
+            session_id: hit.session_id.clone(),
+            source: hit.source.to_owned(),
+            cwd: hit.cwd.clone(),
+            modified_at_ms: hit.modified_at,
+        })
+        .collect();
+    if needs.is_empty() || table.is_empty() {
+        return;
+    }
+    // A pid a hook already named is not a candidate: that session is watched by
+    // its own process, and handing its pid to another card would make two cards
+    // share one watchdog.
+    let mut claimed: std::collections::HashSet<i32> =
+        hits.iter().filter_map(|hit| hit.pid).collect();
+    let assignments = morrow_core::agent_process::assign(table, &needs, &mut claimed, alive);
+    for assignment in assignments {
+        if let Some(hit) = hits
+            .iter_mut()
+            .find(|hit| hit.session_id == assignment.session_id)
+        {
+            hit.pid = Some(assignment.pid);
+        }
+    }
+}
+
 /// One scan over every root, with the budget from the coordinator.
 pub fn scan_once(roots: &[String]) -> ScanResult {
     let reader = ClaudeTranscripts;
@@ -239,6 +294,105 @@ mod tests {
         let scratch = Scratch::new("missing");
         let root = scratch.0.join(".claude").to_string_lossy().into_owned();
         assert!(scan_once(&[root]).hits.is_empty());
+    }
+
+    /// #267: a hit with no pid gets the process that is running it, so `Watches`
+    /// can prune it. Exercises `correlate_with`, the function `correlate_pids`
+    /// delegates to, not a copy of its filter.
+    #[test]
+    fn a_hit_without_a_pid_gets_the_process_running_it() {
+        let table = vec![process(
+            4242,
+            "/usr/bin/claude",
+            &["claude"],
+            "/home/dev/project",
+            1_000,
+        )];
+        let mut hits = vec![hit("s", "/home/dev/project", 5_000, None)];
+
+        correlate_with(&mut hits, &table, |_| true);
+
+        assert_eq!(hits[0].pid, Some(4242));
+    }
+
+    /// A pid a hook already named is not handed to another card, or two cards
+    /// would share one watchdog and one of them would outlive its process.
+    #[test]
+    fn a_pid_a_hook_named_is_not_given_away() {
+        let table = vec![process(7, "/usr/bin/claude", &["claude"], "/w", 1_000)];
+        let mut hits = vec![
+            hit("has-pid", "/w", 2_000, Some(7)),
+            hit("needs-pid", "/w", 2_000, None),
+        ];
+
+        correlate_with(&mut hits, &table, |_| true);
+
+        assert_eq!(hits[0].pid, Some(7), "the hook's own pid is untouched");
+        assert_eq!(hits[1].pid, None, "the only candidate is already taken");
+    }
+
+    /// An empty table — macOS, a permission wall, a host with no `/proc` — leaves
+    /// the hits without pids and must not fail: an empty panel is a worse outcome
+    /// than a card without a watchdog.
+    #[test]
+    fn a_table_that_cannot_be_read_leaves_the_hits_alone() {
+        let mut hits = vec![hit("s", "/w", 2_000, None)];
+        correlate_with(&mut hits, &[], |_| true);
+        assert_eq!(hits[0].pid, None);
+    }
+
+    /// The table is read once for the whole scan. A hit that already has a pid
+    /// asks for nothing, so a scan with nothing to correlate never reads a table.
+    #[test]
+    fn a_hit_that_already_has_a_pid_asks_for_nothing() {
+        let mut hits = vec![hit("s", "/w", 2_000, Some(9))];
+        correlate_with(&mut hits, &[], |_| panic!("a table must not be read"));
+        assert_eq!(hits[0].pid, Some(9));
+    }
+
+    /// Two sessions in one directory, neither with a pid: each gets its own, and
+    /// a dead process is not a candidate.
+    #[test]
+    fn two_sessions_in_one_directory_get_their_own_processes() {
+        let table = vec![
+            process(10, "/usr/bin/claude", &["claude"], "/w", 1_000),
+            process(11, "/usr/bin/claude", &["claude"], "/w", 5_000),
+            // Long dead, so never a candidate whatever the order.
+            process(12, "/usr/bin/claude", &["claude"], "/w", 500),
+        ];
+        let mut hits = vec![hit("a", "/w", 1_500, None), hit("b", "/w", 5_500, None)];
+
+        correlate_with(&mut hits, &table, |pid| pid != 12);
+
+        assert_eq!(hits[0].pid, Some(10));
+        assert_eq!(hits[1].pid, Some(11));
+    }
+
+    fn process(
+        pid: i32,
+        executable: &str,
+        args: &[&str],
+        cwd: &str,
+        started: u64,
+    ) -> morrow_core::agent_process::ProcessInfo {
+        morrow_core::agent_process::ProcessInfo {
+            pid,
+            executable: executable.to_owned(),
+            arguments: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            cwd: Some(cwd.to_owned()),
+            start_time_ms: Some(started),
+        }
+    }
+
+    fn hit(session_id: &str, cwd: &str, modified_at: u64, pid: Option<i32>) -> DiscoveryHit {
+        DiscoveryHit {
+            session_id: session_id.to_owned(),
+            source: "claude",
+            cwd: cwd.to_owned(),
+            pid,
+            modified_at: Some(modified_at),
+            ..DiscoveryHit::default()
+        }
     }
 
     /// A half-written or foreign file is skipped, not turned into a card with an
