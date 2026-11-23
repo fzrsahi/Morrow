@@ -74,11 +74,12 @@ if [ "$ACTION" = "--check-heal" ]; then
         echo "==> Runner container '$RUNNER_NAME' not found. Starting it..."
         exec "$0" start
     fi
-    RECENT_LOGS=$(docker logs --tail 30 "$RUNNER_NAME" 2>&1 || true)
+    # Use time-windowed logs (--since 45s) to prevent restart-loop on historical errors
+    RECENT_LOGS=$(docker logs --since 45s "$RUNNER_NAME" 2>&1 || true)
     if echo "$RECENT_LOGS" | grep -qE "Unauthenticated|token is expired"; then
-        echo "⚠️  Detected authentication failure on '$RUNNER_NAME'. Self-healing runner..."
+        echo "⚠️  Detected active authentication failure on '$RUNNER_NAME'. Reconnecting..."
         docker restart "$RUNNER_NAME" >/dev/null 2>&1
-        echo "✅ Runner '$RUNNER_NAME' restarted with refreshed session token."
+        echo "✅ Runner '$RUNNER_NAME' reconnected to server via fresh gRPC handshake."
         exit 0
     fi
     echo "Runner '$RUNNER_NAME' is healthy."

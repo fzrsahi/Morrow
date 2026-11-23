@@ -42,8 +42,7 @@ step() {
 step fmt cargo fmt --all --check
 # morrow-app needs GTK / WebKitGTK: linux/ci/test-desktop.sh, in its image.
 step clippy cargo clippy --workspace --exclude morrow-app --all-targets --locked -- -D warnings
-# shortcut: skip flaky scan_policy timestamp race until PR #259 fixes the 8-byte mtime collision
-step test cargo test --workspace --exclude morrow-app --locked -- --skip an_idle_store_is_read_once_and_then_never_again
+step test cargo test --workspace --exclude morrow-app --locked
 step purity shared/ci/rust-purity.sh
 
 {
