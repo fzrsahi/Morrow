@@ -18,6 +18,7 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 
 use crate::completion::{self, SnapshotCompletion};
+use crate::discovery::BACKFILL_WINDOW_MS;
 use crate::permissions::{Card, Decision, Permissions};
 use crate::prune::{Pid, SessionProcess, Watches};
 use crate::sessions::{Session, Sessions};
@@ -246,15 +247,22 @@ impl Feed {
         if !state.visible || !state.probes_active {
             return;
         }
+        let now = now_ms();
         let paths = state.sessions.transcript_paths();
         let live: HashSet<String> = paths.iter().map(|(id, _)| id.clone()).collect();
         let mut changed = false;
         for (session_id, path) in paths {
             if let Some(delta) = state.tails.attach(&session_id, &path) {
-                changed |= state.sessions.apply_transcript_delta(&session_id, &delta);
+                if state.sessions.apply_transcript_delta(&session_id, &delta) {
+                    state.sessions.touch_discovered(&session_id, now);
+                    changed = true;
+                }
             }
             if let Some(delta) = state.tails.poll(&session_id) {
-                changed |= state.sessions.apply_transcript_delta(&session_id, &delta);
+                if state.sessions.apply_transcript_delta(&session_id, &delta) {
+                    state.sessions.touch_discovered(&session_id, now);
+                    changed = true;
+                }
             }
         }
         state.tails.retain(|session_id| live.contains(session_id));
@@ -321,6 +329,11 @@ impl Feed {
     /// nothing to show and every session an agent already has is invisible until
     /// its next hook, so the scan happens here rather than on a timer: the store
     /// is read when somebody is looking, and not otherwise.
+    ///
+    /// AC 5 of #261 (the `ambient.ts` frequency gate) has no counterpart here:
+    /// there is no recurring scan to throttle, and a hidden or locked panel is
+    /// not attached, so no scan runs for it. The existing `set_visible` /
+    /// `set_probes_active` gates still stop transcript polling.
     pub fn subscribe(&self, channel: Channel<Snapshot>) {
         {
             let mut state = self.lock();
@@ -359,30 +372,31 @@ impl Feed {
         if roots.is_empty() {
             return 0;
         }
+        let now = now_ms();
         let result = scan(&roots);
         let mut state = self.lock();
         let mut added = 0;
         for hit in &result.hits {
-            if state.sessions.insert_discovered(hit) {
+            if state.sessions.insert_discovered(hit, now) {
                 added += 1;
             }
         }
         if added > 0 {
             state.dirty = true;
-            // A discovered session with a pid deserves the same liveness watch a
-            // hook-born one gets (#198); one without keeps its card until the
-            // store stops changing, which is what `Watches` already does for a
-            // session that has no capturable pid.
+            // A discovered session with a pid gets the same liveness watch a
+            // hook-born one gets (#198). A pid-less one has no watch to ride,
+            // so its last-seen clock seeds the staleness sweep in `prune_with`.
             self.prune_changed.notify_one();
             self.changed.notify_one();
         }
         added
     }
 
-    /// One liveness round. The adapters are injected so the decision can be
-    /// exercised without real processes; `prune_dead` supplies the shell's.
+    /// One liveness round. The adapters and clock are injected so the decision
+    /// can be exercised without real processes; `prune_dead` supplies the shell's.
     fn prune_with(
         &self,
+        now: u64,
         capture: impl FnMut(Pid) -> Option<Watch>,
         alive: impl FnMut(Watch) -> bool,
     ) {
@@ -396,11 +410,20 @@ impl Feed {
                 pid: s.cli_pid,
             })
             .collect();
-        let dead = state.watches.reconcile(&processes, capture, alive);
-        if dead.is_empty() {
+        let mut gone = state.watches.reconcile(&processes, capture, alive);
+        // A pid-less row from a scan is invisible to `Watches`, so age it out
+        // here with the same window the reader used to admit it (#261).
+        gone.extend(
+            state
+                .sessions
+                .prune_stale_discovered(now, BACKFILL_WINDOW_MS),
+        );
+        if gone.is_empty() {
             return;
         }
-        for id in &dead {
+        gone.sort();
+        gone.dedup();
+        for id in &gone {
             state.sessions.remove(id);
             state.permissions.drop_session(id);
             state.watches.forget(id);
@@ -413,6 +436,7 @@ impl Feed {
     /// Drop sessions whose CLI process is gone, with their cards.
     pub fn prune_dead(&self) {
         self.prune_with(
+            now_ms(),
             |pid| crate::adapters::process_watch(pid as i64),
             crate::adapters::process_alive,
         );
@@ -801,6 +825,7 @@ mod tests {
 
         // Only pid 9999 is alive; "a" and its approval card must go.
         feed.prune_with(
+            now_ms(),
             |pid| {
                 Some(Watch {
                     pid: pid as i64,
@@ -826,5 +851,33 @@ mod tests {
             ["b"]
         );
         assert!(!feed.lock().tails.has("a"), "pruning stops its tail too");
+    }
+
+    /// AC 3 of #261 at the feed: a discovered card has no pid, so without this
+    /// sweep the first attach would pin it for the life of the process.
+    #[test]
+    fn a_stale_discovered_card_is_pruned_but_a_fresh_one_stays() {
+        let feed = Feed::default();
+        let now = BACKFILL_WINDOW_MS + 20_000;
+        let mut fresh = discovered("fresh", "/home/u/fresh");
+        fresh.modified_at = Some(now - 1_000);
+        let added = feed.backfill_with(
+            |_home| vec!["/roots/one".to_owned()],
+            |_roots| morrow_core::discovery::scan::ScanResult {
+                hits: vec![discovered("aged", "/home/u/aged"), fresh],
+                ..Default::default()
+            },
+        );
+        assert_eq!(added, 2);
+
+        feed.prune_with(now, |_| None, |_| false);
+
+        let ids: Vec<_> = feed
+            .snapshot()
+            .sessions
+            .into_iter()
+            .map(|row| row.session_id)
+            .collect();
+        assert_eq!(ids, ["fresh"]);
     }
 }

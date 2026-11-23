@@ -154,6 +154,9 @@ pub struct Sessions {
     /// Last branch reading per session: `(cwd at the time, reading)`. A new
     /// cwd (or a Stop, where the turn may have switched branches) re-reads it.
     branches: HashMap<String, (String, Option<GitBranchInfo>)>,
+    /// Last-seen time of sessions that came from a scan without a pid. They are
+    /// invisible to `Watches`, so this is what lets the feed age them out (#261).
+    discovered: HashMap<String, u64>,
 }
 
 impl Sessions {
@@ -230,6 +233,12 @@ impl Sessions {
             }
             self.last_events
                 .insert(session_id.to_owned(), event.event_name);
+            // A hook is a witness that the session is still alive. Refresh a
+            // backfilled row's clock so an active agent is never swept while a
+            // quiet one ages out (#261).
+            if let Some(last_seen) = self.discovered.get_mut(session_id) {
+                *last_seen = now_ms;
+            }
             if let Some(path) = payload
                 .as_object()
                 .get("transcript_path")
@@ -264,11 +273,19 @@ impl Sessions {
     /// overwriting would take a card that is WORKING back to DONE, and take a
     /// permission prompt's place in the tier order with it. "Scan never wins" is
     /// the rule; the hook is the more specific witness.
-    pub fn insert_discovered(&mut self, hit: &morrow_core::discovery::DiscoveryHit) -> bool {
+    ///
+    /// `now` is the fallback clock when the store had no mtime; it also seeds
+    /// the staleness clock for a pid-less hit so the card cannot live forever.
+    pub fn insert_discovered(
+        &mut self,
+        hit: &morrow_core::discovery::DiscoveryHit,
+        now_ms: u64,
+    ) -> bool {
         if self.inner.contains_key(&hit.session_id) {
             return false;
         }
-        let modified_at = hit.modified_at.unwrap_or_default() as f64 / 1000.0;
+        let last_seen = hit.modified_at.unwrap_or(now_ms);
+        let modified_at = last_seen as f64 / 1000.0;
         let mut snapshot = SessionSnapshot::new(Timestamp(modified_at));
         snapshot.status = AgentStatus::Idle;
         // The agent the reader named, not the one a hook would have named: a
@@ -282,11 +299,46 @@ impl Sessions {
         // The `Close`-less shape: a hook names the session; a scan only guesses
         // from the agent's own store, so the source comes with the hit.
         self.inner.insert(hit.session_id.clone(), snapshot);
+        if hit.pid.is_none() {
+            self.discovered.insert(hit.session_id.clone(), last_seen);
+        }
         self.transcript_paths
             .entry(hit.session_id.clone())
             .or_insert_with(|| hit.transcript_path.clone().unwrap_or_default());
         self.branches.remove(&hit.session_id);
         true
+    }
+
+    /// New bytes arrived in a backfilled session's transcript. The tailer is
+    /// the only liveness signal a pid-less session has while it is on screen.
+    pub fn touch_discovered(&mut self, session_id: &str, now_ms: u64) {
+        if let Some(last_seen) = self.discovered.get_mut(session_id) {
+            *last_seen = now_ms;
+        }
+    }
+
+    /// Age out discovered sessions that have gone quiet for `window_ms`.
+    ///
+    /// Only pid-less cards are swept: once a pid arrives, `Watches` owns the
+    /// liveness decision (#198). A hook or a growing transcript refreshes the
+    /// clock above, and `insert_discovered` still refuses a session a hook owns,
+    /// so a stale scan never demotes a WORKING card.
+    pub fn prune_stale_discovered(&mut self, now_ms: u64, window_ms: u64) -> Vec<String> {
+        let stale: Vec<String> = self
+            .discovered
+            .iter()
+            .filter(|(_, last_seen)| now_ms.saturating_sub(**last_seen) > window_ms)
+            .filter(|(id, _)| {
+                self.inner
+                    .get(id.as_str())
+                    .is_none_or(|session| session.cli_pid.is_none())
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in &stale {
+            self.remove(id);
+        }
+        stale
     }
 
     /// The transcript paths the hooks reported, for the shell's tailer.
@@ -338,6 +390,7 @@ impl Sessions {
         self.branches.remove(session_id);
         self.transcript_paths.remove(session_id);
         self.live_replies.remove(session_id);
+        self.discovered.remove(session_id);
     }
 
     /// The home this store reduces against, which is where discovery looks.
@@ -434,6 +487,9 @@ mod tests {
     use super::*;
     use morrow_protocol::decode_payload;
 
+    const NOW: u64 = 5_000;
+    const WINDOW: u64 = 7 * 24 * 60 * 60 * 1000;
+
     fn hook(json: &str) -> HookPayload {
         decode_payload(json.as_bytes()).unwrap()
     }
@@ -463,7 +519,9 @@ mod tests {
     #[test]
     fn a_discovered_session_becomes_an_ordinary_card() {
         let mut sessions = Sessions::default();
-        assert!(sessions.insert_discovered(&discovered("a", "/home/u/project", Some("model-x"))));
+        assert!(
+            sessions.insert_discovered(&discovered("a", "/home/u/project", Some("model-x")), NOW)
+        );
 
         let rows = sessions.snapshot();
         assert_eq!(rows.len(), 1);
@@ -485,7 +543,7 @@ mod tests {
         let mut sessions = Sessions::default();
         let mut hit = discovered("a", "/home/u/project", None);
         hit.recent_messages.clear();
-        sessions.insert_discovered(&hit);
+        sessions.insert_discovered(&hit, NOW);
         assert_eq!(sessions.snapshot()[0].status, CardStatus::Idle);
     }
 
@@ -501,7 +559,7 @@ mod tests {
         let before = sessions.snapshot();
 
         assert!(
-            !sessions.insert_discovered(&discovered("a", "/home/u/elsewhere", Some("stale"))),
+            !sessions.insert_discovered(&discovered("a", "/home/u/elsewhere", Some("stale")), NOW),
             "the second sighting must be refused"
         );
         assert_eq!(sessions.snapshot(), before);
@@ -510,9 +568,51 @@ mod tests {
     #[test]
     fn a_discovered_session_is_added_once() {
         let mut sessions = Sessions::default();
-        assert!(sessions.insert_discovered(&discovered("a", "/home/u/p", None)));
-        assert!(!sessions.insert_discovered(&discovered("a", "/home/u/p", None)));
+        assert!(sessions.insert_discovered(&discovered("a", "/home/u/p", None), NOW));
+        assert!(!sessions.insert_discovered(&discovered("a", "/home/u/p", None), NOW));
         assert_eq!(sessions.snapshot().len(), 1);
+    }
+
+    /// A backfilled card has no process for `Watches` to watch, so age is the
+    /// only thing that can take it off the panel (#261 AC 3).
+    #[test]
+    fn an_aged_pid_less_discovered_session_is_pruned_and_a_fresh_one_kept() {
+        let mut sessions = Sessions::default();
+        let now = WINDOW + 20_000;
+        let mut fresh = discovered("fresh", "/home/u/b", Some("model-x"));
+        fresh.modified_at = Some(now - 1_000);
+        let mut backed = discovered("backed", "/home/u/c", Some("model-x"));
+        backed.pid = Some(42);
+
+        sessions.insert_discovered(&discovered("aged", "/home/u/a", Some("model-x")), 1_000);
+        sessions.insert_discovered(&fresh, 1_000);
+        sessions.insert_discovered(&backed, 1_000);
+
+        let stale = sessions.prune_stale_discovered(now, WINDOW);
+        assert_eq!(stale, ["aged"]);
+        let ids: Vec<_> = sessions
+            .snapshot()
+            .into_iter()
+            .map(|row| row.session_id)
+            .collect();
+        assert_eq!(ids, ["fresh", "backed"]);
+    }
+
+    /// A hook or new transcript bytes say the session is still alive, however
+    /// old the row that first put it on the panel was.
+    #[test]
+    fn a_hook_or_a_growing_transcript_refreshes_a_backfilled_card() {
+        let mut sessions = Sessions::default();
+        let now = WINDOW + 20_000;
+        sessions.insert_discovered(&discovered("hooked", "/home/u/a", None), 1_000);
+        sessions.insert_discovered(&discovered("tailed", "/home/u/b", None), 1_000);
+        sessions.apply(
+            &hook(r#"{"session_id":"hooked","hook_event_name":"PreToolUse"}"#),
+            now,
+        );
+        sessions.touch_discovered("tailed", now);
+        assert!(sessions.prune_stale_discovered(now, WINDOW).is_empty());
+        assert_eq!(sessions.snapshot().len(), 2);
     }
 
     /// A hook arriving after the scan still owns the card: the discovered row is
@@ -520,7 +620,7 @@ mod tests {
     #[test]
     fn a_hook_arriving_after_the_scan_still_updates_the_card() {
         let mut sessions = Sessions::default();
-        sessions.insert_discovered(&discovered("a", "/home/u/p", Some("model-x")));
+        sessions.insert_discovered(&discovered("a", "/home/u/p", Some("model-x")), NOW);
         sessions.apply(
             &hook(r#"{"session_id":"a","hook_event_name":"PreToolUse","cwd":"/home/u/p"}"#),
             30,

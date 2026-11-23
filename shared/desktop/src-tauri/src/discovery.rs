@@ -21,6 +21,14 @@ use morrow_core::discovery::{DiscoveryHit, read_transcript_tail, transcript_file
 /// be read rather than a second parse of the whole store.
 const TAIL_BYTES: u64 = 64 * 1024;
 
+/// The age a transcript may have to become a backfill hit, and the age a
+/// backfilled card may reach before the staleness sweep drops it (#261).
+///
+/// macOS gates discovery on a live `claude` process; this reader has no process
+/// to gate on, so time is the substitute. A session last written a week ago is
+/// history, not "what is happening now", and must not take a panel slot.
+pub const BACKFILL_WINDOW_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
 /// Claude Code's `projects/<encoded>/<session>.jsonl`.
 ///
 /// Two levels, not a recursive walk: `projects/` holds one directory per working
@@ -34,6 +42,14 @@ impl StoreReader for ClaudeTranscripts {
     }
 
     fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+        self.read_at(root, now_ms())
+    }
+}
+
+impl ClaudeTranscripts {
+    /// `read` with the clock injected, so the recency cap can be tested without
+    /// sleeping for a week or fabricating mtimes.
+    fn read_at(&self, root: &str, now: u64) -> Vec<DiscoveryHit> {
         let projects = Path::new(root).join("projects");
         let Ok(entries) = std::fs::read_dir(&projects) else {
             return Vec::new();
@@ -47,6 +63,11 @@ impl StoreReader for ClaudeTranscripts {
                 continue;
             };
             for file in files {
+                // No process to gate on at attach: a transcript that has not
+                // been written recently is history, and becomes no card at all.
+                if now.saturating_sub(file.modified_ms) > BACKFILL_WINDOW_MS {
+                    continue;
+                }
                 let Some(tail) = read_tail(Path::new(&file.path)) else {
                     continue;
                 };
@@ -106,11 +127,11 @@ pub fn scan_once(roots: &[String]) -> ScanResult {
 /// discovered by the same marker that makes a root live.
 pub fn claude_roots(primary: &Path) -> Vec<String> {
     let primary = primary.to_string_lossy().into_owned();
-    let mut roots = scan::scan_roots(&primary, &[]);
+    let mut siblings: Vec<String> = Vec::new();
     // A `~/.claude-work` style sibling: same parent, holds `projects/`.
     if let Some(parent) = Path::new(&primary).parent() {
         if let Ok(entries) = std::fs::read_dir(parent) {
-            let mut siblings: Vec<String> = entries
+            siblings = entries
                 .flatten()
                 .filter_map(|entry| {
                     let path = entry.path();
@@ -125,16 +146,13 @@ pub fn claude_roots(primary: &Path) -> Vec<String> {
                 .collect();
             // Deterministic, so two runs scan in the same order.
             siblings.sort();
-            roots.extend(scan::scan_roots(
-                &primary,
-                &siblings.iter().map(String::as_str).collect::<Vec<_>>(),
-            ));
-            // `scan_roots` puts the primary first and drops duplicates; the first
-            // call above is subsumed by this one.
-            return dedupe(roots);
         }
     }
-    roots
+    // One call: `scan_roots` puts the primary first and drops duplicates.
+    dedupe(scan::scan_roots(
+        &primary,
+        &siblings.iter().map(String::as_str).collect::<Vec<_>>(),
+    ))
 }
 
 fn dedupe(roots: Vec<String>) -> Vec<String> {
@@ -155,19 +173,26 @@ pub fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::{self, OpenOptions};
+    use std::fs::{self, File, OpenOptions};
     use std::io::Write;
     use std::path::PathBuf;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::*;
 
-    /// A scratch `~` that removes itself.
+    /// A scratch `~` that removes itself, with a suffix unique enough that two
+    /// tests named the same in different crates cannot share the directory.
     struct Scratch(PathBuf);
 
     impl Scratch {
         fn new(name: &str) -> Self {
-            let path =
-                std::env::temp_dir().join(format!("morrow-backfill-{}-{name}", std::process::id()));
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos());
+            let path = std::env::temp_dir().join(format!(
+                "morrow-backfill-{}-{name}-{unique}",
+                std::process::id()
+            ));
             let _ = fs::remove_dir_all(&path);
             fs::create_dir_all(&path).expect("a scratch home");
             Self(path)
@@ -207,6 +232,16 @@ mod tests {
         file.write_all(contents.as_bytes()).expect("a write");
     }
 
+    fn set_modified_ms(path: &Path, millis: u64) {
+        let modified = UNIX_EPOCH + Duration::from_millis(millis);
+        File::options()
+            .write(true)
+            .open(path)
+            .expect("an openable transcript")
+            .set_times(std::fs::FileTimes::new().set_modified(modified))
+            .expect("a set mtime");
+    }
+
     #[test]
     fn a_transcript_without_a_hook_becomes_a_session() {
         let scratch = Scratch::new("one");
@@ -232,6 +267,37 @@ mod tests {
                 .is_some_and(|path| path.ends_with("session-a.jsonl"))
         );
         assert!(hit.modified_at.is_some());
+    }
+
+    /// Without a live process to gate on, age is the substitute: the tail of a
+    /// session from before the window is history, not a card on attach (#261).
+    #[test]
+    fn only_a_recent_transcript_becomes_a_backfill_hit() {
+        let scratch = Scratch::new("recency");
+        let projects = scratch.project_dir(".claude", "-home-dev-project");
+        let old = projects.join("old.jsonl");
+        let recent = projects.join("recent.jsonl");
+        write(&old, &transcript("/home/dev/project", "old-model"));
+        write(&recent, &transcript("/home/dev/project", "recent-model"));
+        let now = now_ms();
+        set_modified_ms(&old, now - BACKFILL_WINDOW_MS - 1);
+        set_modified_ms(&recent, now - BACKFILL_WINDOW_MS + 1_000);
+
+        let root = scratch.0.join(".claude").to_string_lossy().into_owned();
+        // The injected clock pins the boundary; `scan_once` then exercises the
+        // same mtimes through the real `read` path.
+        let at: Vec<_> = ClaudeTranscripts
+            .read_at(&root, now)
+            .into_iter()
+            .map(|hit| hit.session_id)
+            .collect();
+        assert_eq!(at, ["recent"]);
+        let scanned: Vec<_> = scan_once(&[root])
+            .hits
+            .into_iter()
+            .map(|hit| hit.session_id)
+            .collect();
+        assert_eq!(scanned, ["recent"]);
     }
 
     #[test]
@@ -309,29 +375,58 @@ mod tests {
         assert_eq!(ids, vec!["personal", "work"]);
     }
 
-    /// The tail is honoured, not the whole file: a session's last three turns come
-    /// from the end.
+    /// The cut branch actually runs: 600 lines of 140-ish bytes is well past
+    /// `TAIL_BYTES`, so the marker at the top is outside the slice and the one
+    /// in the last two turns is inside it.
     #[test]
     fn only_the_tail_of_a_large_transcript_is_read() {
         let scratch = Scratch::new("tail");
         let projects = scratch.project_dir(".claude", "-home-dev-project");
         let path = projects.join("big.jsonl");
-        // Well past TAIL_BYTES of filler, then the real turns.
-        for _ in 0..200 {
+        // Only the very first line carries this marker; the filler after it is
+        // unmarked so a last-three-turns slice cannot smuggle the marker in.
+        write(
+            &path,
+            concat!(
+                r#"{"type":"assistant","cwd":"/home/dev/project","message":{"content":[{"type":"text","text":"FIRST_LINE_MARKER only at the top"}]}}"#,
+                "\n"
+            ),
+        );
+        for _ in 0..600 {
             write(
                 &path,
-                &format!(
-                    "{}\n",
-                    r#"{"type":"assistant","cwd":"/home/dev/project","message":{"content":[{"type":"text","text":"filler line with some length to it"}]}}"#
+                concat!(
+                    r#"{"type":"assistant","cwd":"/home/dev/project","message":{"content":[{"type":"text","text":"filler line with some length to it"}]}}"#,
+                    "\n"
                 ),
             );
         }
-        write(&path, &transcript("/home/dev/project", "model-x"));
+        write(
+            &path,
+            &format!(
+                "{}\n{}\n",
+                r#"{"type":"user","cwd":"/home/dev/project","message":{"content":"TAIL_ONLY_MARKER user turn"}}"#,
+                r#"{"type":"assistant","cwd":"/home/dev/project","message":{"model":"model-x","content":[{"type":"text","text":"TAIL_ONLY_MARKER reply"}]}}"#
+            ),
+        );
 
         let root = scratch.0.join(".claude").to_string_lossy().into_owned();
         let hits = scan_once(&[root]).hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("model-x"));
         assert_eq!(hits[0].cwd, "/home/dev/project");
+        let texts: Vec<&str> = hits[0]
+            .recent_messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect();
+        assert!(
+            texts.iter().any(|text| text.contains("TAIL_ONLY_MARKER")),
+            "the last turns must be read: {texts:?}"
+        );
+        assert!(
+            texts.iter().all(|text| !text.contains("FIRST_LINE_MARKER")),
+            "the beginning of the file is outside TAIL_BYTES: {texts:?}"
+        );
     }
 }

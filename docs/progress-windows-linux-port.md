@@ -133,7 +133,7 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 - **Aturan yang membuat backfill aman:** `insert_discovered` menolak sesi yang sudah ada. Baris hasil scan selalu saksi yang lebih tua, jadi menimpanya akan mengembalikan kartu WORKING ke DONE dan mengambil tempat permission prompt di tier order.
 - **Bukti:** `cargo test --workspace` 753 lulus (703 sebelum empat slice ini); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
 - **AC #247 yang ditolak:** "walk direktori punya batas kedalaman" — `Discovery/` di macOS hanya memanggil `contentsOfDirectory`, tidak pernah rekursif. Port dari tidak-apa-apa.
-- **AC #248 yang baru sebagian:** policy belum disambungkan ke `ambient.ts` (scan hanya saat attach), dan sesi hasil backfill belum bisa dipangkas sampai #246 memberi mereka `pid`.
+- **AC #248 yang baru sebagian:** policy belum disambungkan ke `ambient.ts` (scan hanya saat attach), jadi AC 5 #261 (turunkan frekuensi saat panel tersembunyi/terkunci) tidak punya padanan — tidak ada scan berulang yang dibatasi, dan panel tersembunyi/terkunci tidak attach. Gate `set_visible`/`set_probes_active` tetap menghentikan polling transkrip. Sesi hasil backfill kini dipangkas oleh sweep staleness berbasis `modified_at`/last-seen (jendela 7 hari, sama dengan batas usia transkrip saat attach); saat #246 memberi `pid`, sesi itu beralih ke `Watches`.
 - **Berikutnya:** #246 (`AgentProcessFinder`) — ia yang memberi `pid` pada sesi discovery, sehingga prune bekerja dan `process_watch` (#103) berguna. Lalu #244, #264-#248 sisa reader (opencode/cursor/gemini cukup didaftarkan di `scan_once`), dan watcher berbasis `scan_policy`.
 - **Blocker:** gate hardware tidak berubah.
 
