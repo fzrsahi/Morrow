@@ -1,10 +1,10 @@
 //! Every row of the prayer matrix from the Swift implementation.
 //!
-//! `shared/fixtures/prayer/expected.json` is the output shape of
-//! `shared/fixtures/prayer/generate.swift` (5 cities x 3 methods x 12 dates).
-//! The generator has not been run here; the numbers were derived by a direct
-//! transcription of the Swift formulas and are cross-checked with
-//! `PrayerTimeCalculator::calculate` below.
+//! `shared/fixtures/prayer/expected.json` IS the output of
+//! `shared/fixtures/prayer/generate.swift` (5 cities x 3 methods x 12 dates),
+//! compiled against the real Swift sources with `swiftc -O` and redirected
+//! verbatim into the fixture. The Rust calculator below must match those
+//! numbers to the minute — the expectation never comes from the code it tests.
 
 use morrow_core::prayer::{
     Coordinates, PrayerCalculationMethod, PrayerTimeCalculator, PrayerType, YearMonthDay,
