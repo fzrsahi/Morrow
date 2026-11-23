@@ -547,4 +547,3 @@ fn zcode_keeps_its_wrapper_and_the_users_switch() {
     assert!(!back.contains("codeisland"), "{back}");
     assert!(back.contains("\"enabled\": false"), "{back}");
 }
-

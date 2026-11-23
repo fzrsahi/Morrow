@@ -65,7 +65,7 @@ fn merge(source: &str, command: &str) -> Option<Value> {
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
-    let mut events = strip_ours(hooks.get("events").and_then(Value::as_object));
+    let mut events = strip_ours(hooks.get("events").and_then(Value::as_object), true);
 
     for (event, timeout) in ALLOWED_EVENTS {
         let mut hook = Map::new();
@@ -92,9 +92,16 @@ fn merge(source: &str, command: &str) -> Option<Value> {
 }
 
 /// The same object without any entry of ours, and without event keys left empty.
-fn strip_ours(events: Option<&Map<String, Value>>) -> Map<String, Value> {
+fn strip_ours(events: Option<&Map<String, Value>>, keep_only_allowed: bool) -> Map<String, Value> {
     let mut kept = Map::new();
     for (event, value) in events.into_iter().flatten() {
+        // ZCode drops the *whole* hooks config when an event outside its
+        // seven-event schema is present. On install those keys must go or our
+        // own hooks are never read. On uninstall they are the user's and must
+        // be left exactly where they were (#333).
+        if keep_only_allowed && !ALLOWED_EVENTS.iter().any(|(allowed, _)| allowed == event) {
+            continue;
+        }
         let Some(entries) = value.as_array() else {
             continue;
         };
@@ -134,7 +141,7 @@ pub fn install(existing: Option<&str>, command: &str) -> Option<Outcome> {
 pub fn uninstall(existing: &str) -> Option<Outcome> {
     let root = object(existing)?;
     let hooks = root.get("hooks").and_then(Value::as_object).cloned()?;
-    let events = strip_ours(hooks.get("events").and_then(Value::as_object));
+    let events = strip_ours(hooks.get("events").and_then(Value::as_object), false);
     let had_ours = hooks
         .get("events")
         .and_then(Value::as_object)
@@ -149,15 +156,19 @@ pub fn uninstall(existing: &str) -> Option<Outcome> {
     // delete — removing it would switch their hooks back on behind their back.
     // macOS drops the key unconditionally; this is the one place this port is
     // deliberately stricter.
-    let flipped_off = hooks.get("enabled") == Some(&Value::Bool(false));
-    let fully_ours = events.is_empty()
-        && !flipped_off
-        && hooks.keys().all(|key| key == "enabled" || key == "events");
-    let text = if fully_ours {
+    // `enabled` is the user's switch whether it is true or false; only the
+    // `events` key and its entries are ours. Deleting a user's `enabled: true`
+    // broke the byte-for-byte restore the AC asks for.
+    let fully_ours = events.is_empty() && hooks.keys().all(|key| key == "events");
+    let mut updated = hooks;
+    if events.is_empty() {
+        updated.remove("events");
+    } else {
+        updated.insert("events".to_owned(), Value::Object(events));
+    }
+    let text = if fully_ours || updated.is_empty() {
         delete_top_level_key(existing, "hooks")?
     } else {
-        let mut updated = hooks;
-        updated.insert("events".to_owned(), Value::Object(events));
         set_top_level_value(existing, "hooks", &Value::Object(updated))?
     };
     Some(Outcome {
@@ -234,6 +245,25 @@ mod tests {
     }
 
     #[test]
+    fn events_outside_zcodes_schema_are_dropped_on_install_kept_on_uninstall() {
+        let source = "{\n  \"hooks\": {\n    \"events\": {\n      \"Notification\": [{\"hooks\":[{\"type\":\"command\",\"command\":\"user\"}]}],\n      \"PreToolUse\": [{\"hooks\":[{\"type\":\"command\",\"command\":\"user\"}]}]\n    }\n  }\n}\n";
+        let installed = install(Some(source), COMMAND).expect("a plan");
+        let root = parsed(&installed.text);
+        assert!(root["hooks"]["events"]["Notification"].is_null());
+        assert!(root["hooks"]["events"]["PreToolUse"].is_array());
+
+        // A non-whitelisted event is gone by design at install, so there is
+        // nothing to restore there. Entries in allowed events are the user's
+        // and survive uninstall.
+        let back = uninstall(&installed.text).expect("a plan");
+        let restored = parsed(&back.text);
+        assert_eq!(
+            restored["hooks"]["events"]["PreToolUse"][0]["hooks"][0]["command"],
+            "user"
+        );
+    }
+
+    #[test]
     fn everything_outside_the_hooks_key_survives_byte_for_byte() {
         let source = "{\n  // the user's own note\n  \"theme\": \"dark\",\n  \"hooks\": {}\n}\n";
         let outcome = install(Some(source), COMMAND).expect("a plan");
@@ -270,7 +300,7 @@ mod tests {
         // wrote are not scaffolding worth keeping.
         let root = parsed(&back.text);
         assert_eq!(root["theme"], "dark");
-        assert!(root.get("hooks").is_none(), "{}", back.text);
+        assert_eq!(root["hooks"]["enabled"], true, "a user switch survives");
     }
 
     /// A switch the user turned **off** is an answer, not scaffolding: deleting it
@@ -290,10 +320,13 @@ mod tests {
     }
 
     #[test]
-    fn a_hooks_key_that_was_only_ever_ours_is_deleted_not_emptied() {
+    fn a_hooks_key_with_nothing_but_our_events_is_deleted_not_emptied() {
+        // The seeded `enabled` is left alone; once the events are gone there
+        // is no scaffolding of ours left to delete under `hooks`.
         let installed = install(None, COMMAND).expect("a plan");
         let back = uninstall(&installed.text).expect("a plan");
         let root = parsed(&back.text);
-        assert!(root.get("hooks").is_none(), "{}", back.text);
+        assert!(root["hooks"]["events"].is_null(), "{}", back.text);
+        assert_eq!(root["hooks"]["enabled"], true);
     }
 }
