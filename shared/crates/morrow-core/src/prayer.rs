@@ -13,6 +13,16 @@
 //! Every case of the Swift matrix lives in
 //! `shared/fixtures/prayer/expected.json`; the integration test
 //! `tests/prayer_conformance.rs` checks all 180 of them.
+//!
+//! [`cities`] ports `OfflineCityDatabase.swift`: the fixed city catalog,
+//! Haversine reverse geocoding and the longitude-band UTC offset fallback.
+
+pub mod cities;
+
+pub use cities::{
+    OfflineCity, all_cities, city_by_id, city_by_name, closest_city, default_city,
+    haversine_distance_kilometers,
+};
 
 use serde::{Deserialize, Serialize};
 
