@@ -7,7 +7,7 @@
 //! their `SystemTime::now()` call) touch the real clock, so the tests can pin
 //! a day and check the shape without a desktop or a notification daemon.
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -23,6 +23,7 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::HooksSite;
+use crate::feed::Feed;
 use crate::settings::SETTINGS_CHANGED_EVENT;
 
 /// The four keys this slice owns, spelled like their Swift `SettingsKey`s.
@@ -276,12 +277,88 @@ fn now_epoch_seconds() -> Result<i64, String> {
         .map_err(|error| error.to_string())
 }
 
+/// The three outside-world inputs the prayer commands depend on: where the
+/// user's settings live (derived from HOME at launch), the current clock, and
+/// who posts notifications. The Tauri commands build this from the real shell;
+/// tests inject a temp home, a pinned clock and a fake runner so the command's
+/// decision logic runs without a desktop, a real clock or real `notify-send`.
+pub struct PrayerSite {
+    codeisland_dir: PathBuf,
+    now: Box<dyn Fn() -> Result<i64, String>>,
+    runner: Box<dyn Runner>,
+}
+
+impl PrayerSite {
+    /// The production wiring: the shell's resolved home, the system clock and
+    /// the real desktop adapter.
+    pub fn system(site: &HooksSite) -> Self {
+        Self::new(
+            site.paths.codeisland_dir.clone(),
+            Box::new(now_epoch_seconds as fn() -> Result<i64, String>),
+            Box::new(morrow_platform::runner::SystemRunner),
+        )
+    }
+
+    fn new(
+        codeisland_dir: PathBuf,
+        now: Box<dyn Fn() -> Result<i64, String>>,
+        runner: Box<dyn Runner>,
+    ) -> Self {
+        Self {
+            codeisland_dir,
+            now,
+            runner,
+        }
+    }
+
+    fn now(&self) -> Result<i64, String> {
+        (self.now)()
+    }
+
+    // --- command decision logic (shared by the Tauri wrappers and the tests) --
+
+    fn settings_load(&self) -> Result<PrayerSettings, String> {
+        let stored = settings::load(&self.codeisland_dir).map_err(|error| error.to_string())?;
+        Ok(prayer_settings_from_value(&stored))
+    }
+
+    fn settings_set(&self, key: &str, value: &Value) -> Result<bool, String> {
+        settings::set(&self.codeisland_dir, key, value).map_err(|error| error.to_string())
+    }
+
+    fn next(&self, feed: &Feed) -> Result<Option<PrayerSnapshot>, String> {
+        let stored = match settings::load(&self.codeisland_dir) {
+            Ok(stored) => stored,
+            Err(_) => return Ok(None),
+        };
+        let view = prayer_snapshot(&stored, self.now()?);
+        feed.set_prayer(view.clone());
+        Ok(view)
+    }
+
+    fn tick(&self, wake: &PrayerWakeState, feed: &Feed) -> Result<usize, String> {
+        let stored = settings::load(&self.codeisland_dir).map_err(|error| error.to_string())?;
+        let now = self.now()?;
+        // #307: the card travels in the feed snapshot, not only in this
+        // command's return value. A tick refreshes it even when no
+        // notification is due.
+        feed.set_prayer(prayer_snapshot(&stored, now));
+        let Some(prepared) = prepare(&stored, now) else {
+            return Ok(0);
+        };
+        let mut policy = wake
+            .0
+            .lock()
+            .map_err(|_| "prayer wake state poisoned".to_owned())?;
+        notify_due_prayers(&prepared, &mut policy, now, self.runner.as_ref())
+    }
+}
+
 // --- Tauri commands -------------------------------------------------------
 
 #[tauri::command]
 pub fn prayer_settings_load(site: State<'_, HooksSite>) -> Result<PrayerSettings, String> {
-    let stored = settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())?;
-    Ok(prayer_settings_from_value(&stored))
+    PrayerSite::system(&site).settings_load()
 }
 
 #[tauri::command]
@@ -291,11 +368,11 @@ pub fn prayer_settings_set(
     key: String,
     value: Value,
 ) -> Result<bool, String> {
-    let changed = settings::set(&site.paths.codeisland_dir, &key, &value)
-        .map_err(|error| error.to_string())?;
+    let prayer_site = PrayerSite::system(&site);
+    let changed = prayer_site.settings_set(&key, &value)?;
     // Same event as the Appearance page: the island adopts a new city or
     // method without a restart.
-    if let Ok(stored) = settings::load(&site.paths.codeisland_dir) {
+    if let Ok(stored) = settings::load(&prayer_site.codeisland_dir) {
         let _ = app.emit(SETTINGS_CHANGED_EVENT, stored);
     }
     Ok(changed)
@@ -313,52 +390,12 @@ pub fn prayer_cities() -> Vec<CityOption> {
         .collect()
 }
 
-/// The command's decision with HOME and the clock injected. The Tauri wrapper
-/// only supplies those two globals; a test supplies a temp HOME and a pinned
-/// instant, so the real code path is exercised without a desktop (#307).
-fn prayer_next_at(
-    settings_dir: &Path,
-    now: i64,
-    feed: &crate::feed::Feed,
-) -> Option<PrayerSnapshot> {
-    let stored = settings::load(settings_dir).ok()?;
-    let view = prayer_snapshot(&stored, now);
-    feed.set_prayer(view.clone());
-    view
-}
-
 #[tauri::command]
 pub fn prayer_next(
     site: State<'_, HooksSite>,
     feed: State<'_, crate::feed::Feed>,
 ) -> Result<Option<PrayerSnapshot>, String> {
-    Ok(prayer_next_at(
-        &site.paths.codeisland_dir,
-        now_epoch_seconds()?,
-        &feed,
-    ))
-}
-
-/// The tick's decision with HOME, the clock and the notifier injected.
-fn prayer_tick_at(
-    settings_dir: &Path,
-    now: i64,
-    wake: &PrayerWakeState,
-    feed: &crate::feed::Feed,
-    runner: &dyn Runner,
-) -> Result<usize, String> {
-    let stored = settings::load(settings_dir).map_err(|error| error.to_string())?;
-    // #307: the card travels in the feed snapshot, not only in this command's
-    // return value. A tick refreshes it even when no notification is due.
-    feed.set_prayer(prayer_snapshot(&stored, now));
-    let Some(prepared) = prepare(&stored, now) else {
-        return Ok(0);
-    };
-    let mut policy = wake
-        .0
-        .lock()
-        .map_err(|_| "prayer wake state poisoned".to_owned())?;
-    notify_due_prayers(&prepared, &mut policy, now, runner)
+    PrayerSite::system(&site).next(&feed)
 }
 
 #[tauri::command]
@@ -367,18 +404,13 @@ pub fn prayer_tick(
     wake: State<'_, PrayerWakeState>,
     feed: State<'_, crate::feed::Feed>,
 ) -> Result<usize, String> {
-    prayer_tick_at(
-        &site.paths.codeisland_dir,
-        now_epoch_seconds()?,
-        &wake,
-        &feed,
-        &morrow_platform::runner::SystemRunner,
-    )
+    PrayerSite::system(&site).tick(&wake, &feed)
 }
 
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
     use super::*;
 
@@ -404,9 +436,11 @@ mod tests {
         )
     }
 
-    #[derive(Default)]
+    #[derive(Default, Clone)]
     struct FakeRunner {
-        calls: RefCell<Vec<(String, String)>>,
+        // `Rc` lets the seam own a clone of the runner while the test keeps a
+        // handle to inspect what was (not) sent.
+        calls: Rc<RefCell<Vec<(String, String)>>>,
     }
 
     impl Runner for FakeRunner {
@@ -450,10 +484,11 @@ mod tests {
     }
 
     #[test]
-    fn the_commands_read_a_temp_home_with_an_injected_clock_and_runner() {
-        // #307 review: this now goes through the same helper functions the
-        // Tauri commands delegate to, with HOME (settings dir) and the clock
-        // injected — no `SystemTime::now()`, no real `notify-send`.
+    fn the_command_reads_a_real_home_settings_document() {
+        // #307 review: the earlier tests fed in-memory Values, so the
+        // HOME/codeisland_dir path the command actually uses was never
+        // exercised. Here the settings are written to a temp HOME and read
+        // back through the same platform helper the command calls.
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -471,33 +506,95 @@ mod tests {
         ] {
             morrow_platform::settings::set(&codeisland, key, &value).expect("a saved setting");
         }
-
-        let schedule = jakarta_schedule();
-        let before = schedule.subuh.epoch_seconds - 60;
-        let feed = crate::feed::Feed::default();
-        let view = prayer_next_at(&codeisland, before, &feed).expect("a saved city has a schedule");
+        let stored = morrow_platform::settings::load(&codeisland).expect("a readable document");
+        let view = prayer_snapshot(&stored, now_epoch_seconds().expect("a clock"))
+            .expect("a saved city has a schedule");
         assert_eq!(view.city_id, "jakarta");
         assert_eq!(view.city_name, "Jakarta");
         assert_eq!(view.times.len(), 5);
-        assert!(
-            feed.snapshot().prayer.is_some(),
-            "the card travels in the feed"
-        );
+        std::fs::remove_dir_all(&home).ok();
+    }
 
+    #[test]
+    fn command_path_uses_the_injected_home_clock_and_fake_runner() {
+        // #307: go through the exact decision logic the Tauri commands call,
+        // with a temp home, a pinned clock and a fake notifier. No real clock,
+        // no `notify-send`, no writes outside the temp dir.
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("a clock")
+            .as_nanos();
+        let home =
+            std::env::temp_dir().join(format!("morrow-prayer-cmd-{}-{nanos}", std::process::id()));
+        let codeisland = home.join(".codeisland");
+        std::fs::create_dir_all(&codeisland).expect("a temp home");
+
+        // The injected home is the one the command reads settings from.
+        for (key, value) in [
+            (KEY_CITY, serde_json::json!("jakarta")),
+            (KEY_METHOD, serde_json::json!("kemenag")),
+            (KEY_CORRECTION, serde_json::json!(0)),
+            (KEY_HIJRI, serde_json::json!("khgt")),
+        ] {
+            settings::set(&codeisland, key, &value).expect("a saved setting");
+        }
+
+        let schedule = jakarta_schedule();
+        // An injected, pinned clock: one minute before Fajr.
+        let now = schedule.subuh.epoch_seconds - 60;
         let runner = FakeRunner::default();
+        let site = PrayerSite::new(
+            codeisland.clone(),
+            Box::new(move || Ok::<i64, String>(now)),
+            Box::new(runner.clone()),
+        );
+        let feed = Feed::default();
         let wake = PrayerWakeState::new();
-        assert_eq!(
-            prayer_tick_at(&codeisland, before, &wake, &feed, &runner),
-            Ok(0)
-        );
-        assert!(runner.calls.borrow().is_empty(), "nothing due yet");
 
-        let due = schedule.subuh.epoch_seconds;
+        // `prayer_next`'s path: load from the injected home, compute with the
+        // injected clock, and publish the card into the feed snapshot.
         assert_eq!(
-            prayer_tick_at(&codeisland, due, &wake, &feed, &runner),
-            Ok(1)
+            site.settings_load().expect("settings load").city_id,
+            "jakarta"
         );
-        assert_eq!(runner.calls.borrow().len(), 1);
+        let snapshot = site.next(&feed).expect("prayer_next").expect("a card");
+        assert_eq!(snapshot.city_name, "Jakarta");
+        assert_eq!(snapshot.times.len(), 5);
+        assert_eq!(
+            snapshot.next.as_ref().map(|row| row.key.as_str()),
+            Some("subuh")
+        );
+        assert_eq!(snapshot.in_minutes, 1);
+        assert!(snapshot.urgent);
+        assert_eq!(feed.snapshot().prayer, Some(snapshot));
+
+        // A tick before Fajr refreshes the card but sends nothing.
+        assert_eq!(site.tick(&wake, &feed), Ok(0));
+        assert!(runner.calls.borrow().is_empty());
+
+        // `prayer_tick` at the exact Fajr instant: one notification through the
+        // fake runner, and the card refreshed to the following prayer.
+        let due = schedule.subuh.epoch_seconds;
+        let tick_site = PrayerSite::new(
+            codeisland.clone(),
+            Box::new(move || Ok::<i64, String>(due)),
+            Box::new(runner.clone()),
+        );
+        assert_eq!(tick_site.tick(&wake, &feed), Ok(1));
+        {
+            let calls = runner.calls.borrow();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].0, "Prayer time");
+            assert!(calls[0].1.contains("Fajr"));
+        }
+        let refreshed = feed.snapshot().prayer.expect("a card after the tick");
+        assert_eq!(
+            refreshed.next.as_ref().map(|row| row.key.as_str()),
+            Some("dzuhur")
+        );
+
         std::fs::remove_dir_all(&home).ok();
     }
 
