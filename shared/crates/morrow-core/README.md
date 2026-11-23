@@ -105,6 +105,26 @@ Known difference: Swift counts `sourceBudget` in UTF-8 bytes but cuts with
 `line.prefix(allowance)`, which counts `Character`s; the port counts bytes on both
 sides and never splits a character.
 
+## `codex_rules`: CodexPermissionRules
+
+Whether a Codex permission request is handed back to Codex's own reviewer instead of
+putting up a card (`macos/Sources/Morrow/CodexPermissionRules.swift`). The reviewer can
+be named in three places — the request's payload, the rollout's newest `turn_context`,
+`config.toml` — in that order, and desktop selections never reach `config.toml` at all.
+A remote Codex is never handed back: nothing here describes its host, and a wrong
+hand-back leaves the request waiting in a terminal on another machine.
+
+The "Always allow" rule is a prefix of the **command**, up to three words, read from the
+command and never from a `prefix_rule` field in the payload — that one is written by the
+model, and taking it gave `["bash"]` for a card that showed `ls -la`.
+
+Reading the rollout and writing `config.toml` are not here: both need a file system and
+a resolved Codex root, and the decisions they feed are.
+
+Known difference: the rollout search is not ported, so a request that names no reviewer
+and has no `config.toml` answer is `None` here too — the caller decides, exactly as
+macOS decides `false`.
+
 ## `git`: GitBranchReader
 
 The checked-out branch of a session's `cwd`, read from `.git` rather than by
@@ -275,6 +295,11 @@ managed YAML region (14), `tests/json_minimal_editor.rs` is `JSONMinimalEditorTe
 `ConfigInstallerTests` over text instead of a file system (18 tests: the table,
 the version gates, the legacy-name cleanup, install/repair/uninstall and the
 back-up rule).
+
+The `codex_rules` module's own tests are the decision half of
+`AppStatePermissionFlowTests` (24 tests: the rule prefix, the reviewer spellings, the
+profile ladder, the MCP server key resolution, the `#316` repair, and the rule block's
+quoting).
 
 `tests/markdown_preview_conformance.rs` runs the 16 cases of
 `shared/contract/fixtures/core/markdown_preview.json` — exported from Swift by

@@ -26,6 +26,7 @@
 pub mod agent_process;
 pub mod agent_tasks;
 pub mod attention;
+pub mod codex_rules;
 pub mod config_roots;
 pub mod digest;
 pub mod discovery;
