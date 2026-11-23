@@ -85,6 +85,9 @@ struct State {
     /// window. Independent of `visible` so fullscreen hiding is unchanged.
     probes_active: bool,
     tails: Tails,
+    /// The scan policy's clock (#259): how often a visible panel may look for
+    /// sessions, and the one place the gap is defined.
+    discovery: morrow_core::scan_policy::ScanThrottle,
 }
 
 impl Default for State {
@@ -99,6 +102,9 @@ impl Default for State {
             visible: true,
             probes_active: true,
             tails: Tails::default(),
+            discovery: morrow_core::scan_policy::ScanThrottle::new(
+                morrow_core::scan_policy::MINIMUM_GAP_MS,
+            ),
         }
     }
 }
@@ -331,6 +337,67 @@ impl Feed {
         self.backfill();
     }
 
+    /// One discovery tick: scan, if the policy says this is when (#248).
+    ///
+    /// A **hidden or locked panel does not scan at all** — `probes_active` is the
+    /// frontend's lock watch (#197), and this is the same gate the transcript
+    /// tailer uses. That is the discovery half of what the policy promises: an
+    /// unattended panel costs nothing.
+    ///
+    /// A visible one scans at most once per `MINIMUM_GAP_MS`, and the gap lives in
+    /// `scan_policy` rather than here so there is one number, not two.
+    ///
+    /// This is a **poll**, not an event watcher: macOS reacts to FSEvents, and
+    /// Linux/Windows have no watch in this shell yet. The cost is bounded by the
+    /// gap and, for the stores a reader can re-read, by `ScanCache` — which the
+    /// readers do not use yet, which is why the gap is five seconds and not one.
+    pub fn tick_discovery(&self, now_ms: u64) -> usize {
+        self.tick_discovery_with(now_ms, |_home| self.scan_stores())
+    }
+
+    /// `tick_discovery` with the scan injected, so a test drives the policy
+    /// without reading a real `~`.
+    pub fn tick_discovery_with(
+        &self,
+        now_ms: u64,
+        scan: impl FnOnce(&str) -> morrow_core::discovery::scan::ScanResult,
+    ) -> usize {
+        let allowed = {
+            let mut state = self.lock();
+            if !state.probes_active || !state.visible {
+                // Forget the clock: coming back to a visible panel scans at once
+                // rather than waiting out a gap that started while it was hidden.
+                state.discovery.reset();
+                return 0;
+            }
+            match state.discovery.decide(true, now_ms) {
+                morrow_core::scan_policy::Decision::ScanNow => {
+                    state.discovery.note_scan_started(now_ms);
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !allowed {
+            return 0;
+        }
+        self.backfill_with(scan)
+    }
+
+    /// Polls the policy forever. One second of granularity is enough for a
+    /// five-second gap, and it costs a mutex read when nothing is due.
+    pub fn spawn_discovery(feed: Arc<Self>) {
+        thread::Builder::new()
+            .name("morrow-discovery".into())
+            .spawn(move || {
+                loop {
+                    thread::sleep(Duration::from_millis(250));
+                    feed.tick_discovery(now_ms());
+                }
+            })
+            .expect("spawn the discovery thread");
+    }
+
     /// One discovery scan, integrated as ordinary sessions.
     ///
     /// Deliberately outside the lock while it reads the stores — a scan walks
@@ -341,17 +408,24 @@ impl Feed {
     ///
     /// Returns how many sessions were added, which is what the test asserts.
     pub fn backfill(&self) -> usize {
-        let home = std::path::PathBuf::from(self.lock().sessions.home_directory());
+        self.backfill_with(|home| self.scan_stores_in(std::path::Path::new(home)))
+    }
+
+    /// The real stores, from the home `backfill_with` was given.
+    fn scan_stores(&self) -> morrow_core::discovery::scan::ScanResult {
+        let home = self.lock().sessions.home_directory();
+        self.scan_stores_in(std::path::Path::new(&home))
+    }
+
+    fn scan_stores_in(&self, home: &std::path::Path) -> morrow_core::discovery::scan::ScanResult {
         // Claude Code's config dir comes from the installer's own ladder (#258),
         // so discovery reads the folder the hooks were written into.
         let config_dir = crate::hooks::claude_config_dir(
-            &home,
+            home,
             std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
         )
         .unwrap_or_else(|| home.join(".claude"));
-        self.backfill_with(move |_| {
-            crate::discovery::scan_once(&config_dir, &home.join(".local/share"))
-        })
+        crate::discovery::scan_once(&config_dir, home)
     }
 
     /// One discovery scan, integrated as ordinary sessions.
@@ -573,6 +647,98 @@ mod tests {
         let rows = feed.snapshot().sessions;
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].last_event, "PreToolUse");
+    }
+
+    /// #248: the policy decides when a discovery tick may scan. A hidden or locked
+    /// panel does not scan at all — that is the whole point of the gate.
+    #[test]
+    fn a_hidden_or_locked_panel_never_scans() {
+        let feed = Feed::default();
+        let scans = std::sync::Arc::new(Mutex::new(0usize));
+        let counted = Arc::clone(&scans);
+
+        // Locked: `probes_active` false.
+        feed.set_probes_active(false);
+        assert_eq!(
+            feed.tick_discovery_with(0, move |_home| {
+                *counted.lock().unwrap() += 1;
+                morrow_core::discovery::scan::ScanResult::default()
+            }),
+            0
+        );
+        assert_eq!(*scans.lock().unwrap(), 0, "a locked panel must not scan");
+
+        // Visible but not showing.
+        feed.set_probes_active(true);
+        feed.set_visible(false);
+        let counted = Arc::clone(&scans);
+        assert_eq!(
+            feed.tick_discovery_with(0, move |_home| {
+                *counted.lock().unwrap() += 1;
+                morrow_core::discovery::scan::ScanResult::default()
+            }),
+            0
+        );
+        assert_eq!(*scans.lock().unwrap(), 0, "a hidden panel must not scan");
+    }
+
+    /// A visible panel scans once per gap, not once per tick: the tick runs four
+    /// times a second.
+    #[test]
+    fn a_visible_panel_scans_once_per_gap() {
+        let feed = Feed::default();
+        let scans = Arc::new(Mutex::new(0usize));
+        let gap = morrow_core::scan_policy::MINIMUM_GAP_MS;
+
+        for now in [0, 100, 200, 400, gap - 1] {
+            let counted = Arc::clone(&scans);
+            feed.tick_discovery_with(now, move |_home| {
+                *counted.lock().unwrap() += 1;
+                morrow_core::discovery::scan::ScanResult::default()
+            });
+        }
+        assert_eq!(
+            *scans.lock().unwrap(),
+            1,
+            "five ticks inside one gap, one scan"
+        );
+
+        let counted = Arc::clone(&scans);
+        feed.tick_discovery_with(gap, move |_home| {
+            *counted.lock().unwrap() += 1;
+            morrow_core::discovery::scan::ScanResult::default()
+        });
+        assert_eq!(*scans.lock().unwrap(), 2, "the gap has passed");
+    }
+
+    /// Coming back to a visible panel scans at once, rather than waiting out a gap
+    /// that started while it was hidden.
+    #[test]
+    fn a_panel_that_comes_back_scans_at_once() {
+        let feed = Feed::default();
+        let scans = Arc::new(Mutex::new(0usize));
+
+        let counted = Arc::clone(&scans);
+        feed.tick_discovery_with(1_000, move |_home| {
+            *counted.lock().unwrap() += 1;
+            morrow_core::discovery::scan::ScanResult::default()
+        });
+        assert_eq!(*scans.lock().unwrap(), 1);
+
+        feed.set_visible(false);
+        feed.tick_discovery(1_100);
+        feed.set_visible(true);
+
+        let counted = Arc::clone(&scans);
+        feed.tick_discovery_with(1_200, move |_home| {
+            *counted.lock().unwrap() += 1;
+            morrow_core::discovery::scan::ScanResult::default()
+        });
+        assert_eq!(
+            *scans.lock().unwrap(),
+            2,
+            "the clock was forgotten while hidden"
+        );
     }
 
     /// A store that is not there adds nothing and does not mark the feed dirty.
