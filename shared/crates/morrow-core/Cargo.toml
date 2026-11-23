@@ -10,6 +10,9 @@ publish.workspace = true
 
 # Core (GLOSSARY.md): no OS crate. scripts/ci/rust-purity.sh checks it.
 [dependencies]
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
 md-5.workspace = true
 regex.workspace = true
 rusqlite.workspace = true

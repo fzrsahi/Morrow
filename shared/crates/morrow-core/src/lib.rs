@@ -43,6 +43,7 @@ pub mod model_label;
 pub mod music;
 pub mod path_identity;
 pub mod push;
+pub mod push_channel;
 pub mod push_policy;
 pub mod push_transport;
 pub mod reduce;
