@@ -112,12 +112,14 @@ mod tests {
         assert_eq!(policy.tracked_count(), 1);
 
         // A different prayer of the same day, and the same prayer tomorrow.
-        assert!(policy.due(DAY, PrayerType::Dzuhur, 2000, 2000));
+        // All three stay inside the 15-minute pruning window, so all three
+        // keys are remembered (older keys are dropped by `should_fire`).
+        assert!(policy.due(DAY, PrayerType::Dzuhur, 1100, 1100));
         assert!(policy.due(
             YearMonthDay::new(2026, 1, 16),
             PrayerType::Subuh,
-            3000,
-            3000
+            1200,
+            1200
         ));
         assert_eq!(policy.tracked_count(), 3);
     }
@@ -150,7 +152,7 @@ mod tests {
         let mut policy = PrayerWakePolicy::new();
         for day in 1..=30 {
             let at = day as i64 * 86_400;
-            let date = YearMonthDay::new(2026, 2, day as i32);
+            let date = YearMonthDay::new(2026, 2, day);
             for (index, prayer) in PrayerType::FARDH.iter().enumerate() {
                 // Milestones are due in the same order they are checked, well
                 // inside the window after `at`.

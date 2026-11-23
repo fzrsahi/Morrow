@@ -56,7 +56,7 @@ pub struct YearMonthDay {
 }
 
 impl YearMonthDay {
-    pub fn new(year: i32, month: i32, day: i32) -> Self {
+    pub const fn new(year: i32, month: i32, day: i32) -> Self {
         Self { year, month, day }
     }
 

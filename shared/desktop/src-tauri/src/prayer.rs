@@ -154,12 +154,13 @@ fn prepare(stored: &Value, now_epoch_seconds: i64) -> Option<Prepared> {
         settings.method,
         offset,
     );
+    let correction_seconds = i64::from(settings.correction_minutes) * 60;
     Some(Prepared {
         settings,
         city,
         day,
         schedule,
-        correction_seconds: i64::from(settings.correction_minutes) * 60,
+        correction_seconds,
     })
 }
 
@@ -441,7 +442,8 @@ mod tests {
         assert_eq!(next.key, "subuh");
         assert_eq!(next.epoch_seconds, schedule.subuh.epoch_seconds + 300);
         assert_eq!(snapshot.in_minutes, 6);
-        assert!(!snapshot.urgent);
+        // Six minutes is inside the 15-minute "about to start" window.
+        assert!(snapshot.urgent);
     }
 
     #[test]
@@ -491,7 +493,9 @@ mod tests {
         let calls = runner.calls.borrow();
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].0, "Prayer time");
-        assert!(calls[0].1.contains("Subuh"));
+        // The notification uses the core's English display name ("Fajr"),
+        // matching the English "Prayer time" title.
+        assert!(calls[0].1.contains("Fajr"));
     }
 
     #[test]
