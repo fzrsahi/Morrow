@@ -123,6 +123,9 @@ fn main() -> ExitCode {
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
     Feed::spawn_pruner(Arc::clone(&feed));
+    // #248: the discovery tick — a visible, unlocked panel looks for sessions the
+    // hooks have not announced yet. A hidden or locked one does not.
+    Feed::spawn_discovery(Arc::clone(&feed));
     Feed::spawn_pusher(Arc::clone(&feed), move |sessions, cards| {
         if smoke {
             println!("morrow-smoke: pushed sessions={sessions} cards={cards}");
