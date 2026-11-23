@@ -53,8 +53,9 @@ struct PrayerFixtureGenerator {
         case "Singapore": return 8 * 3600
         case "Mecca": return 3 * 3600
         case "Oslo", "London":
-            let summer = date.month > 3 || (date.month == 3 && date.day >= 29)
-                || date.month < 10 || (date.month == 10 && date.day <= 25)
+            let summer = (date.month > 3 && date.month < 10)
+                || (date.month == 3 && date.day >= 29)
+                || (date.month == 10 && date.day <= 25)
             if city == "Oslo" { return summer ? 2 * 3600 : 3600 }
             return summer ? 3600 : 0
         default: return 0

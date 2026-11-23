@@ -502,7 +502,7 @@ impl DailyPrayerSchedule {
     ) -> Option<i64> {
         let (_, at) = self.next_prayer(at_epoch_seconds, tomorrow_subuh)?;
         let seconds = at - at_epoch_seconds;
-        Some(if seconds > 0 { seconds.div_ceil(60) } else { 0 })
+        Some(if seconds > 0 { (seconds + 59) / 60 } else { 0 })
     }
 
     /// `currentFardhPrayer(at:)` in Swift.
@@ -934,13 +934,16 @@ mod tests {
             ),
             HijriDate::new(1, 9, 1447)
         );
+        // Neo-MABIMS starts Sha'ban on 2026-01-20 and Ramadan on 2026-02-19,
+        // so 2026-02-18 is 30 Sha'ban — a full month in this table (KHGT's
+        // Sha'ban is the 29-day one, ending 2026-02-17).
         assert_eq!(
             HijriCalendarCalculator::calculate(
                 YearMonthDay::new(2026, 2, 18),
                 HijriCalendarSource::NeoMabims,
                 0
             ),
-            HijriDate::new(29, 8, 1447)
+            HijriDate::new(30, 8, 1447)
         );
         assert_eq!(
             HijriCalendarCalculator::calculate(
