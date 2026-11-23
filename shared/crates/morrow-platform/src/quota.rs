@@ -13,47 +13,28 @@ use std::path::{Path, PathBuf};
 
 use morrow_core::quota::{Credential, QuotaError, Scheduler, Snapshot, interpret_response};
 use morrow_core::reduce::Timestamp;
-use serde_json::Value;
 
 use crate::runner::Runner;
 
 const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 
 /// Read Claude Code's OAuth login. A missing file means "not signed in", not
-/// an error; a file that cannot yield a token is an error. The token is only
-/// ever copied into the returned [`Credential`] — it is never logged, and the
-/// core type redacts it from `Debug` and `Serialize`. Nothing is written here.
+/// an error; a file that cannot yield a token is also "not signed in" — the
+/// core parser is the single source of truth for what a usable credential is,
+/// so this reader cannot drift from it. Nothing is written here.
 pub fn read_credentials(home: &Path) -> Result<Option<Credential>, String> {
-    let path = home.join(".claude").join(".credentials.json");
-    let bytes = match fs::read(&path) {
+    read_credentials_at(&home.join(".claude").join(".credentials.json"))
+}
+
+/// The same read with an explicit path, so the Capability probe can validate
+/// the exact file it reports as Supported instead of only checking `is_file()`.
+pub fn read_credentials_at(path: &Path) -> Result<Option<Credential>, String> {
+    let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(format!("{}: {error}", path.display())),
     };
-    let value: Value = serde_json::from_slice(&bytes)
-        .map_err(|error| format!("{}: not valid JSON: {error}", path.display()))?;
-    let oauth = value
-        .get("claudeAiOauth")
-        .and_then(Value::as_object)
-        .ok_or_else(|| format!("{}: no claudeAiOauth object", path.display()))?;
-    let access_token = oauth
-        .get("accessToken")
-        .and_then(Value::as_str)
-        .filter(|token| !token.is_empty())
-        .ok_or_else(|| format!("{}: no non-empty accessToken", path.display()))?;
-    // A known-expired token is returned as-is on purpose: the core credential
-    // reports it as unauthorized before any request is sent.
-    Ok(Some(Credential {
-        access_token: access_token.to_owned(),
-        subscription_type: oauth
-            .get("subscriptionType")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        expires_at: oauth
-            .get("expiresAt")
-            .and_then(Value::as_f64)
-            .map(|milliseconds| Timestamp(milliseconds / 1000.0)),
-    }))
+    Ok(Credential::parse(&bytes))
 }
 
 /// The outer `Err` is a local/transport failure; the inner result is exactly
@@ -329,7 +310,7 @@ mod tests {
     }
 
     #[test]
-    fn malformed_credentials_are_an_error_not_a_silent_none() {
+    fn malformed_credentials_are_not_reported_as_a_login() {
         let home = temp_home("creds-bad");
         for json in [
             "not json",
@@ -338,8 +319,11 @@ mod tests {
             r#"{"claudeAiOauth":{"accessToken":""}}"#,
         ] {
             write_credentials(&home, json);
-            let error = read_credentials(&home).unwrap_err();
-            assert!(!error.contains(TOKEN), "{error}");
+            assert_eq!(
+                read_credentials(&home).expect("a readable file"),
+                None,
+                "the core parser decides what a usable credential is"
+            );
         }
     }
 

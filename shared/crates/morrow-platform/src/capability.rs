@@ -286,15 +286,17 @@ impl Feature {
                     Capability::Unsupported("secret storage needs the session bus".into())
                 }
             }
-            // #306: this row is backed by the real reader in `crate::quota`,
-            // compiled into every platform build, so "Supported" means the
-            // file that reader opens is actually there — not a promise about
-            // a token we never inspected.
+            // #306: "Supported" now means the real reader can parse the file,
+            // not merely that a file with that name exists.
             Self::ClaudeCredentials => {
-                if environment.claude_credentials.is_file() {
-                    Capability::Supported
-                } else {
-                    Capability::Degraded("no ~/.claude/.credentials.json to read".into())
+                match crate::quota::read_credentials_at(&environment.claude_credentials) {
+                    Ok(Some(_)) => Capability::Supported,
+                    Ok(None) => {
+                        Capability::Degraded("no usable ~/.claude/.credentials.json to read".into())
+                    }
+                    Err(_) => {
+                        Capability::Degraded("Claude credentials file could not be read".into())
+                    }
                 }
             }
             Self::Ble => {
@@ -373,12 +375,12 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::Autostart => Capability::Supported,
         // Credential Manager: per user, no prompt beyond the first write.
         Feature::Secrets => Capability::Supported,
-        // Same #306 reader as above: present file, real support.
+        // Same #306 reader as above: parsed file, real support.
         Feature::ClaudeCredentials => {
-            if environment.claude_credentials.is_file() {
-                Capability::Supported
-            } else {
-                Capability::Degraded("no .claude/.credentials.json to read".into())
+            match crate::quota::read_credentials_at(&environment.claude_credentials) {
+                Ok(Some(_)) => Capability::Supported,
+                Ok(None) => Capability::Degraded("no usable .claude/.credentials.json".into()),
+                Err(_) => Capability::Degraded("Claude credentials file could not be read".into()),
             }
         }
         Feature::Ble => Capability::Degraded(
