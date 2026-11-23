@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use morrow_core::agent_process::ProcessInfo;
 use morrow_core::discovery::scan::{self, ProcessReader, ScanResult, StoreReader};
 use morrow_core::discovery::{DiscoveryHit, read_transcript_tail, transcript_files};
+use morrow_core::reduce::ChatMessage;
 
 /// How much of a transcript the backfill reads. The same slice the live tailer
 /// reads on attach, so backfill costs one read of bytes that are already going to
@@ -278,6 +279,239 @@ impl StoreReader for CodexRollouts {
     }
 }
 
+/// Where VS Code keeps extension storage, per OS.
+///
+/// Cline is an extension inside VS Code, not a CLI, so its store lives under
+/// VS Code's own per-user directory: `~/Library/Application Support` on macOS,
+/// `~/.config` on Linux, `%APPDATA%` on Windows.
+fn vscode_user_dir(home: &Path) -> PathBuf {
+    #[cfg(target_os = "macos")]
+    {
+        home.join("Library/Application Support/Code/User")
+    }
+    #[cfg(target_os = "windows")]
+    {
+        // `home` is the roaming profile; VS Code writes to Roaming, not Local.
+        home.join("AppData/Roaming/Code/User")
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        home.join(".config/Code/User")
+    }
+}
+
+/// Cline (#278), found from its own task history.
+///
+/// The one reader of this batch with no process: Cline runs inside VS Code, so
+/// macOS gives it no pid either. Its task history records the cwd, which is what
+/// makes a backfill possible with nothing running.
+pub struct ClineStore {
+    pub root: String,
+    pub now_ms: u64,
+}
+
+/// Cline allows more staleness than a CLI: ten minutes, because an extension can
+/// sit idle in a window without the editor going away.
+pub const CLINE_FRESHNESS_MS: u64 = 600_000;
+
+impl StoreReader for ClineStore {
+    fn source(&self) -> &'static str {
+        "cline"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        vec![self.root.clone()]
+    }
+
+    fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+        let Some(history) = std::fs::read_to_string(Path::new(root).join("state/taskHistory.json"))
+            .ok()
+            .and_then(|json| morrow_core::discovery::cline::latest_task(&json))
+        else {
+            return Vec::new();
+        };
+        let conversation = Path::new(root)
+            .join("tasks")
+            .join(&history.id)
+            .join("api_conversation_history.json");
+        // The conversation file's mtime beats the task's timestamp: Cline refreshes
+        // the history lazily, so `ts` is the time the task was *created*.
+        let modified_ms = transcript_files::mtime_ms(&conversation.to_string_lossy())
+            .or_else(|| history.ts_ms.map(|ts| ts.max(0.0) as u64));
+        let Some(modified_ms) = modified_ms else {
+            return Vec::new();
+        };
+        if self.now_ms.saturating_sub(modified_ms) > CLINE_FRESHNESS_MS {
+            return Vec::new();
+        }
+        let messages = std::fs::read_to_string(&conversation)
+            .map(|json| morrow_core::discovery::cline::recent_messages(&json))
+            .unwrap_or_default();
+        // No cwd means the task never ran anywhere this card could point at.
+        let Some(cwd) = history.cwd else {
+            return Vec::new();
+        };
+        vec![DiscoveryHit {
+            session_id: history.id,
+            source: "cline",
+            cwd,
+            tty: None,
+            model: history.model,
+            // No pid: Cline is an extension, not a process.
+            pid: None,
+            modified_at: Some(modified_ms),
+            recent_messages: messages,
+            transcript_path: Some(conversation.to_string_lossy().into_owned()),
+        }]
+    }
+}
+
+/// One flat store reader: a base directory, a cwd encoder, and a transcript
+/// flavour (#278).
+///
+/// Qoder, CodeBuddy and Factory differ in exactly these three things, so they are
+/// one reader with a table rather than three near-copies.
+pub struct FlatStore {
+    pub home: String,
+    pub source: &'static str,
+    pub now_ms: u64,
+}
+
+/// Five minutes, as macOS uses for every process-first reader.
+pub const FLAT_STORE_FRESHNESS_MS: u64 = 300_000;
+
+impl FlatStore {
+    /// Base directories, in precedence order. Qoder has two: the international
+    /// build writes `~/.qoder`, the China build `~/.qoder-cn`.
+    fn bases(&self) -> Vec<PathBuf> {
+        let home = Path::new(&self.home);
+        match self.source {
+            "qoder" => vec![
+                home.join(".qoder/projects"),
+                home.join(".qoder-cn/projects"),
+            ],
+            "codebuddy" => vec![home.join(".codebuddy/projects")],
+            // Factory's directory is `~/.factory`, its executable `droid`.
+            "droid" => vec![home.join(".factory/sessions")],
+            _ => Vec::new(),
+        }
+    }
+
+    fn encode(&self, cwd: &str) -> String {
+        match self.source {
+            // CodeBuddy spells the project directory the way its own app does;
+            // Qoder and Factory use Claude Code's encoding.
+            "codebuddy" => morrow_core::discovery::project_dir::app_encoded(cwd),
+            _ => morrow_core::discovery::project_dir::encoded(cwd),
+        }
+    }
+
+    /// `(model, messages)` from this agent's flavour of a `.jsonl` transcript.
+    fn recent(&self, path: &Path) -> (Option<String>, Vec<ChatMessage>) {
+        let Some(tail) = read_tail(path) else {
+            return (None, Vec::new());
+        };
+        match self.source {
+            "codebuddy" => morrow_core::discovery::flat_store::codebuddy_recent(&tail),
+            "droid" => {
+                // Factory keeps the model in a sidecar: `x.jsonl` → `x.settings.json`.
+                let settings = path.to_string_lossy().replace(".jsonl", ".settings.json");
+                let model = std::fs::read_to_string(&settings).ok().and_then(|json| {
+                    morrow_core::discovery::flat_store::factory_model_from_settings(&json)
+                });
+                let summary = morrow_core::discovery::read_transcript_tail(
+                    &tail,
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                );
+                (
+                    model.or_else(|| summary.as_ref().and_then(|s| s.model.clone())),
+                    summary.map(|s| s.recent_messages).unwrap_or_default(),
+                )
+            }
+            // Qoder writes Claude Code's own format.
+            _ => {
+                let summary = morrow_core::discovery::read_transcript_tail(
+                    &tail,
+                    &path.file_name().unwrap_or_default().to_string_lossy(),
+                );
+                (
+                    summary.as_ref().and_then(|s| s.model.clone()),
+                    summary.map(|s| s.recent_messages).unwrap_or_default(),
+                )
+            }
+        }
+    }
+}
+
+impl StoreReader for FlatStore {
+    fn source(&self) -> &'static str {
+        self.source
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl ProcessReader for FlatStore {
+    fn source(&self) -> &'static str {
+        self.source
+    }
+
+    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        // Every process in a subagent worktree would otherwise claim the same
+        // parent project; macOS skips them and so does this.
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        let project = self.encode(cwd);
+        // Only the newest file in the project is the session being run.
+        let best = self
+            .bases()
+            .into_iter()
+            .filter_map(|base| {
+                let files = transcript_files::list(&base.join(&project).to_string_lossy())?;
+                transcript_files::most_recent(
+                    &files,
+                    Some(self.now_ms.saturating_sub(FLAT_STORE_FRESHNESS_MS)),
+                )
+                .cloned()
+            })
+            .max_by_key(|file| file.modified_ms);
+        let Some(file) = best else {
+            return Vec::new();
+        };
+        let (model, recent_messages) = self.recent(Path::new(&file.path));
+        vec![DiscoveryHit {
+            session_id: file.name.trim_end_matches(".jsonl").to_owned(),
+            source: self.source,
+            cwd: cwd.to_owned(),
+            tty: None,
+            model,
+            pid: Some(process.pid),
+            modified_at: Some(file.modified_ms),
+            recent_messages,
+            transcript_path: Some(file.path),
+        }]
+    }
+}
+
+/// A `.worktrees/` or `-worktree` checkout a subagent was given: it is not a
+/// project the user opened, so a card for it would be a card nobody asked for.
+fn is_subagent_worktree(cwd: &str) -> bool {
+    cwd.contains("/.git/worktrees/")
+        || cwd.contains("\\worktrees\\")
+        || cwd.contains("/worktrees/")
+        || cwd.contains("-worktree/")
+}
+
 /// How recently a Cursor transcript must have been written to count as the
 /// session a process is running. macOS uses five minutes when the process start is
 /// known, and this reader always knows the process — it was handed one.
@@ -530,9 +764,18 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
             .filter(|root| !root.trim().is_empty())
             .unwrap_or_else(|| home.join(".codex").to_string_lossy().into_owned()),
     };
-    // Order is precedence: Claude first, then Codex, then OpenCode. A session id
-    // two readers both report keeps the earlier one's source.
-    let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode];
+    // Cline is the one reader of this batch with no process: it runs inside VS
+    // Code, so it is discovered from its own task history (#278).
+    let cline = ClineStore {
+        root: vscode_user_dir(home)
+            .join("globalStorage/saoudrizwan.claude-dev")
+            .to_string_lossy()
+            .into_owned(),
+        now_ms: now_ms(),
+    };
+    // Order is precedence: Claude first, then Codex, then OpenCode, then Cline. A
+    // session id two readers both report keeps the earlier one's source.
+    let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode, &cline];
     scan_with(
         &readers,
         home,
@@ -559,7 +802,25 @@ pub fn scan_with(
         home: home.to_string_lossy().into_owned(),
         now_ms,
     };
-    let process_readers: Vec<&dyn ProcessReader> = vec![&cursor, &gemini];
+    // Flat stores: one reader per agent, because each spells its store
+    // differently and the source has to be the agent's own name (#278).
+    let qoder = FlatStore {
+        home: home.to_string_lossy().into_owned(),
+        source: "qoder",
+        now_ms,
+    };
+    let codebuddy = FlatStore {
+        home: home.to_string_lossy().into_owned(),
+        source: "codebuddy",
+        now_ms,
+    };
+    let droid = FlatStore {
+        home: home.to_string_lossy().into_owned(),
+        source: "droid",
+        now_ms,
+    };
+    let process_readers: Vec<&dyn ProcessReader> =
+        vec![&cursor, &gemini, &qoder, &codebuddy, &droid];
     scan::run_all(
         readers,
         &process_readers,
@@ -1177,6 +1438,160 @@ mod tests {
                 .hits
                 .is_empty()
         );
+    }
+
+    /// #278: Cline is discovered with nothing running, because its task history
+    /// records the cwd.
+    #[test]
+    fn a_cline_task_becomes_a_session_with_no_process() {
+        let scratch = Scratch::new("cline");
+        // The real per-OS path, so a wrong `vscode_user_dir` fails here rather
+        // than on the only machine that has it.
+        let root = vscode_user_dir(&scratch.0).join("globalStorage/saoudrizwan.claude-dev");
+        std::fs::create_dir_all(root.join("state")).expect("a state dir");
+        std::fs::create_dir_all(root.join("tasks/task-1")).expect("a task dir");
+        std::fs::write(
+            root.join("state/taskHistory.json"),
+            r#"[{"id":"task-1","ts":1000,"cwdOnTaskInitialization":"/home/dev/project","modelId":"claude-sonnet"}]"#,
+        )
+        .expect("a history");
+        std::fs::write(
+            root.join("tasks/task-1/api_conversation_history.json"),
+            r#"[{"role":"user","content":"Why is the build red?"},
+                {"role":"assistant","content":"A missing import"}]"#,
+        )
+        .expect("a conversation");
+
+        let now = now_ms();
+        let cline_store = ClineStore {
+            root: root.to_string_lossy().into_owned(),
+            now_ms: now,
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&cline_store];
+        let result = scan_with(&readers, &scratch.0, &[], now);
+        let cline: Vec<_> = result.hits.iter().filter(|h| h.source == "cline").collect();
+        assert_eq!(cline.len(), 1);
+        assert_eq!(cline[0].session_id, "task-1");
+        assert_eq!(cline[0].cwd, "/home/dev/project");
+        assert_eq!(cline[0].model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(cline[0].pid, None, "an extension has no process");
+        assert_eq!(cline[0].recent_messages.len(), 2);
+    }
+
+    /// A task whose conversation was last written hours ago is not what the user
+    /// is looking at, even if it is the newest row in the history.
+    #[test]
+    fn a_stale_cline_task_is_not_a_session() {
+        let scratch = Scratch::new("cline-stale");
+        // The real per-OS path, so a wrong `vscode_user_dir` fails here rather
+        // than on the only machine that has it.
+        let root = vscode_user_dir(&scratch.0).join("globalStorage/saoudrizwan.claude-dev");
+        std::fs::create_dir_all(root.join("state")).expect("a state dir");
+        std::fs::create_dir_all(root.join("tasks/task-1")).expect("a task dir");
+        std::fs::write(
+            root.join("state/taskHistory.json"),
+            r#"[{"id":"task-1","ts":1000,"cwdOnTaskInitialization":"/home/dev/project"}]"#,
+        )
+        .expect("a history");
+        std::fs::write(
+            root.join("tasks/task-1/api_conversation_history.json"),
+            "[]",
+        )
+        .expect("a conversation");
+
+        // An hour past the ten-minute window: the clock the reader is given is
+        // the one that decides, so it is the clock the store carries.
+        let now = now_ms() + 3_600_000;
+        let cline_store = ClineStore {
+            root: root.to_string_lossy().into_owned(),
+            now_ms: now,
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&cline_store];
+        let result = scan_with(&readers, &scratch.0, &[], now);
+        assert!(result.hits.iter().all(|h| h.source != "cline"));
+    }
+
+    /// #278: Qoder, CodeBuddy and Factory are one reader with a table, because
+    /// they differ only in the base directory, the encoder, and the flavour.
+    #[test]
+    fn a_flat_store_process_becomes_a_session() {
+        let scratch = Scratch::new("flat");
+        let cwd = "/home/dev/project";
+        let project = scratch
+            .0
+            .join(".codebuddy/projects")
+            .join(morrow_core::discovery::project_dir::app_encoded(cwd));
+        std::fs::create_dir_all(&project).expect("a store");
+        std::fs::write(
+            project.join("cb-1.jsonl"),
+            concat!(
+                r#"{"type":"message","role":"user","content":"Ship it","providerData":{"model":"claude-sonnet"}}"#,
+                "\n",
+                r#"{"type":"message","role":"assistant","content":"Shipped"}"#
+            ),
+        )
+        .expect("a transcript");
+
+        let table = vec![process_with_cwd(88, "/usr/bin/codebuddy", "codebuddy", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result
+            .hits
+            .iter()
+            .filter(|h| h.source == "codebuddy")
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "cb-1");
+        assert_eq!(hits[0].model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(hits[0].pid, Some(88));
+    }
+
+    /// Factory's model lives in a sidecar file, not in the transcript.
+    #[test]
+    fn a_factory_store_reads_its_model_from_the_sidecar() {
+        let scratch = Scratch::new("factory");
+        let cwd = "/home/dev/project";
+        let project = scratch
+            .0
+            .join(".factory/sessions")
+            .join(morrow_core::discovery::project_dir::encoded(cwd));
+        std::fs::create_dir_all(&project).expect("a store");
+        std::fs::write(
+            project.join("d-1.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Deploy"}]}}"#,
+        )
+        .expect("a transcript");
+        std::fs::write(
+            project.join("d-1.settings.json"),
+            r#"{"model":"gpt-5.1-codex"}"#,
+        )
+        .expect("a sidecar");
+
+        let table = vec![process_with_cwd(33, "/usr/bin/droid", "droid", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "droid").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].model.as_deref(), Some("gpt-5.1-codex"));
+        assert_eq!(hits[0].pid, Some(33));
+    }
+
+    /// A subagent worktree is not a project the user opened.
+    #[test]
+    fn a_flat_store_process_in_a_worktree_is_skipped() {
+        let scratch = Scratch::new("flat-worktree");
+        let cwd = "/home/dev/project/worktrees/agent-1";
+        let project = scratch
+            .0
+            .join(".qoder/projects")
+            .join(morrow_core::discovery::project_dir::encoded(cwd));
+        std::fs::create_dir_all(&project).expect("a store");
+        std::fs::write(project.join("q-1.jsonl"), "{}").expect("a transcript");
+
+        let table = vec![process_with_cwd(12, "/usr/bin/qoder", "qoder", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        assert!(result.hits.iter().all(|h| h.source != "qoder"));
     }
 
     fn process_with_cwd(pid: i32, executable: &str, name: &str, cwd: &str) -> ProcessInfo {
