@@ -708,6 +708,14 @@ pub mod opencode {
         pub modified_ms: i64,
     }
 
+    /// A session as the store holds it, without a process to explain it.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct SessionRow {
+        pub session_id: String,
+        pub cwd: String,
+        pub modified_ms: i64,
+    }
+
     /// How far before the process started a row may still belong to it. The CLI
     /// writes its first row after the process is already running.
     pub const START_SLACK_MS: i64 = 10_000;
@@ -779,6 +787,64 @@ pub mod opencode {
             });
         }
         None
+    }
+
+    /// Every stored session worth showing, newest first — the **backfill** query.
+    ///
+    /// `find_recent_session` answers "which session is this process running",
+    /// which needs a cwd. A backfill has no process and no cwd: it asks the store
+    /// what it holds, and the store's own `directory` column becomes the card's
+    /// working directory.
+    ///
+    /// Archived rows are skipped, because they are what the CLI itself hides.
+    pub fn recent_sessions(connection: &Connection, limit: usize) -> Vec<SessionRow> {
+        let columns = crate::sqlite::table_columns(connection, "session");
+        if columns.is_empty() || !columns.iter().any(|column| column == "directory") {
+            return Vec::new();
+        }
+        let mut conditions: Vec<&str> = Vec::new();
+        if columns.iter().any(|column| column == "time_archived") {
+            conditions.push("time_archived IS NULL");
+        }
+        if columns.iter().any(|column| column == "parent_id") {
+            // A subagent session is never the CLI's own card.
+            conditions.push("parent_id IS NULL");
+        }
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", conditions.join(" AND "))
+        };
+        let sql = format!(
+            "SELECT id, directory, time_updated FROM session{where_clause}
+             ORDER BY time_updated DESC LIMIT {limit};"
+        );
+        let Ok(mut statement) = connection.prepare(&sql) else {
+            return Vec::new();
+        };
+        let Ok(mut rows) = statement.query([]) else {
+            return Vec::new();
+        };
+        let mut sessions = Vec::new();
+        while let Ok(Some(row)) = rows.next() {
+            let Ok(session_id) = row.get::<_, String>(0) else {
+                continue;
+            };
+            let Ok(updated_ms) = row.get::<_, i64>(2) else {
+                continue;
+            };
+            // A row with no directory cannot make a card: it has no working
+            // directory to show and no cwd to correlate against.
+            let Some(cwd) = non_empty_text(row, 1) else {
+                continue;
+            };
+            sessions.push(SessionRow {
+                session_id,
+                cwd,
+                modified_ms: updated_ms,
+            });
+        }
+        sessions
     }
 
     /// `readRecentFromOpenCodeSession`: the model and the last three text turns.
@@ -1211,6 +1277,16 @@ pub mod scan {
         /// The agent this reads, as `--source` spells it.
         fn source(&self) -> &'static str;
 
+        /// The roots this reader looks at.
+        ///
+        /// Declared by the reader rather than passed in, because they are not the
+        /// same kind of place: Claude Code keeps one store per config root
+        /// (`~/.claude`, `~/.claude-work`), while OpenCode keeps a single database
+        /// under `~/.local/share`. A caller holding one list would either re-read
+        /// the database once per config root or have to know each reader's
+        /// layout.
+        fn roots(&self) -> Vec<String>;
+
         /// Every session this root holds. A root the reader does not understand
         /// answers an empty list, not an error: one unknown store must not lose
         /// the others.
@@ -1256,7 +1332,6 @@ pub mod scan {
     /// somebody else's. Keeping the first is deliberate — a later reader with a
     /// thinner projection must not replace a fuller one.
     pub fn run(
-        roots: &[String],
         readers: &[&dyn StoreReader],
         budget_ms: u64,
         now_ms: impl Fn() -> u64,
@@ -1266,8 +1341,8 @@ pub mod scan {
         let mut claimed: HashSet<String> = HashSet::new();
         let mut exhausted = false;
 
-        for root in roots {
-            for reader in readers {
+        for reader in readers {
+            for root in reader.roots() {
                 // Checked before starting a reader, never in the middle of one: a
                 // reader that begins inside the budget is allowed to finish, so a
                 // big store is not cut in half and reported as complete — and
@@ -1280,7 +1355,7 @@ pub mod scan {
                     result.unfinished.push((reader.source(), root.clone()));
                     continue;
                 }
-                for hit in reader.read(root) {
+                for hit in reader.read(&root) {
                     if claimed.insert(hit.session_id.clone()) {
                         result.hits.push(hit);
                     }
@@ -1312,6 +1387,8 @@ mod scan_tests {
         source: &'static str,
         table: Vec<(&'static str, Vec<DiscoveryHit>)>,
         calls: std::cell::RefCell<Vec<String>>,
+        /// What this reader says it looks at; defaults to the table's own roots.
+        roots: Option<Vec<String>>,
     }
 
     impl Fake {
@@ -1320,6 +1397,14 @@ mod scan_tests {
                 source,
                 table,
                 calls: std::cell::RefCell::new(Vec::new()),
+                roots: None,
+            }
+        }
+
+        fn looking_at(source: &'static str, roots: &[&str]) -> Self {
+            Self {
+                roots: Some(roots.iter().map(|root| (*root).to_owned()).collect()),
+                ..Self::new(source, Vec::new())
             }
         }
     }
@@ -1327,6 +1412,15 @@ mod scan_tests {
     impl StoreReader for Fake {
         fn source(&self) -> &'static str {
             self.source
+        }
+
+        fn roots(&self) -> Vec<String> {
+            self.roots.clone().unwrap_or_else(|| {
+                self.table
+                    .iter()
+                    .map(|(root, _)| (*root).to_owned())
+                    .collect()
+            })
         }
 
         fn read(&self, root: &str) -> Vec<DiscoveryHit> {
@@ -1347,8 +1441,11 @@ mod scan_tests {
             .collect()
     }
 
+    /// Each reader is walked over **its own** roots. Claude keeps a store per
+    /// config root; a single-database agent keeps one. A caller holding one list
+    /// would re-read that database once per config root.
     #[test]
-    fn every_reader_reads_every_root() {
+    fn each_reader_is_walked_over_its_own_roots() {
         let claude = Fake::new(
             "claude",
             vec![
@@ -1356,19 +1453,18 @@ mod scan_tests {
                 (r"/r2", vec![hit("b", "claude", "/w")]),
             ],
         );
-        let codex = Fake::new("codex", vec![(r"/r2", vec![hit("c", "codex", "/w")])]);
+        let store = Fake::new("codex", vec![(r"/data", vec![hit("c", "codex", "/w")])]);
 
-        let readers: Vec<&dyn StoreReader> = vec![&claude, &codex];
-        let result = scan::run(
-            &[r"/r1".to_owned(), r"/r2".to_owned()],
-            &readers,
-            scan::DEFAULT_BUDGET_MS,
-            || 0,
-        );
+        let readers: Vec<&dyn StoreReader> = vec![&claude, &store];
+        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
 
         assert_eq!(ids(&result), vec!["a", "b", "c"]);
         assert_eq!(*claude.calls.borrow(), vec![r"/r1", r"/r2"]);
-        assert_eq!(*codex.calls.borrow(), vec![r"/r1", r"/r2"]);
+        assert_eq!(
+            *store.calls.borrow(),
+            vec![r"/data"],
+            "a single-store reader must not be read once per config root"
+        );
         assert!(result.unfinished.is_empty());
     }
 
@@ -1381,7 +1477,7 @@ mod scan_tests {
         let index = Fake::new("codex", vec![(r"/r", vec![hit("same", "codex", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&authoritative, &index];
 
-        let result = scan::run(&[r"/r".to_owned()], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
 
         assert_eq!(ids(&result), vec!["same"]);
         assert_eq!(result.hits[0].source, "claude");
@@ -1395,7 +1491,7 @@ mod scan_tests {
         let second = Fake::new("claude", vec![(r"/r", vec![hit("same", "claude", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&first, &second];
 
-        let result = scan::run(&[r"/r".to_owned()], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
         assert_eq!(result.hits[0].source, "codex");
     }
 
@@ -1410,26 +1506,19 @@ mod scan_tests {
         let second = Fake::new("codex", vec![(r"/r2", vec![hit("b", "codex", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&first, &second];
 
-        let result = scan::run(
-            &[r"/r1".to_owned(), r"/r2".to_owned()],
-            &readers,
-            100,
-            || {
-                let call = clock.get();
-                clock.set(call + 1);
-                if call < 2 { 0 } else { 10_000 }
-            },
-        );
+        let result = scan::run(&readers, 100, || {
+            let call = clock.get();
+            clock.set(call + 1);
+            if call < 2 { 0 } else { 10_000 }
+        });
 
         assert_eq!(ids(&result), vec!["a"]);
+        // Readers are walked reader-major, so the second reader's one root is
+        // what the deadline costs.
         assert_eq!(
             result.unfinished,
-            vec![
-                ("codex", r"/r1".to_owned()),
-                ("claude", r"/r2".to_owned()),
-                ("codex", r"/r2".to_owned()),
-            ],
-            "every reader that did not reach a root is named, not just the first"
+            vec![("codex", r"/r2".to_owned())],
+            "the reader that did not reach its root is named"
         );
         // Nothing new was started once the deadline had passed.
         assert_eq!(*second.calls.borrow(), Vec::<String>::new());
@@ -1449,7 +1538,7 @@ mod scan_tests {
         );
         let readers: Vec<&dyn StoreReader> = vec![&slow];
 
-        let result = scan::run(&[r"/r".to_owned()], &readers, 50, || {
+        let result = scan::run(&readers, 50, || {
             let now = clock.get();
             clock.set(now + 40);
             now
@@ -1463,18 +1552,19 @@ mod scan_tests {
     fn a_reader_that_answers_nothing_is_not_an_error() {
         let empty = Fake::new("claude", vec![]);
         let readers: Vec<&dyn StoreReader> = vec![&empty];
-        let result = scan::run(&[r"/r".to_owned()], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
         assert!(result.hits.is_empty());
         assert!(result.unfinished.is_empty());
     }
 
     #[test]
-    fn an_empty_root_list_reads_nothing() {
-        let reader = Fake::new("claude", vec![(r"/r", vec![hit("a", "claude", "/w")])]);
-        let readers: Vec<&dyn StoreReader> = vec![&reader];
-        let result = scan::run(&[], &readers, scan::DEFAULT_BUDGET_MS, || 0);
+    fn a_reader_that_looks_nowhere_reads_nothing() {
+        // A reader that looks nowhere reads nothing.
+        let idle = Fake::looking_at("claude", &[]);
+        let readers: Vec<&dyn StoreReader> = vec![&idle];
+        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
         assert!(result.hits.is_empty());
-        assert!(reader.calls.borrow().is_empty());
+        assert!(idle.calls.borrow().is_empty());
     }
 
     /// The caller `path_identity` was built for (#256).

@@ -11,7 +11,7 @@
 //! when to run it.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use morrow_core::discovery::scan::{self, ScanResult, StoreReader};
 use morrow_core::discovery::{DiscoveryHit, read_transcript_tail, transcript_files};
@@ -26,11 +26,27 @@ const TAIL_BYTES: u64 = 64 * 1024;
 /// Two levels, not a recursive walk: `projects/` holds one directory per working
 /// directory and the transcripts directly inside it. `Discovery/` on macOS only
 /// ever lists one directory for the same reason.
-pub struct ClaudeTranscripts;
+pub struct ClaudeTranscripts {
+    /// Claude Code's config directory, resolved by the installer's own ladder
+    /// (#258) so discovery reads the folder the hooks were written into.
+    pub config_dir: String,
+}
+
+impl ClaudeTranscripts {
+    fn config_dir(&self) -> &Path {
+        Path::new(&self.config_dir)
+    }
+}
 
 impl StoreReader for ClaudeTranscripts {
     fn source(&self) -> &'static str {
         "claude"
+    }
+
+    /// One store per config root. Declared by the walker that found them, so this
+    /// reader does not go looking for accounts it was not told about.
+    fn roots(&self) -> Vec<String> {
+        claude_roots(self.config_dir())
     }
 
     fn read(&self, root: &str) -> Vec<DiscoveryHit> {
@@ -91,6 +107,76 @@ fn read_tail(path: &Path) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
+/// OpenCode's (and MiMo Code's) session database (#270).
+///
+/// The one reader that can be backfilled **without a process**, because the store
+/// itself records the working directory: `find_recent_session` asks "which session
+/// is this process in", which needs a cwd from the process table, while
+/// `recent_sessions` asks the database what it holds.
+///
+/// Cursor and Gemini are the other way round and are deliberately **not**
+/// registered: their store directory is derived from a process's cwd
+/// (`~/.cursor/projects/<encoded cwd>/agent-transcripts`), and that encoding maps
+/// `/` and a space to the same `-`. Guessing a cwd from it would put a card in a
+/// directory the user does not have.
+pub struct OpenCodeStore {
+    /// `~/.local/share`, where both builds keep their database.
+    pub data_dir: String,
+}
+
+impl OpenCodeStore {
+    /// `opencode.db` and `mimocode.db`: the two names the builds ship (#257).
+    fn databases(&self) -> Vec<PathBuf> {
+        ["opencode/opencode.db", "mimocode/mimocode.db"]
+            .iter()
+            .map(|relative| Path::new(&self.data_dir).join(relative))
+            .filter(|path| path.is_file())
+            .collect()
+    }
+}
+
+impl StoreReader for OpenCodeStore {
+    fn source(&self) -> &'static str {
+        "opencode"
+    }
+
+    /// One root, not one per account: a single database holds every session.
+    fn roots(&self) -> Vec<String> {
+        let databases = self.databases();
+        if databases.is_empty() {
+            return Vec::new();
+        }
+        vec![self.data_dir.clone()]
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        let mut hits = Vec::new();
+        for database in self.databases() {
+            let Ok(connection) = morrow_core::sqlite::open_read_only(&database) else {
+                // A store being read by the CLI is not a failure of discovery.
+                continue;
+            };
+            for row in morrow_core::discovery::opencode::recent_sessions(&connection, 20) {
+                let (model, recent_messages) =
+                    morrow_core::discovery::opencode::read_recent(&connection, &row.session_id);
+                hits.push(DiscoveryHit {
+                    session_id: row.session_id,
+                    source: "opencode",
+                    cwd: row.cwd,
+                    tty: None,
+                    model,
+                    pid: None,
+                    // `time_updated` is milliseconds, the same unit a hit wants.
+                    modified_at: u64::try_from(row.modified_ms).ok(),
+                    recent_messages,
+                    transcript_path: Some(database.to_string_lossy().into_owned()),
+                });
+            }
+        }
+        hits
+    }
+}
+
 /// Give every hit that has no pid the process that is running it (#267).
 ///
 /// Reads the process table **once**, for the whole scan: a table read per session
@@ -146,11 +232,16 @@ pub fn correlate_with(
     }
 }
 
-/// One scan over every root, with the budget from the coordinator.
-pub fn scan_once(roots: &[String]) -> ScanResult {
-    let reader = ClaudeTranscripts;
-    let readers: Vec<&dyn StoreReader> = vec![&reader];
-    scan::run(roots, &readers, scan::DEFAULT_BUDGET_MS, now_ms)
+/// One scan with every reader this port has, each over its own roots.
+pub fn scan_once(config_dir: &Path, data_dir: &Path) -> ScanResult {
+    let transcripts = ClaudeTranscripts {
+        config_dir: config_dir.to_string_lossy().into_owned(),
+    };
+    let opencode = OpenCodeStore {
+        data_dir: data_dir.to_string_lossy().into_owned(),
+    };
+    let readers: Vec<&dyn StoreReader> = vec![&transcripts, &opencode];
+    scan::run(&readers, scan::DEFAULT_BUDGET_MS, now_ms)
 }
 
 /// The roots to scan for Claude Code today: the live config dir, plus any other
@@ -271,8 +362,7 @@ mod tests {
             &transcript("/home/dev/project", "model-x"),
         );
 
-        let root = scratch.0.join(".claude").to_string_lossy().into_owned();
-        let result = scan_once(&[root]);
+        let result = scan_once(&scratch.0.join(".claude"), &scratch.0.join("data"));
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -292,8 +382,11 @@ mod tests {
     #[test]
     fn a_store_that_is_not_there_is_no_sessions() {
         let scratch = Scratch::new("missing");
-        let root = scratch.0.join(".claude").to_string_lossy().into_owned();
-        assert!(scan_once(&[root]).hits.is_empty());
+        assert!(
+            scan_once(&scratch.0.join(".claude"), &scratch.0.join("data"))
+                .hits
+                .is_empty()
+        );
     }
 
     /// #267: a hit with no pid gets the process that is running it, so `Watches`
@@ -395,6 +488,108 @@ mod tests {
         }
     }
 
+    /// #270: a real OpenCode database becomes a card, with the working directory
+    /// the store itself records — the one reader that can be backfilled without a
+    /// process.
+    #[test]
+    fn an_opencode_database_becomes_a_session() {
+        let scratch = Scratch::new("opencode");
+        let data = scratch.0.join("data");
+        std::fs::create_dir_all(data.join("opencode")).expect("a data directory");
+        {
+            let connection =
+                rusqlite::Connection::open(data.join("opencode/opencode.db")).expect("a store");
+            connection
+                .execute_batch(
+                    "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, parent_id TEXT,
+                        time_updated INTEGER, time_archived INTEGER);
+                     CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT,
+                        time_updated INTEGER);
+                     CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+                        data TEXT, time_created INTEGER);
+                     INSERT INTO session VALUES ('oc-1', '/home/dev/project', NULL, 7000, NULL);
+                     INSERT INTO message VALUES ('m1', 'oc-1',
+                        '{\"role\":\"assistant\",\"modelID\":\"model-x\"}', 6000);
+                     INSERT INTO part VALUES ('p1', 'm1', 'oc-1',
+                        '{\"type\":\"text\",\"text\":\"Done\"}', 6000);",
+                )
+                .expect("a schema");
+        }
+
+        let result = scan_once(&scratch.0.join(".claude"), &data);
+
+        assert_eq!(result.hits.len(), 1);
+        let hit = &result.hits[0];
+        assert_eq!(hit.session_id, "oc-1");
+        assert_eq!(hit.source, "opencode");
+        assert_eq!(
+            hit.cwd, "/home/dev/project",
+            "the store's own directory column"
+        );
+        assert_eq!(hit.model.as_deref(), Some("model-x"));
+        assert_eq!(hit.modified_at, Some(7_000));
+        assert_eq!(hit.recent_messages.len(), 1);
+    }
+
+    /// Two readers in one scan: Claude's transcripts and OpenCode's database both
+    /// arrive, each from its own root.
+    #[test]
+    fn both_readers_contribute_to_one_scan() {
+        let scratch = Scratch::new("both");
+        let projects = scratch.project_dir(".claude", "-home-dev-project");
+        write(
+            &projects.join("claude-1.jsonl"),
+            &transcript("/home/dev/p", "model-x"),
+        );
+        let data = scratch.0.join("data");
+        std::fs::create_dir_all(data.join("opencode")).expect("a data directory");
+        {
+            let connection =
+                rusqlite::Connection::open(data.join("opencode/opencode.db")).expect("a store");
+            connection
+                .execute_batch(
+                    "CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT,
+                        time_updated INTEGER);
+                     INSERT INTO session VALUES ('oc-1', '/home/dev/q', 7000);",
+                )
+                .expect("a schema");
+        }
+
+        let mut hits = scan_once(&scratch.0.join(".claude"), &data).hits;
+        hits.sort_by(|a, b| a.session_id.cmp(&b.session_id));
+
+        let ids: Vec<&str> = hits.iter().map(|hit| hit.session_id.as_str()).collect();
+        assert_eq!(ids, vec!["claude-1", "oc-1"]);
+        assert_eq!(hits[0].source, "claude");
+        assert_eq!(hits[1].source, "opencode");
+    }
+
+    /// A database that is not there is no sessions, and a database that cannot be
+    /// opened does not lose the other reader's results.
+    #[test]
+    fn a_missing_or_unreadable_database_is_not_an_error() {
+        let scratch = Scratch::new("opencode-missing");
+        assert!(
+            scan_once(&scratch.0.join(".claude"), &scratch.0.join("nowhere"))
+                .hits
+                .is_empty()
+        );
+
+        // A file where the database should be, holding junk.
+        let data = scratch.0.join("data");
+        std::fs::create_dir_all(data.join("opencode")).expect("a data directory");
+        std::fs::write(data.join("opencode/opencode.db"), b"not a database").expect("a file");
+        let projects = scratch.project_dir(".claude", "-home-dev-project");
+        write(
+            &projects.join("claude-1.jsonl"),
+            &transcript("/home/dev/p", "model-x"),
+        );
+
+        let hits = scan_once(&scratch.0.join(".claude"), &data).hits;
+        assert_eq!(hits.len(), 1, "the transcripts still arrive");
+        assert_eq!(hits[0].source, "claude");
+    }
+
     /// A half-written or foreign file is skipped, not turned into a card with an
     /// empty prompt.
     #[test]
@@ -405,8 +600,11 @@ mod tests {
         write(&projects.join("junk.jsonl"), "not json\n");
         write(&projects.join("notes.txt"), "hello\n");
 
-        let root = scratch.0.join(".claude").to_string_lossy().into_owned();
-        assert!(scan_once(&[root]).hits.is_empty());
+        assert!(
+            scan_once(&scratch.0.join(".claude"), &scratch.0.join("data"))
+                .hits
+                .is_empty()
+        );
     }
 
     /// A session written after the app was closed is found and its newest turn is
@@ -426,8 +624,7 @@ mod tests {
             &transcript("/home/dev/project", "model-y"),
         );
 
-        let root = scratch.0.join(".claude").to_string_lossy().into_owned();
-        let mut hits = scan_once(&[root]).hits;
+        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0.join("data")).hits;
         hits.sort_by_key(|hit| hit.modified_at);
         assert_eq!(
             hits.last().map(|hit| hit.session_id.as_str()),
@@ -454,7 +651,7 @@ mod tests {
         let roots = claude_roots(&scratch.0.join(".claude"));
         assert_eq!(roots.len(), 2, "roots: {roots:?}");
 
-        let mut ids: Vec<String> = scan_once(&roots)
+        let mut ids: Vec<String> = scan_once(Path::new(&roots[0]), &scratch.0.join("data"))
             .hits
             .into_iter()
             .map(|hit| hit.session_id)
@@ -482,8 +679,7 @@ mod tests {
         }
         write(&path, &transcript("/home/dev/project", "model-x"));
 
-        let root = scratch.0.join(".claude").to_string_lossy().into_owned();
-        let hits = scan_once(&[root]).hits;
+        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0.join("data")).hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("model-x"));
         assert_eq!(hits[0].cwd, "/home/dev/project");

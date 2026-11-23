@@ -303,7 +303,7 @@ pub fn site() -> HooksSite {
 /// `morrow_core::config_roots` is the one implementation of both halves, shared
 /// with discovery, so the installer and the scanner cannot disagree about which
 /// folder is "the" folder.
-fn claude_config_dir(home: &Path, raw: Option<&str>) -> Option<PathBuf> {
+pub(crate) fn claude_config_dir(home: &Path, raw: Option<&str>) -> Option<PathBuf> {
     let home_text = home.to_str()?;
     let style = path_style();
     let resolved = morrow_core::config_roots::resolve(
