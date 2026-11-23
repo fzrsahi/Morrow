@@ -550,6 +550,10 @@ pub fn truncated_utf8(text: &str, max_bytes: usize) -> String {
         return text.to_owned();
     }
     let budget = max_bytes.saturating_sub('…'.len_utf8());
+    // No room left for the ellipsis after the bound — an ellipsis alone would break it.
+    if budget == 0 {
+        return String::new();
+    }
     let mut used = 0;
     let mut out = String::new();
     for ch in text.chars() {
@@ -571,6 +575,10 @@ pub fn truncated_utf16(text: &str, limit: usize) -> String {
         return text.to_owned();
     }
     let budget = limit.saturating_sub(1); // "…" is one unit
+    // No room left for the ellipsis after the bound — an ellipsis alone would break it.
+    if budget == 0 {
+        return String::new();
+    }
     let mut used = 0;
     let mut out = String::new();
     for ch in text.chars() {
@@ -966,6 +974,26 @@ mod tests {
         let emoji = "ab😀cd";
         let bounded = truncated_utf16(emoji, 4);
         assert!(bounded.encode_utf16().count() <= 4, "{bounded}");
+    }
+
+    #[test]
+    fn a_bound_too_small_to_fit_an_ellipsis_returns_nothing() {
+        // A bare "…" is three bytes / one unit. On non-empty input that exceeds the
+        // bound, returning it would break the bound, so both mirrors of Swift's
+        // `guard budget > 0 else { return "" }` return nothing instead.
+        let cjk = "日本語テキスト";
+        for max_bytes in 0..='…'.len_utf8() {
+            assert_eq!(truncated_utf8(cjk, max_bytes), "", "{max_bytes} bytes");
+        }
+
+        let emoji = "ab😀cd";
+        for limit in 0..=1 {
+            assert_eq!(truncated_utf16(emoji, limit), "", "{limit} units");
+        }
+
+        // One step above the guard the ellipsis still fits — the guard is not over-broad.
+        assert_eq!(truncated_utf8("abcde", 4), "a…");
+        assert_eq!(truncated_utf16("abc", 2), "a…");
     }
 
     #[test]
