@@ -45,6 +45,24 @@ pub const ALLOWED_EVENTS: &[(&str, i64)] = &[
 /// nothing and is left out.
 pub const DEFAULT_TIMEOUT_SECONDS: i64 = 60;
 
+fn allowed(event: &str) -> bool {
+    ALLOWED_EVENTS.iter().any(|(name, _)| *name == event)
+}
+
+/// Whether the file holds an event key ZCode does not know. Install drops those
+/// keys (#333); the caller keeps the original bytes so uninstall can put them
+/// back. A file that does not parse has nothing to report.
+pub fn has_foreign_events(existing: &str) -> bool {
+    let Some(root) = object(existing) else {
+        return false;
+    };
+    root.get("hooks")
+        .and_then(Value::as_object)
+        .and_then(|hooks| hooks.get("events"))
+        .and_then(Value::as_object)
+        .is_some_and(|events| events.keys().any(|event| !allowed(event)))
+}
+
 /// What an install came to.
 pub struct Outcome {
     pub changed: bool,
@@ -99,7 +117,7 @@ fn strip_ours(events: Option<&Map<String, Value>>, keep_only_allowed: bool) -> M
         // seven-event schema is present. On install those keys must go or our
         // own hooks are never read. On uninstall they are the user's and must
         // be left exactly where they were (#333).
-        if keep_only_allowed && !ALLOWED_EVENTS.iter().any(|(allowed, _)| allowed == event) {
+        if keep_only_allowed && !allowed(event) {
             continue;
         }
         let Some(entries) = value.as_array() else {
@@ -280,6 +298,20 @@ mod tests {
         assert!(install(Some("not json"), COMMAND).is_none());
         assert!(uninstall("not json").is_none());
         assert!(!is_installed("not json"));
+        assert!(!has_foreign_events("not json"));
+    }
+
+    #[test]
+    fn a_foreign_event_is_detected_before_the_install_drops_it() {
+        let source =
+            "{\n  \"hooks\": {\n    \"events\": {\n      \"Notification\": []\n    }\n  }\n}\n";
+        assert!(has_foreign_events(source));
+        let installed = install(Some(source), COMMAND).expect("a plan");
+        assert!(parsed(&installed.text)["hooks"]["events"]["Notification"].is_null());
+        assert!(!has_foreign_events(&installed.text));
+        assert!(!has_foreign_events(
+            &install(None, COMMAND).expect("a plan").text
+        ));
     }
 
     #[test]
