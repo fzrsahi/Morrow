@@ -109,6 +109,11 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
     rows.push(zcode_status(paths));
     rows.push(minimax_status(paths));
     rows.push(cline_status(paths));
+    rows.push(mimo_status(paths));
+    // AiWork has no hooks at all: "activated" is monitoring being on and the app
+    // being present. A row, and nothing else.
+    rows.push(aiwork_status(paths, "aiwork", "AiWork"));
+    rows.push(aiwork_status(paths, "aiwork-cli", "AiWork CLI"));
     rows
 }
 
@@ -236,6 +241,9 @@ pub fn install_target_with(
         "zcode" => return install_zcode(paths, stamp, command),
         "minimax" => return install_minimax(paths, stamp, command),
         "cline" => return install_cline(paths, &format!("{command} --source cline")),
+        "mimo" => return install_mimo(paths, stamp),
+        // Nothing to write: AiWork has no hooks, so "install" is the row itself.
+        "aiwork" | "aiwork-cli" => return Ok(Some(Report::default())),
         _ => {}
     }
     let Some(target) = targets::target_for(source) else {
@@ -296,6 +304,8 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
         "zcode" => return uninstall_zcode(paths),
         "minimax" => return uninstall_minimax(paths),
         "cline" => return uninstall_cline(paths),
+        "mimo" => return uninstall_mimo(paths),
+        "aiwork" | "aiwork-cli" => return Ok(None),
         _ => {}
     }
     let Some(target) = targets::target_for(source) else {
@@ -508,6 +518,126 @@ fn set_executable(_path: &std::path::Path) -> std::io::Result<()> {
     // Cline on Windows runs these through Git Bash, where the mode is not what
     // decides: the file existing is. Nothing to set.
     Ok(())
+}
+
+/// MiMo Code's plugin, which is OpenCode's file re-labelled (#234 batch 5).
+pub fn mimo_status(paths: &Paths) -> TargetStatus {
+    let path = paths
+        .home
+        .join(morrow_core::installer::mimo::MIMO_PLUGIN_PATH);
+    TargetStatus {
+        source: "mimo",
+        name: "MiMo Code",
+        detected: paths.home.join(".config/mimocode").is_dir()
+            || paths
+                .home
+                .join(morrow_core::installer::mimo::MIMO_INSTALL_DIR)
+                .is_dir(),
+        installed: read_text(&path)
+            .ok()
+            .flatten()
+            .is_some_and(|text| morrow_core::installer::mimo::is_our_mimo_plugin(&text)),
+        path,
+    }
+}
+
+fn install_mimo(paths: &Paths, stamp: &str) -> Result<Option<Report>, Error> {
+    if !mimo_status(paths).detected {
+        return Ok(None);
+    }
+    let path = paths
+        .home
+        .join(morrow_core::installer::mimo::MIMO_PLUGIN_PATH);
+    // An artefact that lost its marker yields nothing, and shipping OpenCode's own
+    // file under MiMo's name would mislabel every event.
+    let source = morrow_core::installer::mimo::mimo_plugin_source(crate::opencode::PLUGIN_SOURCE)
+        .ok_or_else(|| {
+        Error::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the bundled plugin no longer names its source line exactly once",
+        ))
+    })?;
+    if read_text(&path)?.as_deref() == Some(source.as_str()) {
+        return Ok(Some(Report::default()));
+    }
+    let existing = read_text(&path)?;
+    if existing
+        .as_deref()
+        .is_some_and(|text| !morrow_core::installer::mimo::is_our_mimo_plugin(text))
+    {
+        return Ok(None);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut report = Report::default();
+    if existing.is_some() {
+        report.backup = back_up(&path, stamp)?;
+    }
+    fs::write(&path, source)?;
+    report.settings_changed = true;
+    Ok(Some(report))
+}
+
+fn uninstall_mimo(paths: &Paths) -> Result<Option<Report>, Error> {
+    let path = paths
+        .home
+        .join(morrow_core::installer::mimo::MIMO_PLUGIN_PATH);
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    if !morrow_core::installer::mimo::is_our_mimo_plugin(&existing) {
+        return Ok(None);
+    }
+    fs::remove_file(&path)?;
+    Ok(Some(Report {
+        settings_changed: true,
+        ..Report::default()
+    }))
+}
+
+/// AiWork: nothing to install, so `installed` is `detected` and the install is a
+/// no-op that says what it did.
+pub fn aiwork_status(paths: &Paths, source: &'static str, name: &'static str) -> TargetStatus {
+    let detected = if source == "aiwork" {
+        // The GUI's state directory is what decides in practice: a GUI-launched
+        // app inherits a minimal PATH and cannot see the CLI's binary.
+        paths
+            .home
+            .join(morrow_core::installer::mimo::AIWORK_STATE_DIR)
+            .join("run")
+            .is_dir()
+    } else {
+        // The CLI is on PATH; the state directory is the same evidence.
+        paths
+            .home
+            .join(morrow_core::installer::mimo::AIWORK_STATE_DIR)
+            .join("run")
+            .is_dir()
+            || in_path("aiwork")
+            || in_path("dtcoder")
+    };
+    TargetStatus {
+        source,
+        name,
+        detected,
+        installed: detected,
+        path: paths
+            .home
+            .join(morrow_core::installer::mimo::AIWORK_STATE_DIR),
+    }
+}
+
+fn in_path(binary: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path).any(|directory| {
+                std::fs::metadata(directory.join(binary))
+                    .map(|metadata| metadata.is_file())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
 }
 
 /// The one environment lookup the target table needs, in one place so it can be
