@@ -7,6 +7,7 @@
 //     macos/Sources/MorrowCore/PrayerCalculationMethod.swift \
 //     macos/Sources/MorrowCore/PrayerTimeCalculator.swift \
 //     macos/Sources/MorrowCore/DailyPrayerSchedule.swift \
+//     macos/Sources/MorrowCore/HijriCalendarCalculator.swift \
 //     shared/fixtures/prayer/generate.swift -o /tmp/prayer-generate
 //   /tmp/prayer-generate > shared/fixtures/prayer/expected.json
 //
@@ -38,6 +39,15 @@ struct PrayerFixtureGenerator {
         (2026, 3, 20), (2026, 3, 29), (2026, 4, 15), (2026, 6, 21),
         (2026, 9, 27), (2026, 10, 25), (2026, 12, 21), (2026, 12, 31),
     ]
+
+    /// Dates whose Hijri conversion is checked against Rust, including a
+    /// named leap-year case: 1448 H Dhu al-Hijjah is 30 days, so 2027-06-05
+    /// is 30/12/1448 and 2027-06-06 is 1 Muharram 1449.
+    static let hijriDates: [(year: Int, month: Int, day: Int, note: String?)] =
+        dates.map { ($0.year, $0.month, $0.day, nil) } + [
+            (2027, 6, 5, "1448 H Dhu al-Hijjah / Muharram boundary (KHGT leap month: day 30)"),
+            (2027, 6, 6, "1448 H Dhu al-Hijjah / Muharram boundary (KHGT 30-day month ends)"),
+        ]
 
     static let methods: [PrayerCalculationMethod] = [.kemenag, .nuLFPBNU, .muhammadiyah]
     static let prayerTypes: [PrayerType] = [
@@ -109,7 +119,30 @@ struct PrayerFixtureGenerator {
             }
         }
 
+        // #296 AC: cross-language Hijri gold, from the same Swift calculator
+        // the app ships, for both criteria and the named leap-year pair above.
+        var hijri: [[String: Any]] = []
+        for day in hijriDates {
+            for source in [HijriCalendarSource.khgt, .neoMABIMS] {
+                let value = HijriCalendarCalculator.calculate(
+                    day: YearMonthDay(year: day.year, month: day.month, day: day.day),
+                    source: source
+                )
+                var row: [String: Any] = [
+                    "date": [day.year, day.month, day.day],
+                    "source": source.rawValue,
+                    "day": value.day,
+                    "month": value.month,
+                    "year": value.year,
+                    "month_name": value.monthName,
+                ]
+                if let note = day.note { row["note"] = note }
+                hijri.append(row)
+            }
+        }
+
         let fixture: [String: Any] = [
+            "hijri": hijri,
             "order": prayerTypes.map(\.rawValue),
             "cities": cities.map { [
                 "name": $0.name,

@@ -7,7 +7,8 @@
 //! numbers to the minute — the expectation never comes from the code it tests.
 
 use morrow_core::prayer::{
-    Coordinates, PrayerCalculationMethod, PrayerTimeCalculator, PrayerType, YearMonthDay,
+    Coordinates, HijriCalendarCalculator, HijriCalendarSource, PrayerCalculationMethod,
+    PrayerTimeCalculator, PrayerType, YearMonthDay, hijri_month_name,
 };
 use serde::Deserialize;
 
@@ -32,7 +33,19 @@ struct Case {
 }
 
 #[derive(Debug, Deserialize)]
+struct HijriCase {
+    date: (i32, i32, i32),
+    source: HijriCalendarSource,
+    day: i32,
+    month: i32,
+    year: i32,
+    month_name: String,
+    note: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct Fixture {
+    hijri: Vec<HijriCase>,
     order: Vec<String>,
     cities: Vec<City>,
     dates: Vec<(i32, i32, i32)>,
@@ -121,4 +134,48 @@ fn summer_isha_wraps_to_the_same_local_day() {
             .any(|case| case.city == "Oslo" && case.date == (2026, 6, 21)),
         "fixture must keep the high-latitude wrap case"
     );
+}
+
+#[test]
+fn swift_hijri_gold_matches_for_both_criteria_and_the_leap_month() {
+    let fixture = fixture();
+    assert_eq!(fixture.hijri.len(), 28, "14 dates x 2 criteria");
+    for case in &fixture.hijri {
+        let value = HijriCalendarCalculator::calculate(
+            YearMonthDay::new(case.date.0, case.date.1, case.date.2),
+            case.source,
+            0,
+        );
+        let label = format!("{:?}/{:?}", case.date, case.source);
+        assert_eq!(value.day, case.day, "{label} day");
+        assert_eq!(value.month, case.month, "{label} month");
+        assert_eq!(value.year, case.year, "{label} year");
+        assert_eq!(value.month_name, case.month_name, "{label} name");
+        assert_eq!(
+            hijri_month_name(case.month),
+            case.month_name,
+            "{label} name function"
+        );
+    }
+
+    // #296 AC: the named leap-year pair is a cross-language gold, not just a
+    // Rust unit test — KHGT's 1448 Dhu al-Hijjah has 30 days.
+    let last = fixture
+        .hijri
+        .iter()
+        .find(|case| case.source == HijriCalendarSource::Khgt && case.date == (2027, 6, 5))
+        .expect("named leap-year case");
+    assert_eq!((last.day, last.month, last.year), (30, 12, 1448));
+    assert!(
+        last.note
+            .as_deref()
+            .unwrap_or("")
+            .contains("KHGT leap month")
+    );
+    let next = fixture
+        .hijri
+        .iter()
+        .find(|case| case.source == HijriCalendarSource::Khgt && case.date == (2027, 6, 6))
+        .expect("day after the leap month");
+    assert_eq!((next.day, next.month, next.year), (1, 1, 1449));
 }
