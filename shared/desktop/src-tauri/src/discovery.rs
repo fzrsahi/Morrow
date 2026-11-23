@@ -13,7 +13,8 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use morrow_core::discovery::scan::{self, ScanResult, StoreReader};
+use morrow_core::agent_process::ProcessInfo;
+use morrow_core::discovery::scan::{self, ProcessReader, ScanResult, StoreReader};
 use morrow_core::discovery::{DiscoveryHit, read_transcript_tail, transcript_files};
 
 /// How much of a transcript the backfill reads. The same slice the live tailer
@@ -78,7 +79,7 @@ impl StoreReader for ClaudeTranscripts {
                     pid: None,
                     modified_at: Some(file.modified_ms),
                     recent_messages: summary.recent_messages,
-                    transcript_path: Some(file.path),
+                    transcript_path: Some(file.path.clone()),
                 });
             }
         }
@@ -269,11 +270,191 @@ impl StoreReader for CodexRollouts {
                     pid: None,
                     modified_at: Some(file.modified_ms),
                     recent_messages: summary.recent_messages,
-                    transcript_path: Some(file.path),
+                    transcript_path: Some(file.path.clone()),
                 });
             }
         }
         hits
+    }
+}
+
+/// How recently a Cursor transcript must have been written to count as the
+/// session a process is running. macOS uses five minutes when the process start is
+/// known, and this reader always knows the process — it was handed one.
+pub const CURSOR_FRESHNESS_MS: u64 = 300_000;
+
+/// Cursor, found from a process (#276).
+///
+/// `~/.cursor/projects/<encoded cwd>/agent-transcripts`: the store directory is
+/// derived from the working directory, so there is nothing to read without a
+/// process — and the process that pointed at it is the pid the card needs.
+pub struct CursorTranscripts {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+impl StoreReader for CursorTranscripts {
+    fn source(&self) -> &'static str {
+        "cursor"
+    }
+
+    /// A process-first reader has no roots of its own: it is walked by
+    /// `ProcessReader`, and this is only here because the trait asks.
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl ProcessReader for CursorTranscripts {
+    fn source(&self) -> &'static str {
+        "cursor"
+    }
+
+    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        let directory = Path::new(&self.home)
+            .join(".cursor/projects")
+            .join(morrow_core::discovery::project_dir::app_encoded(cwd))
+            .join("agent-transcripts");
+        let Some(files) = transcript_files::list(&directory.to_string_lossy()) else {
+            return Vec::new();
+        };
+        let Some(file) = transcript_files::most_recent(
+            &files,
+            Some(self.now_ms.saturating_sub(CURSOR_FRESHNESS_MS)),
+        ) else {
+            return Vec::new();
+        };
+        let Some(tail) = read_tail(Path::new(&file.path)) else {
+            return Vec::new();
+        };
+        let messages = morrow_core::discovery::cursor::recent_messages(&tail);
+        if messages.is_empty() {
+            return Vec::new();
+        }
+        vec![DiscoveryHit {
+            session_id: file.name.trim_end_matches(".jsonl").to_owned(),
+            source: "cursor",
+            cwd: cwd.to_owned(),
+            tty: None,
+            // Cursor's transcript records no model; the Swift reader returns nil
+            // for the same reason.
+            model: None,
+            // Known from birth: this is the pid that pointed at the store.
+            pid: Some(process.pid),
+            modified_at: Some(file.modified_ms),
+            recent_messages: messages,
+            transcript_path: Some(file.path.clone()),
+        }]
+    }
+}
+
+/// Gemini, found from a process (#276).
+///
+/// `~/.gemini/tmp/<project>/chats`, where `<project>` comes from
+/// `~/.gemini/projects.json` — a map, not a derivation, because Gemini keys the
+/// folder by a hash it does not document. When the map does not name it, the
+/// `.project_root` file inside each candidate folder is the fallback.
+pub struct GeminiChats {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+impl StoreReader for GeminiChats {
+    fn source(&self) -> &'static str {
+        "gemini"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl GeminiChats {
+    /// `findGeminiProjectDirectory`: the map first, then `.project_root`.
+    fn project_directory(&self, cwd: &str) -> Option<String> {
+        let tmp = Path::new(&self.home).join(".gemini/tmp");
+        let map = std::fs::read_to_string(Path::new(&self.home).join(".gemini/projects.json"))
+            .map(|json| morrow_core::discovery::gemini::projects_map(&json))
+            .unwrap_or_default();
+        if let Some(directory) = map.get(cwd) {
+            if tmp.join(directory).is_dir() {
+                return Some(directory.clone());
+            }
+        }
+        let mut directories: Vec<String> = std::fs::read_dir(&tmp)
+            .ok()?
+            .flatten()
+            .filter(|entry| entry.path().is_dir())
+            .filter_map(|entry| {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                let root = std::fs::read_to_string(entry.path().join(".project_root")).ok()?;
+                morrow_core::discovery::gemini::project_root_matches(&root, cwd).then_some(name)
+            })
+            .collect();
+        directories.sort();
+        directories.into_iter().next()
+    }
+}
+
+impl ProcessReader for GeminiChats {
+    fn source(&self) -> &'static str {
+        "gemini"
+    }
+
+    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        let Some(directory) = self.project_directory(cwd) else {
+            return Vec::new();
+        };
+        let chats = Path::new(&self.home)
+            .join(".gemini/tmp")
+            .join(directory)
+            .join("chats");
+        let Some(files) = transcript_files::list_any(&chats.to_string_lossy(), "json") else {
+            return Vec::new();
+        };
+        let Some(file) = transcript_files::most_recent(
+            &files,
+            Some(self.now_ms.saturating_sub(CURSOR_FRESHNESS_MS)),
+        ) else {
+            return Vec::new();
+        };
+        let Some(tail) = read_tail(Path::new(&file.path)) else {
+            return Vec::new();
+        };
+        // A Gemini session file is one JSON document, not JSONL: the whole file is
+        // what the reader wants, and the tail may have cut it in half.
+        let whole = std::fs::read_to_string(&file.path).unwrap_or(tail);
+        let session_id = morrow_core::discovery::gemini::session_id(&whole)
+            .unwrap_or_else(|| file.name.trim_end_matches(".json").to_owned());
+        let messages = morrow_core::discovery::gemini::recent_messages(&whole);
+        if messages.is_empty() {
+            return Vec::new();
+        }
+        vec![DiscoveryHit {
+            session_id,
+            source: "gemini",
+            cwd: cwd.to_owned(),
+            tty: None,
+            model: morrow_core::discovery::gemini::model(&whole),
+            pid: Some(process.pid),
+            modified_at: Some(file.modified_ms),
+            recent_messages: messages,
+            transcript_path: Some(file.path.clone()),
+        }]
     }
 }
 
@@ -352,7 +533,40 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
     // Order is precedence: Claude first, then Codex, then OpenCode. A session id
     // two readers both report keeps the earlier one's source.
     let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode];
-    scan::run(&readers, scan::DEFAULT_BUDGET_MS, now_ms)
+    scan_with(
+        &readers,
+        home,
+        &morrow_platform::agent_process::table(),
+        now_ms(),
+    )
+}
+
+/// One scan with the process table injected, so a test drives the process-first
+/// readers against a fake table instead of the machine's own processes.
+pub fn scan_with(
+    readers: &[&dyn StoreReader],
+    home: &Path,
+    table: &[ProcessInfo],
+    now_ms: u64,
+) -> ScanResult {
+    // Process-first readers: their store directory is derived from a process's
+    // cwd, and the process is the pid the card needs (#276).
+    let cursor = CursorTranscripts {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let gemini = GeminiChats {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let process_readers: Vec<&dyn ProcessReader> = vec![&cursor, &gemini];
+    scan::run_all(
+        readers,
+        &process_readers,
+        table,
+        scan::DEFAULT_BUDGET_MS,
+        || now_ms,
+    )
 }
 
 /// The roots to scan for Claude Code today: the live config dir, plus any other
@@ -815,6 +1029,164 @@ mod tests {
             r#"{"type":"event_msg","payload":{"type":"user_message","message":"Add a filter bar"}}"#,
             r#"{"type":"event_msg","payload":{"type":"agent_message","message":"Added the bar"}}"#,
         )
+    }
+
+    /// #276: Cursor's store directory is derived from a process's cwd, so the
+    /// process is what finds it — and the pid comes with it.
+    #[test]
+    fn a_cursor_process_finds_its_transcript_and_keeps_its_pid() {
+        let scratch = Scratch::new("cursor");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".cursor/projects")
+            .join(morrow_core::discovery::project_dir::app_encoded(cwd))
+            .join("agent-transcripts");
+        std::fs::create_dir_all(&directory).expect("a store");
+        write(
+            &directory.join("cursor-session-1.jsonl"),
+            &format!(
+                "{}\n{}\n",
+                r#"{"role":"user","message":{"content":"Add a filter bar"}}"#,
+                r#"{"role":"assistant","message":{"content":[{"type":"text","text":"Added the bar"}]}}"#
+            ),
+        );
+
+        let table = vec![process_with_cwd(
+            4242,
+            "/usr/bin/cursor-agent",
+            "cursor-agent",
+            cwd,
+        )];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let now = now_ms();
+        let result = scan_with(&readers, &scratch.0, &table, now);
+
+        assert_eq!(result.hits.len(), 1);
+        let hit = &result.hits[0];
+        assert_eq!(hit.session_id, "cursor-session-1");
+        assert_eq!(hit.source, "cursor");
+        assert_eq!(hit.cwd, cwd);
+        assert_eq!(
+            hit.pid,
+            Some(4242),
+            "process-first: the pid is known from birth"
+        );
+        assert_eq!(hit.recent_messages.len(), 2);
+    }
+
+    /// A transcript from hours ago is not what this process is running.
+    #[test]
+    fn a_stale_cursor_transcript_is_not_a_session() {
+        let scratch = Scratch::new("cursor-stale");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".cursor/projects")
+            .join(morrow_core::discovery::project_dir::app_encoded(cwd))
+            .join("agent-transcripts");
+        std::fs::create_dir_all(&directory).expect("a store");
+        write(
+            &directory.join("old.jsonl"),
+            "{\"role\":\"user\",\"message\":{\"content\":\"hi\"}}\n",
+        );
+
+        let table = vec![process_with_cwd(
+            1,
+            "/usr/bin/cursor-agent",
+            "cursor-agent",
+            cwd,
+        )];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        // Ten minutes later: past the five-minute freshness window.
+        let result = scan_with(&readers, &scratch.0, &table, now_ms() + 600_000);
+        assert!(result.hits.is_empty());
+    }
+
+    /// Gemini's folder is named by a hash, so it is looked up in `projects.json`.
+    #[test]
+    fn a_gemini_process_finds_its_chats_through_the_projects_map() {
+        let scratch = Scratch::new("gemini");
+        let cwd = "/home/dev/project";
+        let chats = scratch.0.join(".gemini/tmp/hash123/chats");
+        std::fs::create_dir_all(&chats).expect("a store");
+        std::fs::write(
+            scratch.0.join(".gemini/projects.json"),
+            format!(r#"{{"projects":{{"{cwd}":"hash123"}}}}"#),
+        )
+        .expect("a map");
+        std::fs::write(
+            chats.join("session-1.json"),
+            r#"{"sessionId":"gem-1","model":"gemini-pro","messages":[
+                    {"type":"user","content":"Where is the router?"},
+                    {"type":"gemini","content":"In src/router.ts"}]}"#,
+        )
+        .expect("a session");
+
+        let table = vec![process_with_cwd(555, "/usr/bin/gemini", "gemini", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+
+        assert_eq!(result.hits.len(), 1);
+        let hit = &result.hits[0];
+        assert_eq!(hit.session_id, "gem-1");
+        assert_eq!(hit.source, "gemini");
+        assert_eq!(hit.cwd, cwd);
+        assert_eq!(hit.model.as_deref(), Some("gemini-pro"));
+        assert_eq!(hit.pid, Some(555));
+        assert_eq!(hit.recent_messages.len(), 2);
+    }
+
+    /// When the map does not name the folder, `.project_root` does.
+    #[test]
+    fn a_gemini_folder_is_found_by_its_project_root_file() {
+        let scratch = Scratch::new("gemini-root");
+        let cwd = "/home/dev/project";
+        let chats = scratch.0.join(".gemini/tmp/other/chats");
+        std::fs::create_dir_all(&chats).expect("a store");
+        std::fs::write(scratch.0.join(".gemini/tmp/other/.project_root"), cwd)
+            .expect("a root file");
+        std::fs::write(
+            chats.join("session-1.json"),
+            r#"{"sessionId":"gem-2","messages":[{"type":"user","content":"hi"}]}"#,
+        )
+        .expect("a session");
+
+        let table = vec![process_with_cwd(7, "/usr/bin/gemini", "gemini", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        assert_eq!(result.hits.len(), 1);
+        assert_eq!(result.hits[0].session_id, "gem-2");
+    }
+
+    /// A process whose cwd could not be read is skipped, not guessed: a made-up
+    /// directory would put a card in a folder the user does not have.
+    #[test]
+    fn a_process_without_a_cwd_is_skipped() {
+        let scratch = Scratch::new("no-cwd");
+        let table = vec![ProcessInfo {
+            pid: 9,
+            executable: "/usr/bin/cursor-agent".to_owned(),
+            arguments: vec!["cursor-agent".to_owned()],
+            cwd: None,
+            start_time_ms: Some(1),
+        }];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &table, now_ms())
+                .hits
+                .is_empty()
+        );
+    }
+
+    fn process_with_cwd(pid: i32, executable: &str, name: &str, cwd: &str) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            executable: executable.to_owned(),
+            arguments: vec![name.to_owned()],
+            cwd: Some(cwd.to_owned()),
+            start_time_ms: Some(1),
+        }
     }
 
     /// A half-written or foreign file is skipped, not turned into a card with an
