@@ -186,48 +186,60 @@ impl StoreReader for OpenCodeStore {
 /// Swift reader uses. A `sessions/` tree grows forever, and a backfill that walked
 /// all of it would read years of rollouts on every attach; the panel shows current
 /// work, and anything older arrives through a hook or not at all.
+///
+/// The window is anchored to `now_ms`, not to however many day-directories the
+/// tree happens to hold: seven directories left over from January must not be
+/// read in November.
 pub struct CodexRollouts {
     /// The Codex config root: `$CODEX_HOME`, else `~/.codex`.
     pub root: String,
+    /// The clock for the seven-day window, in milliseconds since the Unix epoch.
+    pub now_ms: u64,
 }
 
 /// How many days back a backfill looks.
 pub const CODEX_DAYS: u64 = 7;
 
+/// The UTC civil date for a count of days since the Unix epoch.
+///
+/// Howard Hinnant's `civil_from_days`. The window is expressed in whole days, so
+/// a date crate would be a dependency for arithmetic this small.
+fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+}
+
 impl CodexRollouts {
-    /// `<root>/sessions/<yyyy>/<mm>/<dd>`, newest first, for the days that exist.
-    fn day_directories(&self) -> Vec<PathBuf> {
-        let sessions = Path::new(&self.root).join("sessions");
-        let Ok(years) = std::fs::read_dir(&sessions) else {
-            return Vec::new();
-        };
-        let mut days: Vec<PathBuf> = Vec::new();
-        // Depth is bounded by construction — year, month, day, file — and nothing
-        // recurses, so a symlinked loop cannot be entered.
-        for year in years.flatten() {
-            let Ok(months) = std::fs::read_dir(year.path()) else {
-                continue;
-            };
-            for month in months.flatten() {
-                let Ok(entries) = std::fs::read_dir(month.path()) else {
-                    continue;
-                };
-                for day in entries.flatten() {
-                    if day.path().is_dir() {
-                        days.push(day.path());
-                    }
-                }
-            }
-        }
-        // Newest last, then keep the tail: the directories sort lexicographically
-        // because the names are zero-padded.
-        days.sort();
-        let keep = CODEX_DAYS as usize;
-        if days.len() > keep {
-            days.split_off(days.len() - keep)
-        } else {
-            days
-        }
+    /// `<root>/sessions/<yyyy>/<mm>/<dd>` for the seven days ending at `now_ms`,
+    /// oldest first, for the directories that exist.
+    ///
+    /// This mirrors `findRecentCodexSessions` in Swift, which asks for the dates
+    /// `0..<7` days back from `Date()`. Walking the tree and taking its seven
+    /// newest names would instead read a stale tree forever, and never let a day
+    /// outside it expire. Building the paths directly also keeps the walk bounded
+    /// to seven fixed paths — a symlinked loop cannot be entered.
+    fn day_directories_at(&self, now_ms: u64) -> Vec<PathBuf> {
+        let today = (now_ms / 86_400_000) as i64;
+        (0..CODEX_DAYS)
+            .rev()
+            .filter_map(|back| {
+                let (year, month, day) = civil_from_days(today - back as i64);
+                let path = Path::new(&self.root)
+                    .join("sessions")
+                    .join(format!("{year:04}"))
+                    .join(format!("{month:02}"))
+                    .join(format!("{day:02}"));
+                path.is_dir().then_some(path)
+            })
+            .collect()
     }
 }
 
@@ -247,7 +259,7 @@ impl StoreReader for CodexRollouts {
 
     fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
         let mut hits = Vec::new();
-        for day in self.day_directories() {
+        for day in self.day_directories_at(self.now_ms) {
             let Some(files) = transcript_files::list(&day.to_string_lossy()) else {
                 continue;
             };
@@ -348,6 +360,7 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
             .ok()
             .filter(|root| !root.trim().is_empty())
             .unwrap_or_else(|| home.join(".codex").to_string_lossy().into_owned()),
+        now_ms: now_ms(),
     };
     // Order is precedence: Claude first, then Codex, then OpenCode. A session id
     // two readers both report keeps the earlier one's source.
@@ -725,35 +738,76 @@ mod tests {
         assert_eq!(hit.recent_messages.len(), 2);
     }
 
-    /// The store grows forever; a backfill that read all of it would walk years of
-    /// rollouts on every attach. Only the newest seven day-directories count.
-    #[test]
-    fn only_the_newest_seven_rollout_days_are_read() {
-        let scratch = Scratch::new("codex-days");
-        let sessions = scratch.0.join(".codex/sessions");
-        // Ten days, oldest to newest, each with one rollout.
-        for day in 1..=10 {
-            let directory = sessions.join(format!("2026/01/{day:02}"));
-            std::fs::create_dir_all(&directory).expect("a rollout directory");
-            write(
-                &directory.join(format!("rollout-2026-01-{day:02}-s{day}.jsonl")),
-                &codex_rollout(&format!("s{day}"), "/w", "model-x"),
-            );
-        }
+    /// 2026-11-22T12:00:00Z, pinned so the window tests do not depend on the
+    /// clock the CI runner happens to have.
+    const PINNED_NOW_MS: u64 = 1_795_348_800_000;
 
-        let mut ids: Vec<String> = scan_once(&scratch.0.join(".claude"), &scratch.0)
-            .hits
+    /// A rollout in the Codex day-directory `days_ago` before `now_ms`.
+    fn seed_rollout(root: &Path, now_ms: u64, days_ago: u64, id: &str) {
+        let (year, month, day) = civil_from_days((now_ms / 86_400_000) as i64 - days_ago as i64);
+        let directory = root
+            .join("sessions")
+            .join(format!("{year:04}"))
+            .join(format!("{month:02}"))
+            .join(format!("{day:02}"));
+        fs::create_dir_all(&directory).expect("a rollout directory");
+        write(
+            &directory.join(format!("rollout-{id}.jsonl")),
+            &codex_rollout(id, "/w", "model-x"),
+        );
+    }
+
+    fn codex_ids(root: &Path) -> Vec<String> {
+        let reader = CodexRollouts {
+            root: root.to_string_lossy().into_owned(),
+            now_ms: PINNED_NOW_MS,
+        };
+        let mut ids: Vec<String> = StoreReader::read(&reader, &reader.root)
             .into_iter()
             .map(|hit| hit.session_id)
             .collect();
         ids.sort();
+        ids
+    }
 
-        // The oldest three fall outside the window.
+    /// The store grows forever; a backfill that read all of it would walk years of
+    /// rollouts on every attach. Only the seven days ending today count — not the
+    /// seven newest directory names a stale tree happens to hold.
+    #[test]
+    fn only_the_last_seven_rollout_days_are_read() {
+        let scratch = Scratch::new("codex-days");
+        let root = scratch.0.join(".codex");
+        // Ten consecutive days ending today, plus a tree left over from a month ago.
+        for back in 0..10 {
+            seed_rollout(&root, PINNED_NOW_MS, back, &format!("s{back}"));
+        }
+        seed_rollout(&root, PINNED_NOW_MS, 40, "stale");
+
+        let ids = codex_ids(&root);
+
+        // `back` 7..9 and the 40-day-old rollout are outside the window.
         assert_eq!(
             ids,
-            vec!["s10", "s4", "s5", "s6", "s7", "s8", "s9"],
-            "seven of the ten days, the newest"
+            vec!["s0", "s1", "s2", "s3", "s4", "s5", "s6"],
+            "seven days ending today, not seven directory names"
         );
+    }
+
+    /// The regression this window exists for: a full set of seven old directories
+    /// used to be read forever, because the filter took the last seven names
+    /// instead of comparing them to today.
+    #[test]
+    fn a_stale_sessions_tree_is_never_backfilled() {
+        let scratch = Scratch::new("codex-stale");
+        let root = scratch.0.join(".codex");
+        // Seven consecutive days 34–40 days back: the old filter would take all
+        // seven of these and ignore how old they are.
+        for back in 34..=40 {
+            seed_rollout(&root, PINNED_NOW_MS, back, &format!("stale-{back}"));
+        }
+        seed_rollout(&root, PINNED_NOW_MS, 0, "today");
+
+        assert_eq!(codex_ids(&root), vec!["today"]);
     }
 
     /// A rollout that is not a rollout does not become a card, and does not lose
@@ -790,21 +844,9 @@ mod tests {
             .join(format!("{day:02}"))
     }
 
-    /// A UTC civil date from a Unix timestamp: enough for a test directory name,
-    /// and no dependency for it.
+    /// A UTC civil date from a Unix timestamp: enough for a test directory name.
     fn civil_date(seconds: u64) -> (i64, u32, u32) {
-        let days = (seconds / 86_400) as i64;
-        // Howard Hinnant's `civil_from_days`.
-        let z = days + 719_468;
-        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-        let doe = z - era * 146_097;
-        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-        let y = yoe + era * 400;
-        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-        let mp = (5 * doy + 2) / 153;
-        let d = doy - (153 * mp + 2) / 5 + 1;
-        let m = if mp < 10 { mp + 3 } else { mp - 9 };
-        (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+        civil_from_days((seconds / 86_400) as i64)
     }
 
     fn codex_rollout(id: &str, cwd: &str, model: &str) -> String {
