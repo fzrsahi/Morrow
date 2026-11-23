@@ -498,3 +498,53 @@ fn a_codex_config_the_editor_will_not_touch_is_an_error() {
     assert!(matches!(error, Error::UnparseableSettings(_)), "{error}");
     assert_eq!(home.read(&config), unsafe_layout, "left as it was");
 }
+
+// MARK: - #234 batch 3b: the two whose file is not one key
+
+/// ZCode wraps its events one level deeper than every other target, beside a switch
+/// the user owns. Writing the events at the top level would be a file ZCode ignores.
+#[test]
+fn zcode_keeps_its_wrapper_and_the_users_switch() {
+    let home = Home::new("zcode");
+    let paths = home.paths();
+    cli_dir(&home, ".zcode");
+    let config = home.root.join(".zcode/cli/config.json");
+    let original = "{\n  \"theme\": \"dark\",\n  \"hooks\": {\n    \"enabled\": false\n  }\n}\n";
+    home.write(&config, original);
+
+    let report = hooks::install_target(&paths, "zcode", STAMP)
+        .expect("install")
+        .expect("a report");
+    assert!(report.settings_changed);
+
+    let text = home.read(&config);
+    // Nested, not top-level.
+    assert!(text.contains("\"events\""), "{text}");
+    assert!(text.contains("--source zcode"), "{text}");
+    // The long timeout exists only where it beats ZCode's own 60 s default.
+    assert!(text.contains("86400"), "{text}");
+    // And the user's explicit `false` was not flipped on behind their back.
+    assert!(text.contains("\"enabled\": false"), "{text}");
+    assert!(text.contains("\"theme\": \"dark\""));
+
+    // Installed, and a second run changes nothing.
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "zcode")
+            .expect("a zcode row")
+            .installed
+    );
+    let again = hooks::install_target(&paths, "zcode", STAMP)
+        .expect("reinstall")
+        .expect("a report");
+    assert!(!again.settings_changed);
+    assert_eq!(home.read(&config), text);
+
+    // Uninstall leaves no scaffolding, and their switch is still theirs.
+    hooks::uninstall_target(&paths, "zcode").expect("uninstall");
+    let back = home.read(&config);
+    assert!(!back.contains("codeisland"), "{back}");
+    assert!(back.contains("\"enabled\": false"), "{back}");
+}
+

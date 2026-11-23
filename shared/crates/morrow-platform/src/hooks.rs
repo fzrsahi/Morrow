@@ -87,9 +87,9 @@ pub struct TargetStatus {
     pub path: PathBuf,
 }
 
-/// Every target the core knows, in table order.
+/// Every target the core knows, in table order, plus ZCode's `{enabled, events}` wrapper.
 pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
-    targets::TARGETS
+    let mut rows: Vec<TargetStatus> = targets::TARGETS
         .iter()
         .map(|target| {
             let path = target.file(&paths.home, grok_home_env);
@@ -104,7 +104,28 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
                 path,
             }
         })
-        .collect()
+        .collect();
+    rows.push(zcode_status(paths));
+    rows
+}
+
+/// ZCode's single file, and the switch inside it.
+pub fn zcode_status(paths: &Paths) -> TargetStatus {
+    let path = zcode_path(paths);
+    let text = read_text(&path).ok().flatten();
+    TargetStatus {
+        source: "zcode",
+        name: "ZCode",
+        detected: paths.home.join(".zcode").is_dir(),
+        installed: text
+            .as_deref()
+            .is_some_and(morrow_core::installer::zcode::is_installed),
+        path,
+    }
+}
+
+fn zcode_path(paths: &Paths) -> PathBuf {
+    paths.home.join(".zcode/cli/config.json")
 }
 
 /// The directory each CLI proves itself by. Codex keeps `~/.codex`, Gemini
@@ -158,6 +179,12 @@ pub fn install_target_with(
     stamp: &str,
     command: &str,
 ) -> Result<Option<Report>, Error> {
+    // ZCode is an installer of its own rather than a key in a file: it wraps
+    // its events beside a user-owned switch (#234 batch 3b).
+    match source {
+        "zcode" => return install_zcode(paths, stamp, command),
+        _ => {}
+    }
     let Some(target) = targets::target_for(source) else {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -212,6 +239,10 @@ fn enable_codex_hooks(paths: &Paths) -> Result<bool, Error> {
 
 /// Take one target's hook back out.
 pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, Error> {
+    match source {
+        "zcode" => return uninstall_zcode(paths),
+        _ => {}
+    }
     let Some(target) = targets::target_for(source) else {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -243,6 +274,48 @@ fn cli_dir_exists(paths: &Paths, target: &Target) -> bool {
         .iter()
         .find(|(source, _)| *source == target.source)
         .is_none_or(|(_, directory)| paths.home.join(directory).is_dir())
+}
+
+/// ZCode's single file, written through the core's plan (#234 batch 3b).
+fn install_zcode(paths: &Paths, stamp: &str, command: &str) -> Result<Option<Report>, Error> {
+    if !zcode_status(paths).detected {
+        return Ok(None);
+    }
+    // ZCode's command names its source itself: the caller hands over the bare hook
+    // command, as the target table's `command_for` does for every other CLI.
+    let command = format!("{command} --source zcode");
+    let path = zcode_path(paths);
+    let existing = read_text(&path)?;
+    let outcome = morrow_core::installer::zcode::install(existing.as_deref(), &command)
+        .ok_or_else(|| Error::UnparseableSettings(path.clone()))?;
+    let mut report = Report::default();
+    if outcome.changed {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if existing.is_some() {
+            report.backup = back_up(&path, stamp)?;
+        }
+        fs::write(&path, &outcome.text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+fn uninstall_zcode(paths: &Paths) -> Result<Option<Report>, Error> {
+    let path = zcode_path(paths);
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    let Some(outcome) = morrow_core::installer::zcode::uninstall(&existing) else {
+        return Ok(None);
+    };
+    let mut report = Report::default();
+    if outcome.changed {
+        fs::write(&path, &outcome.text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
 }
 
 /// The one environment lookup the target table needs, in one place so it can be
