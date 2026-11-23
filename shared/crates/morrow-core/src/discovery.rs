@@ -405,6 +405,37 @@ pub mod gemini {
         serde_json::from_str(transcript).ok()
     }
 
+    /// `readGeminiProjectsMap`: `~/.gemini/projects.json` maps a working directory
+    /// to the folder under `~/.gemini/tmp` that holds its chats.
+    ///
+    /// A map rather than a derivation, unlike Cursor: Gemini keys the folder by a
+    /// hash it does not document, so the only way to find it is to be told.
+    pub fn projects_map(json: &str) -> std::collections::HashMap<String, String> {
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+            return std::collections::HashMap::new();
+        };
+        value
+            .get("projects")
+            .and_then(|projects| projects.as_object())
+            .map(|projects| {
+                projects
+                    .iter()
+                    .filter_map(|(cwd, directory)| {
+                        directory
+                            .as_str()
+                            .map(|directory| (cwd.clone(), directory.to_owned()))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// A `.project_root` file's contents, trimmed: the fallback when
+    /// `projects.json` does not name the directory.
+    pub fn project_root_matches(contents: &str, cwd: &str) -> bool {
+        contents.trim() == cwd
+    }
+
     pub fn session_id(transcript: &str) -> Option<String> {
         parse(transcript)?
             .get("sessionId")
@@ -517,17 +548,28 @@ pub mod transcript_files {
         pub modified_ms: u64,
     }
 
+    /// The same listing with any extension, for a store that is not JSONL
+    /// (Gemini's chats are `*.json`).
+    pub fn list_any(directory: &str, extension: &str) -> Option<Vec<TranscriptFile>> {
+        let suffix = format!(".{extension}");
+        list_matching(directory, &suffix)
+    }
+
     /// `None` when the directory cannot be listed at all — a store that is
     /// missing, unreadable, or a symlink loop. An empty `Vec` is a directory
     /// that exists and holds no transcripts, which is a different answer: the
     /// first means "look elsewhere", the second "nothing here".
     pub fn list(project_dir: &str) -> Option<Vec<TranscriptFile>> {
+        list_matching(project_dir, ".jsonl")
+    }
+
+    fn list_matching(project_dir: &str, suffix: &str) -> Option<Vec<TranscriptFile>> {
         let dir = path_identity::resolved(project_dir);
         let entries = std::fs::read_dir(&dir).ok()?;
         let mut files: Vec<TranscriptFile> = Vec::new();
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.ends_with(".jsonl") {
+            if !name.ends_with(suffix) {
                 continue;
             }
             // A dangling link has no mtime to report; skip it rather than
@@ -582,6 +624,46 @@ pub mod transcript_files {
                 Some(start) => file.modified_ms + START_SLACK_MS >= start,
             })
             .max_by_key(|file| file.modified_ms)
+    }
+}
+
+#[cfg(test)]
+mod gemini_map_tests {
+    use super::gemini;
+
+    #[test]
+    fn the_projects_map_names_a_chat_folder_for_a_working_directory() {
+        let json = r#"{"projects":{"/home/dev/a":"abc123","/home/dev/b":"def456"}}"#;
+        let map = gemini::projects_map(json);
+        assert_eq!(map.get("/home/dev/a").map(String::as_str), Some("abc123"));
+        assert_eq!(map.get("/home/dev/b").map(String::as_str), Some("def456"));
+        assert_eq!(map.get("/home/dev/c"), None);
+    }
+
+    #[test]
+    fn a_map_that_is_not_a_map_is_empty_rather_than_a_panic() {
+        assert!(gemini::projects_map("").is_empty());
+        assert!(gemini::projects_map("not json").is_empty());
+        assert!(gemini::projects_map("{}").is_empty());
+        assert!(gemini::projects_map(r#"{"projects":"nope"}"#).is_empty());
+        // A non-string entry is skipped, the rest survives.
+        assert_eq!(
+            gemini::projects_map(r#"{"projects":{"/a":1,"/b":"two"}}"#)
+                .get("/b")
+                .map(String::as_str),
+            Some("two")
+        );
+    }
+
+    #[test]
+    fn a_project_root_file_matches_its_working_directory_trimmed() {
+        assert!(gemini::project_root_matches("/home/dev/a\n", "/home/dev/a"));
+        assert!(gemini::project_root_matches(
+            "  /home/dev/a  ",
+            "/home/dev/a"
+        ));
+        assert!(!gemini::project_root_matches("/home/dev/b", "/home/dev/a"));
+        assert!(!gemini::project_root_matches("", "/home/dev/a"));
     }
 }
 
@@ -1549,6 +1631,23 @@ pub mod scan {
         fn read(&self, root: &str) -> Vec<DiscoveryHit>;
     }
 
+    /// A decoder that needs a **process** before it can find anything (#276).
+    ///
+    /// Cursor and Gemini keep their store under a directory derived from the
+    /// working directory of a running CLI:
+    /// `~/.cursor/projects/<encoded cwd>/agent-transcripts`. There is nothing to
+    /// read without a cwd, which is why these are not `StoreReader`s — and why they
+    /// are worth having anyway: the process that pointed at the store is the pid
+    /// the card needs, so no correlation is required.
+    pub trait ProcessReader {
+        /// The agent this reads, as `--source` spells it.
+        fn source(&self) -> &'static str;
+
+        /// The sessions this process is running. A process whose store is not
+        /// there, or is stale, answers nothing.
+        fn read_process(&self, process: &crate::agent_process::ProcessInfo) -> Vec<DiscoveryHit>;
+    }
+
     /// What one scan produced.
     #[derive(Debug, Default)]
     pub struct ScanResult {
@@ -1592,6 +1691,23 @@ pub mod scan {
         budget_ms: u64,
         now_ms: impl Fn() -> u64,
     ) -> ScanResult {
+        run_all(readers, &[], &[], budget_ms, now_ms)
+    }
+
+    /// Every reader this port has: the store-first ones over their own roots, then
+    /// the process-first ones over the process table.
+    ///
+    /// One `claimed` set spans both passes, so a session a store reader already
+    /// reported keeps its source and a pid is never handed out twice. `table` is
+    /// passed in rather than read here: the coordinator stays pure, and a test can
+    /// drive the process pass with a fake table.
+    pub fn run_all(
+        readers: &[&dyn StoreReader],
+        process_readers: &[&dyn ProcessReader],
+        table: &[crate::agent_process::ProcessInfo],
+        budget_ms: u64,
+        now_ms: impl Fn() -> u64,
+    ) -> ScanResult {
         let started = now_ms();
         let mut result = ScanResult::default();
         let mut claimed: HashSet<String> = HashSet::new();
@@ -1612,6 +1728,33 @@ pub mod scan {
                     continue;
                 }
                 for hit in reader.read(&root) {
+                    if claimed.insert(hit.session_id.clone()) {
+                        result.hits.push(hit);
+                    }
+                }
+            }
+        }
+
+        // The process-first pass. Only processes of a source that has a reader are
+        // asked about, and a process whose cwd could not be read is skipped: a
+        // guessed directory would put a card in a folder the user does not have.
+        for reader in process_readers {
+            for process in table {
+                if !exhausted && now_ms().saturating_sub(started) > budget_ms {
+                    exhausted = true;
+                }
+                if exhausted {
+                    result
+                        .unfinished
+                        .push((reader.source(), process.pid.to_string()));
+                    continue;
+                }
+                if process.cwd.is_none()
+                    || !crate::agent_process::is_session_process(reader.source(), process)
+                {
+                    continue;
+                }
+                for hit in reader.read_process(process) {
                     if claimed.insert(hit.session_id.clone()) {
                         result.hits.push(hit);
                     }
