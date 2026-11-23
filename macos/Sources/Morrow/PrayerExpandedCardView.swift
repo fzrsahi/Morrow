@@ -495,7 +495,13 @@ public struct PrayerExpandedCardView: View {
         let upcoming = manager.upcomingPrayer
         let prayers = sched.fivePrayers
         let currentPrayer = sched.currentFardhPrayer(at: now)
-        let currentIndex = prayers.firstIndex { $0.prayer == currentPrayer } ?? -1
+        let activeTodayIndex: Int = {
+            guard let idx = prayers.firstIndex(where: { $0.prayer == currentPrayer }),
+                  prayers[idx].date <= now else {
+                return -1
+            }
+            return idx
+        }()
         let stationCount = prayers.count
 
         ZStack(alignment: .top) {
@@ -508,7 +514,7 @@ public struct PrayerExpandedCardView: View {
                     let cx2 = CGFloat(i + 1) * (colW + spacing) + colW / 2
                     let segX = cx1 + 12
                     let segW = max(0, (cx2 - 12) - segX)
-                    let isCompleted = i < currentIndex
+                    let isCompleted = i < activeTodayIndex
                     Rectangle()
                         .fill(isCompleted ? accentColor.opacity(0.55) : Color.white.opacity(0.12))
                         .frame(width: segW, height: 1.5)
@@ -522,7 +528,7 @@ public struct PrayerExpandedCardView: View {
             HStack(spacing: 4) {
                 ForEach(Array(prayers.enumerated()), id: \.element.prayer.rawValue) { _, item in
                     let isNext = (item.prayer == upcoming?.prayer)
-                    let isCurrent = (item.prayer == currentPrayer && !isNext)
+                    let isCurrent = (item.prayer == currentPrayer && !isNext && item.date <= now)
                     let isPassed = (!isNext && !isCurrent && item.date < now)
                     let isHovered = (hoveredPrayer == item.prayer.rawValue)
 

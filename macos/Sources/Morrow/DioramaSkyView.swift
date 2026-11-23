@@ -281,7 +281,7 @@ public struct DioramaSkyView: View {
                 }
             }()
 
-            let zenithY = size.height * 0.18
+            let zenithY = size.height * 0.32
             let cx = snap(size.width * (0.28 + 0.44 * p))
             let cy: CGFloat = {
                 if isDay {
