@@ -228,7 +228,7 @@ public struct MagSafeChargingBanner: View {
                         }
                     }
                 }
-                .frame(width: 40, height: 34)
+                .frame(width: 40, height: 40)
             }
             .layoutPriority(2)
 

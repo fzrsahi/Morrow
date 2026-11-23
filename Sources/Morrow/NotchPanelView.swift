@@ -1364,10 +1364,99 @@ struct NotchPanelView: View {
         }
     }
 
+    private static let bayer4Matrix: [[Double]] = [
+        [ 0,  8,  2, 10],
+        [12,  4, 14,  6],
+        [ 3, 11,  1,  9],
+        [15,  7, 13,  5]
+    ]
+
+    @ViewBuilder
+    private func chargingBayerDitherLayer<S: Shape>(for shape: S) -> some View {
+        let isStaticFull: Bool = {
+            if case .fullyCharged = sys.activeBannerState { return true }
+            return false
+        }()
+
+        if isStaticFull {
+            bayerDitherCanvas(time: 0)
+                .padding(.horizontal, -16)
+                .clipShape(shape)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                bayerDitherCanvas(time: context.date.timeIntervalSinceReferenceDate)
+            }
+            .padding(.horizontal, -16)
+            .clipShape(shape)
+        }
+    }
+
+    private func bayerDitherCanvas(time t: TimeInterval) -> some View {
+        let state = sys.activeBannerState
+        let color = chargingAmbientColor
+        let sweep = ((t.truncatingRemainder(dividingBy: 1.8)) / 1.8) * 1.4 - 0.2
+        let freq: Double = {
+            if case .lowBattery = state { return 6.5 }
+            return 2.4
+        }()
+        let pulse = 0.5 + 0.5 * sin(t * freq)
+
+        return Canvas { ctx, size in
+            let w = Double(size.width)
+            let maxY = min(44.0, Double(size.height))
+            let cell = 3.0
+            let dotColor = color.opacity(0.28)
+
+            var y = 0.0
+            var rowIdx = 0
+            while y < maxY {
+                let ny = y / 44.0
+                let bayerRow = Self.bayer4Matrix[rowIdx & 3]
+                var x = 0.0
+                var colIdx = 0
+                while x < w {
+                    let nx = x / max(1.0, w)
+                    let leftBoost = exp(-pow((nx - 0.12) / 0.18, 2.0))
+                    let rightBoost = exp(-pow((nx - 0.88) / 0.18, 2.0))
+                    let wingBoost = max(leftBoost, rightBoost, 0.45)
+                    var intensity = (1.0 - ny) * 0.72 * wingBoost
+
+                    switch state {
+                    case .charging:
+                        let wave = exp(-pow((nx - sweep) / 0.14, 2.0)) * (1.0 - ny * 0.7)
+                        intensity = min(1.0, intensity * 0.75 + wave * 0.85)
+                    case .onHold:
+                        intensity *= (0.55 + 0.30 * pulse)
+                    case .fullyCharged:
+                        break
+                    case .lowBattery:
+                        intensity *= (0.20 + 0.80 * pulse)
+                    }
+
+                    let threshold = bayerRow[colIdx & 3] / 16.0
+                    if intensity > threshold + 0.08 {
+                        ctx.fill(
+                            Path(CGRect(x: x, y: y, width: cell - 1.0, height: cell - 1.0)),
+                            with: .color(dotColor)
+                        )
+                    }
+                    x += cell
+                    colIdx += 1
+                }
+                y += cell
+                rowIdx += 1
+            }
+        }
+    }
+
     @ViewBuilder
     private func chargingAmbientLayer<S: Shape>(for shape: S) -> some View {
         if signals.showChargingBanner && !appState.surface.isExpanded {
-            let wingY: CGFloat = 0.0
+            if islandUITheme == IslandUITheme.pixel.rawValue {
+                chargingBayerDitherLayer(for: shape)
+                    .transition(.opacity)
+            } else {
+                let wingY: CGFloat = 0.0
             ZStack {
                 // Flush top-edge wash so there is no black band above the glow
                 shape.fill(
@@ -1440,6 +1529,7 @@ struct NotchPanelView: View {
                 }
             }
             .transition(.opacity)
+            }
         }
     }
 
