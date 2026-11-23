@@ -117,7 +117,7 @@ struct SettingsView: View {
             Group {
                 switch selectedPage {
                 case .general: GeneralPage()
-                case .appearance: AppearancePage()
+                case .appearance: AppearancePage(appState: appState)
                 case .mascots: MascotsPage()
                 case .sound: SoundPage()
                 case .shortcuts: ShortcutsPage()
@@ -1499,6 +1499,7 @@ enum ContentFontSize {
 }
 
 private struct AppearancePage: View {
+    var appState: AppState? = nil
     @ObservedObject private var l10n = L10n.shared
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @AppStorage(SettingsKey.musicHUDTheme) private var musicHUDTheme = SettingsDefaults.musicHUDTheme
@@ -1540,6 +1541,49 @@ private struct AppearancePage: View {
             get: { NotchAnimationSpeed.clamped(notchAnimationSpeed) },
             set: { notchAnimationSpeed = NotchAnimationSpeed.clamped($0) }
         )
+    }
+
+    @MainActor
+    private func triggerApprovalPreview(on state: AppState) {
+        let sid = "preview-approval"
+        var s = SessionSnapshot()
+        s.status = .waitingApproval
+        s.cwd = "/Users/dev/api-server"
+        s.model = "claude-opus-4-20250514"
+        s.source = "claude"
+        s.currentTool = "Bash"
+        s.toolDescription = "npm run test -- --coverage"
+        s.lastUserPrompt = "Run the test suite"
+        s.addRecentMessage(ChatMessage(isUser: true, text: "Run the test suite"))
+        s.termApp = "iTerm.app"
+
+        let applySurface = {
+            state.sessions[sid] = s
+            state.activeSessionId = sid
+            state.surface = .approvalCard(sessionId: sid)
+        }
+
+        if state.pendingPermission(forSession: sid) == nil,
+           let event = HookEvent(json: [
+               "hook_event_name": "PermissionRequest",
+               "session_id": sid,
+               "tool_name": "Bash",
+               "tool_input": [
+                   "command": "npm run test -- --coverage",
+                   "description": "Run the test suite with a coverage report"
+               ],
+               "cwd": "/Users/dev/api-server",
+               "_source": "claude"
+           ]) {
+            Task { @MainActor in
+                _ = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+                    state.permissionQueue.append(PermissionRequest(event: event, continuation: continuation))
+                    applySurface()
+                }
+            }
+        } else {
+            applySurface()
+        }
     }
 
     var body: some View {
@@ -1784,6 +1828,26 @@ private struct AppearancePage: View {
                                 .padding(.vertical, 3.5)
                             }
                             .buttonStyle(.bordered)
+                        }
+
+                        GridRow {
+                            Button(action: {
+                                if let appState {
+                                    triggerApprovalPreview(on: appState)
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "checkmark.shield.fill")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.20))
+                                    Text("Test Approval Modal")
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3.5)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(appState == nil)
                         }
                     }
                     .padding(.top, 4)

@@ -4451,10 +4451,19 @@ private struct NotchCardButton: View {
     /// Share a narrow row equally instead of hugging the label.
     var expands = false
     var systemImage: String? = nil
+    var isPixel = false
     let action: () -> Void
     @State private var hovering = false
 
     private var foreground: Color {
+        if isPixel {
+            switch role {
+            case .primary: return isEnabled ? Color.black : Color.black.opacity(0.55)
+            case .destructive: return Pixel16Palette.red
+            case .secondary: return Pixel16Palette.textWhite
+            case .quiet: return hovering ? Pixel16Palette.textWhite : Pixel16Palette.textMuted
+            }
+        }
         switch role {
         case .primary: return .white.opacity(isEnabled ? 1 : 0.6)
         case .destructive: return NotchCardPalette.deny
@@ -4464,6 +4473,16 @@ private struct NotchCardButton: View {
     }
 
     private var fill: Color {
+        if isPixel {
+            switch role {
+            case .primary:
+                guard isEnabled else { return Pixel16Palette.cyan.opacity(0.35) }
+                return hovering ? Pixel16Palette.cyan.opacity(0.92) : Pixel16Palette.cyan
+            case .destructive: return Pixel16Palette.red.opacity(hovering ? 0.18 : 0.08)
+            case .secondary: return hovering ? Pixel16Palette.surfaceRaised : Pixel16Palette.surface
+            case .quiet: return Pixel16Palette.surfaceRaised.opacity(hovering ? 0.85 : 0)
+            }
+        }
         switch role {
         case .primary:
             guard isEnabled else { return NotchCardPalette.allowFill.opacity(0.35) }
@@ -4475,6 +4494,14 @@ private struct NotchCardButton: View {
     }
 
     private var stroke: Color {
+        if isPixel {
+            switch role {
+            case .primary: return .clear
+            case .destructive: return Pixel16Palette.red.opacity(hovering ? 0.9 : 0.55)
+            case .secondary: return Pixel16Palette.bevelHighlight
+            case .quiet: return .clear
+            }
+        }
         switch role {
         case .primary: return .clear
         case .destructive: return NotchCardPalette.deny.opacity(hovering ? 0.9 : 0.7)
@@ -4499,8 +4526,12 @@ private struct NotchCardButton: View {
                     Image(systemName: systemImage)
                         .font(.system(size: fontSize - 2, weight: .semibold))
                 }
-                Text(label)
-                    .font(.system(size: fontSize, weight: role == .quiet ? .medium : .semibold))
+                Text(isPixel ? label.uppercased() : label)
+                    .font(.system(
+                        size: isPixel ? max(9.5, fontSize - 1) : fontSize,
+                        weight: isPixel ? .black : (role == .quiet ? .medium : .semibold),
+                        design: isPixel ? .monospaced : .default
+                    ))
                     .lineLimit(1)
                     .minimumScaleFactor(expands ? 0.8 : 1)
                 if let hint {
@@ -4515,9 +4546,9 @@ private struct NotchCardButton: View {
             .padding(.vertical, 6)
             .frame(minHeight: 26)
             .frame(maxWidth: expands ? .infinity : nil)
-            .background(RoundedRectangle(cornerRadius: 6).fill(fill))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(stroke, lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .background(RoundedRectangle(cornerRadius: isPixel ? 3 : 6).fill(fill))
+            .overlay(RoundedRectangle(cornerRadius: isPixel ? 3 : 6).strokeBorder(stroke, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: isPixel ? 3 : 6))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -4538,6 +4569,7 @@ private struct NotchCardTextLink: View {
     var hint: String? = nil
     var help: String? = nil
     var lineLimit = 1
+    var isPixel = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -4545,7 +4577,11 @@ private struct NotchCardTextLink: View {
         Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(label)
-                    .font(.system(size: fontSize, weight: .medium))
+                    .font(.system(
+                        size: isPixel ? max(9.5, fontSize - 1) : fontSize,
+                        weight: isPixel ? .bold : .medium,
+                        design: isPixel ? .monospaced : .default
+                    ))
                     .underline()
                     .lineLimit(lineLimit)
                     .truncationMode(.middle)
@@ -4557,7 +4593,7 @@ private struct NotchCardTextLink: View {
                         .fixedSize()
                 }
             }
-            .foregroundStyle(NotchCardPalette.link.opacity(hovering ? 1 : 0.9))
+            .foregroundStyle((isPixel ? Pixel16Palette.cyan : NotchCardPalette.link).opacity(hovering ? 1 : 0.9))
             .padding(.vertical, 4)
             .frame(minHeight: 26)
             .contentShape(Rectangle())
@@ -4575,16 +4611,21 @@ private struct NotchCardTag: View {
     let text: String
     let color: Color
     let fontSize: CGFloat
+    var isPixel = false
 
     var body: some View {
-        Text(text)
-            .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+        if isPixel {
+            Pixel16Badge(text, color: Pixel16Palette.amber, isFilled: true)
+        } else {
+            Text(text)
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+        }
     }
 }
 
@@ -4719,6 +4760,9 @@ private struct ApprovalBar: View {
     @State private var jumpValidationTask: Task<Void, Never>?
     @AppStorage(SettingsKey.autoCollapseAfterSessionJump) private var autoCollapseAfterSessionJump = SettingsDefaults.autoCollapseAfterSessionJump
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
+    @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
+
+    private var isPixel: Bool { islandUITheme == IslandUITheme.pixel.rawValue }
 
     private var serverName: String? {
         toolInput?["server_name"] as? String
@@ -4748,19 +4792,28 @@ private struct ApprovalBar: View {
 
             // What is being asked
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                NotchCardTag(text: L10n.shared["card_permission_tag"], color: NotchCardPalette.permission, fontSize: type.badge)
+                NotchCardTag(
+                    text: L10n.shared["card_permission_tag"],
+                    color: NotchCardPalette.permission,
+                    fontSize: type.badge,
+                    isPixel: isPixel
+                )
                 let title = ApprovalCopy.title(tool: tool, toolInput: toolInput)
-                Text(title)
-                    .font(.system(size: type.title, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                Text(isPixel ? title.uppercased() : title)
+                    .font(.system(
+                        size: isPixel ? max(10, type.title - 1) : type.title,
+                        weight: isPixel ? .black : .semibold,
+                        design: isPixel ? .monospaced : .default
+                    ))
+                    .foregroundStyle(isPixel ? Pixel16Palette.textWhite : .white.opacity(0.92))
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(tool == title ? title : "\(title)\n\(tool)")
                 if let server = serverName {
                     Text("(\(server))")
-                        .font(.system(size: type.secondary))
-                        .foregroundStyle(Color(red: 0.6, green: 0.7, blue: 0.9))
+                        .font(.system(size: type.secondary, design: isPixel ? .monospaced : .default))
+                        .foregroundStyle(isPixel ? Pixel16Palette.textMuted : Color(red: 0.6, green: 0.7, blue: 0.9))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -4777,7 +4830,14 @@ private struct ApprovalBar: View {
                         .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
+                .background(
+                    RoundedRectangle(cornerRadius: isPixel ? 3 : 6)
+                        .fill(isPixel ? Pixel16Palette.slot : Color.white.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: isPixel ? 3 : 6)
+                        .strokeBorder(isPixel ? Pixel16Palette.amber.opacity(0.28) : Color.clear, lineWidth: 1)
+                )
                 .contentShape(Rectangle())
                 .onTapGesture { handleCardClick() }
             }
@@ -4838,6 +4898,7 @@ private struct ApprovalBar: View {
             hint: CardShortcutHint.text(for: .approveAlways),
             help: ApprovalHints.always(scope: alwaysScope),
             lineLimit: lineLimit,
+            isPixel: isPixel,
             action: onAlwaysAllow
         )
     }
@@ -4845,11 +4906,11 @@ private struct ApprovalBar: View {
     @ViewBuilder
     private func decisionButtons(_ type: NotchCardTypography, expands: Bool) -> some View {
         NotchCardButton(label: L10n.shared["card_hide"], role: .quiet, fontSize: type.button,
-                        help: L10n.shared["dismiss_card_hint"], action: onDismiss)
+                        help: L10n.shared["dismiss_card_hint"], isPixel: isPixel, action: onDismiss)
         NotchCardButton(label: L10n.shared["card_deny"], role: .destructive, fontSize: type.button,
-                        hint: CardShortcutHint.text(for: .deny), expands: expands, action: onDeny)
+                        hint: CardShortcutHint.text(for: .deny), expands: expands, isPixel: isPixel, action: onDeny)
         NotchCardButton(label: L10n.shared["card_allow_once"], role: .primary, fontSize: type.button,
-                        hint: CardShortcutHint.text(for: .approve), expands: expands, action: onAllow)
+                        hint: CardShortcutHint.text(for: .approve), expands: expands, isPixel: isPixel, action: onAllow)
     }
 
     // MARK: - Click-to-jump handling
