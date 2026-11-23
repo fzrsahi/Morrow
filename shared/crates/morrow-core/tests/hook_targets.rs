@@ -52,6 +52,10 @@ fn every_target_of_the_ticket_is_here() {
             "qwen",
             // #234 batch 2: the two whose paths are not a plain home directory.
             "grok",
+            // #234 batch 3a: two formats of their own.
+            "trae",
+            "traecn",
+            "kiro",
             "traecli-next"
         ]
     );
@@ -80,6 +84,43 @@ fn the_paths_and_keys_are_the_ones_macos_writes() {
     for target in TARGETS {
         assert_eq!(target.key, "hooks");
     }
+}
+
+/// #234 batch 3a: Trae's IDE wants Claude's shape plus a loop limit and the event
+/// on the command line; Kiro wants neither a matcher-less entry nor seconds.
+#[test]
+fn trae_ide_and_kiro_have_their_own_entry_shapes() {
+    // Trae: `--event` on the command, `loop_limit` beside the matcher.
+    let trae = install(target("trae"), None, BRIDGE)
+        .expect("an install")
+        .text;
+    let entry = &parsed(&trae)["hooks"]["PreToolUse"][0];
+    assert_eq!(entry["matcher"], "*");
+    assert_eq!(entry["loop_limit"], 5);
+    assert_eq!(entry["hooks"][0]["timeout"], 5);
+    assert_eq!(
+        entry["hooks"][0]["command"],
+        format!("{BRIDGE} --source trae --event PreToolUse")
+    );
+    // The IDE's own six events, not a Claude fork's ten.
+    assert_eq!(event_names(&trae, "hooks").len(), 6);
+    assert!(parsed(&trae)["hooks"]["Notification"].is_array());
+
+    // Kiro: no `hooks` array, a matcher on every entry, and **milliseconds**.
+    let kiro = install(target("kiro"), None, BRIDGE)
+        .expect("an install")
+        .text;
+    let entry = &parsed(&kiro)["hooks"]["preToolUse"][0];
+    assert_eq!(entry["command"], format!("{BRIDGE} --source kiro"));
+    assert_eq!(entry["matcher"], "*");
+    assert_eq!(entry["timeout_ms"], 5_000);
+    assert!(entry["hooks"].is_null(), "Kiro has no nested hooks array");
+    assert_eq!(event_names(&kiro, "hooks").len(), 5);
+
+    // Two Trae editions, one format, different files.
+    assert_eq!(target("trae").path, ".trae/hooks.json");
+    assert_eq!(target("traecn").path, ".trae-cn/hooks.json");
+    assert_eq!(target("traecn").format, Format::TraeIde);
 }
 
 /// #234 batch 2: Grok's file is not in the user's home. `$GROK_HOME` decides, the

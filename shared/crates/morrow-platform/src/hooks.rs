@@ -131,6 +131,11 @@ const CLI_DIRS: &[(&str, &str)] = &[
     // #234 batch 2. Grok is deliberately absent: it hangs from `$GROK_HOME`, and a
     // target with its own root proves itself by that root existing.
     ("traecli-next", ".trae"),
+    // #234 batch 3a. Kiro's marker is `.kiro`; its file lives under `agents/`,
+    // which an install creates if the directory exists.
+    ("trae", ".trae"),
+    ("traecn", ".trae-cn"),
+    ("kiro", ".kiro"),
 ];
 
 /// Install or repair one target with the Unix hook command.
