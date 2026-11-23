@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use morrow_core::installer::claude_hooks;
 use morrow_core::installer::codex_config;
 use morrow_core::installer::targets::{self, Root, Target};
+use serde_json::Value;
 
 /// Bumped when the script below changes, so an install from an older build is
 /// rewritten instead of left in place (`hookScriptVersion`).
@@ -137,6 +138,16 @@ pub fn minimax_status(paths: &Paths) -> TargetStatus {
         .ok()
         .flatten();
     let hooks = read_text(&plugin.join("hooks/hooks.json")).ok().flatten();
+    // Swift's isMinimaxPluginInstalled compares the parsed document with the
+    // exact one we generate — a stale bridge path, timeout or event list is
+    // drift, not "installed". A substring check would miss all three.
+    let expected = morrow_core::installer::minimax::hooks_document(&format!(
+        "{command} --source minimax",
+        command = claude_hooks::HOOK_COMMAND
+    ));
+    let current = hooks
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
     TargetStatus {
         source: "minimax",
         name: "MiniMax Code",
@@ -144,7 +155,7 @@ pub fn minimax_status(paths: &Paths) -> TargetStatus {
         installed: manifest
             .as_deref()
             .is_some_and(morrow_core::installer::minimax::manifest_is_ours)
-            && hooks.is_some_and(|text| text.contains("codeisland")),
+            && current.as_ref() == Some(&expected),
         path: plugin,
     }
 }
@@ -416,9 +427,9 @@ fn uninstall_minimax(paths: &Paths) -> Result<Option<Report>, Error> {
     // The pack is entirely ours — two files in a directory named after us — so the
     // whole directory goes, rather than a pack with no hooks in it left behind.
     if let Some(plugin) = path.parent().and_then(|dir| dir.parent()) {
-        if fs::remove_dir_all(plugin).is_ok() {
-            report.settings_changed = true;
-        }
+        // #334: "uninstall membersihkan paket" must not fail silently.
+        fs::remove_dir_all(plugin)?;
+        report.settings_changed = true;
     }
     Ok(Some(report))
 }

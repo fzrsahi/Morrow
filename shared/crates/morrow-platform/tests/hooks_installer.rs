@@ -595,3 +595,32 @@ fn minimax_writes_a_plugin_pack_and_refuses_a_foreign_one() {
             .contains("someone else")
     );
 }
+
+/// #334: a doc with a stale timeout still contains "codeisland", so the
+/// old substring probe called drift "installed" and never repaired it.
+#[test]
+fn minimax_drift_is_reported_as_not_installed() {
+    let home = Home::new("minimax-drift");
+    let paths = home.paths();
+    cli_dir(&home, ".minimax");
+    let plugin = home.root.join(".minimax/plugins/morrow");
+
+    hooks::install_target(&paths, "minimax", STAMP)
+        .expect("install")
+        .expect("a report");
+    let hooks_path = plugin.join("hooks/hooks.json");
+    let current = home.read(&hooks_path);
+    home.write(
+        &hooks_path,
+        &current.replace("\"timeout\": 10", "\"timeout\": 86400"),
+    );
+
+    assert!(
+        !hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "minimax")
+            .expect("a minimax row")
+            .installed,
+        "a drifted hooks document is not our installed pack"
+    );
+}

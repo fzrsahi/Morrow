@@ -114,7 +114,13 @@ pub fn manifest_is_ours(existing: &str) -> bool {
             manifest
                 .get("description")
                 .and_then(|description| description.as_str())
-                .map(|description| description == MANIFEST_MARKER)
+                .map(|description| {
+                    // ConfigInstaller.swift accepts both spellings: a pack
+                    // written before the rename is still ours to repair and
+                    // remove, not a foreign plugin to refuse.
+                    description == MANIFEST_MARKER
+                        || description == "CodeIsland MiniMax Code plugin"
+                })
         })
         .unwrap_or(false)
 }
@@ -165,6 +171,9 @@ mod tests {
     #[test]
     fn a_foreign_manifest_is_not_ours_to_delete() {
         assert!(manifest_is_ours(&manifest().to_string()));
+        assert!(manifest_is_ours(
+            r#"{"name":"morrow","description":"CodeIsland MiniMax Code plugin"}"#
+        ));
         assert!(!manifest_is_ours(
             r#"{"name":"morrow","description":"someone else"}"#
         ));
