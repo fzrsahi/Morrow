@@ -41,6 +41,7 @@ pub mod markdown_preview;
 pub mod model_label;
 pub mod music;
 pub mod path_identity;
+pub mod push;
 pub mod reduce;
 pub mod scan_policy;
 pub mod session_recap;
