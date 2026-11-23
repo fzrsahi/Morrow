@@ -894,11 +894,12 @@
   });
 
   // #307: one shell tick a minute sends at most one reminder per fardh
-  // milestone (the shell's policy owns de-duplication). The effect shares
-  // #197's ambient gate: a locked screen or quiet hours arms no tick, and the
-  // first eligible pass catches an overdue milestone up.
+  // milestone (the shell's policy owns de-duplication). #307 review: this
+  // tick must NOT share #197's lock gate — a screen locked longer than the
+  // 15-minute reminder window would silently drop that milestone. Quiet hours
+  // still suppress the reminder, as on macOS.
   $effect(() => {
-    if (!prayerReady || !probesActive(view)) return;
+    if (!prayerReady || view.quiet) return;
     const timer = setInterval(() => {
       void invoke<number>('prayer_tick').then(() => readPrayer());
     }, 60_000);

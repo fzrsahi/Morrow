@@ -426,6 +426,38 @@ mod tests {
     }
 
     #[test]
+    fn the_command_reads_a_real_home_settings_document() {
+        // #307 review: the earlier tests fed in-memory Values, so the
+        // HOME/codeisland_dir path the command actually uses was never
+        // exercised. Here the settings are written to a temp HOME and read
+        // back through the same platform helper the command calls.
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("a clock")
+            .as_nanos();
+        let home =
+            std::env::temp_dir().join(format!("morrow-prayer-home-{}-{nanos}", std::process::id()));
+        let codeisland = home.join(".codeisland");
+        std::fs::create_dir_all(&codeisland).expect("a temp home");
+        for (key, value) in [
+            (KEY_CITY, serde_json::json!("jakarta")),
+            (KEY_METHOD, serde_json::json!("kemenag")),
+            (KEY_CORRECTION, serde_json::json!(0)),
+            (KEY_HIJRI, serde_json::json!("khgt")),
+        ] {
+            morrow_platform::settings::set(&codeisland, key, &value).expect("a saved setting");
+        }
+        let stored = morrow_platform::settings::load(&codeisland).expect("a readable document");
+        let view = prayer_snapshot(&stored, now_epoch_seconds().expect("a clock"))
+            .expect("a saved city has a schedule");
+        assert_eq!(view.city_id, "jakarta");
+        assert_eq!(view.city_name, "Jakarta");
+        assert_eq!(view.times.len(), 5);
+        std::fs::remove_dir_all(&home).ok();
+    }
+
+    #[test]
     fn no_prayer_settings_means_no_card() {
         assert!(prayer_snapshot(&serde_json::json!({ "theme": "pixel" }), 0).is_none());
     }
