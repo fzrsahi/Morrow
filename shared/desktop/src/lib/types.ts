@@ -24,6 +24,8 @@ export type Session = {
   last_assistant_message: string;
   /** Newest text from the transcript tail; only the card's reply row shows it. */
   live_reply: string;
+  /** `live_reply` folded into one line of running text (#238 AC 4). */
+  reply_preview?: string;
   model: string;
   /** Full cwd; `cwd_name` is only its last component. */
   cwd: string;

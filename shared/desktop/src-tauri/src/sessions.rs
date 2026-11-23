@@ -94,6 +94,10 @@ pub struct Session {
     /// frontend shows only this on the reply row; the hook fields above still
     /// own card status, tier order and the collapsed bar.
     pub live_reply: String,
+    /// `live_reply` (or the hook's reply) folded into one line of running text
+    /// (#238 AC 4). A card row cannot show a table or a fence — only its syntax —
+    /// so the shell flattens it once here instead of every surface guessing.
+    pub reply_preview: String,
     pub model: String,
     /// The full working directory; `cwd_name` is its last component.
     pub cwd: String,
@@ -362,6 +366,18 @@ impl Sessions {
                     .get(session_id)
                     .and_then(|(_, info)| info.as_ref());
                 let tasks = &snap.agent_tasks;
+                let live_reply = self
+                    .live_replies
+                    .get(session_id)
+                    .cloned()
+                    .unwrap_or_default();
+                // A streaming line wins over the reply the hook reported (#192); the
+                // preview is folded from whichever the card would have shown.
+                let shown = if live_reply.trim().is_empty() {
+                    or_empty(&snap.last_assistant_message)
+                } else {
+                    live_reply.clone()
+                };
                 Session {
                     session_id: session_id.clone(),
                     source: snap.source.clone(),
@@ -382,11 +398,8 @@ impl Sessions {
                     tool_description: or_empty(&snap.tool_description),
                     last_user_prompt: or_empty(&snap.last_user_prompt),
                     last_assistant_message: or_empty(&snap.last_assistant_message),
-                    live_reply: self
-                        .live_replies
-                        .get(session_id)
-                        .cloned()
-                        .unwrap_or_default(),
+                    live_reply: live_reply.clone(),
+                    reply_preview: morrow_core::markdown_preview::plain(&shown, true),
                     model: or_empty(&snap.model),
                     cwd: or_empty(&snap.cwd),
                     term_app: or_empty(&snap.term_app),
@@ -573,6 +586,7 @@ mod tests {
                 last_user_prompt: String::new(),
                 last_assistant_message: String::new(),
                 live_reply: String::new(),
+                reply_preview: String::new(),
                 model: String::new(),
                 cwd: "/home/u/proj/".into(),
                 term_app: String::new(),
@@ -755,6 +769,44 @@ mod tests {
         assert_eq!(row.last_user_prompt, "Ship it");
         assert_eq!(row.last_assistant_message, "Shipped; all tests pass.");
         assert_eq!(row.current_tool, "");
+    }
+
+    /// #238 AC 4: a card row cannot show a table or a fence, only their syntax, so
+    /// the shell folds the reply into one line of running text before it is sent.
+    #[test]
+    fn the_reply_preview_is_one_flat_line_whatever_the_reply_is() {
+        use morrow_core::transcript::ScanDelta;
+
+        let mut sessions = Sessions::with_home("/home/u");
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"SessionStart"}"#),
+            10,
+        );
+        assert_eq!(sessions.snapshot()[0].reply_preview, "");
+
+        let reply = "## Summary\nFixed **login**:\n- [x] token refresh\n\n| File | Lines |\n|---|---|\n| auth.ts | 12 |\n\n```bash\nnpm test\nnpm run lint\n```";
+        let delta = ScanDelta {
+            last_assistant_message: Some(reply.into()),
+            ..ScanDelta::default()
+        };
+        sessions.apply_transcript_delta("a", &delta);
+
+        let row = &sessions.snapshot()[0];
+        // The raw text is still there for the surfaces that render Markdown.
+        assert_eq!(row.live_reply, reply);
+        assert_eq!(
+            row.reply_preview,
+            "Summary · Fixed login: ☑ token refresh · File, Lines · auth.ts, 12 · npm test …"
+        );
+        assert!(!row.reply_preview.contains('\n'));
+
+        // A streaming line wins over the hook's reply, so the preview follows it.
+        let delta = ScanDelta {
+            last_assistant_message: Some("- one\n- two".into()),
+            ..ScanDelta::default()
+        };
+        sessions.apply_transcript_delta("a", &delta);
+        assert_eq!(sessions.snapshot()[0].reply_preview, "one · two");
     }
 
     #[test]

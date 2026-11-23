@@ -218,14 +218,14 @@ fn continues_paragraph(line: &str) -> bool {
 // MARK: Rendered fenced code
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct Fence {
+pub(crate) struct Fence {
     marker: char,
     length: usize,
     indent: usize,
     info: String,
 }
 
-fn opening_fence(line: &str) -> Option<Fence> {
+pub(crate) fn opening_fence(line: &str) -> Option<Fence> {
     let indent = indentation(line);
     let rest: Vec<char> = line.chars().skip(indent).collect();
     let marker = *rest.first()?;
@@ -249,7 +249,7 @@ fn opening_fence(line: &str) -> Option<Fence> {
     })
 }
 
-fn closes_fence(line: &str, fence: &Fence) -> bool {
+pub(crate) fn closes_fence(line: &str, fence: &Fence) -> bool {
     // CommonMark caps the closing fence's indent at three spaces; models
     // indent it to match whatever the code sat under, so accept any.
     let trimmed: Vec<char> = trim(line).chars().collect();

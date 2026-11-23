@@ -33,6 +33,7 @@ pub mod git;
 pub mod installer;
 pub mod intake;
 pub mod markdown;
+pub mod markdown_preview;
 pub mod model_label;
 pub mod music;
 pub mod path_identity;
