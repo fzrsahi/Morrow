@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (kedelapan) — empat belas slice remediasi (#249–#271). #246, #247, #248 selesai; dua reader terdaftar; sisa #232 adalah #244 dan jalur process-first untuk Cursor/Gemini. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (kesembilan) — tujuh belas slice remediasi (#249–#275). #246, #247, #248 selesai penuh; tiga reader terdaftar; sisa #232 adalah #244 dan jalur process-first untuk Cursor/Gemini. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -126,6 +126,15 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (kesembilan) — Codex, dan tick yang dijaga policy
+
+- **Sudah:** **#272 → PR #273** pembaca rollout Codex. Codex store-first seperti OpenCode: rollout membawa thread id, cwd dan model sendiri, jadi bisa di-backfill tanpa proses. **#274 → PR #275** tick discovery yang dijaga `scan_policy` (#259): panel tersembunyi atau terkunci **tidak memindai sama sekali** (`probes_active`, gate yang sama dengan tailer), yang terlihat paling sering satu scan per 5 detik, dan kembali terlihat langsung memindai.
+- **Dengan itu AC #248 tertutup penuh:** policy akhirnya dipakai, bukan hanya teruji.
+- **Bug yang ditemukan test:** pembaca Codex versi pertama mengumpulkan user dan asisten ke dua daftar lalu menyambungnya, jadi "tanya, jawab, tanya" menjadi "jawab, jawab, jawab". Sekarang tiap turn membawa indeks baris.
+- **Bukti:** `cargo test --workspace` 784 lulus (772 sebelum dua slice ini); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** `ScanCache` (#263) belum dipakai reader — itu yang membuat tick 5 detik membaca ulang store yang tidak berubah, dan alasan tertulis jaraknya 5 detik bukan 1. Lalu jalur process-first untuk Cursor/Gemini, dan #244 batch 2.
+- **Blocker:** gate hardware tidak berubah.
 
 ### 2026-11-22 (kedelapan) — reader yang sudah jadi, dan yang ternyata belum bisa
 
