@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (keenam) — sebelas slice remediasi (#249–#265). #247 dan #248 selesai; sisa #232 adalah #244, #246 dan reader yang belum terpasang. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (ketujuh) — tiga belas slice remediasi (#249–#269). #246, #247 dan #248 selesai; sisa #232 adalah #244 dan reader yang belum didaftarkan. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -126,6 +126,16 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (ketujuh) — korelasi pid, dan kartu yang akhirnya bisa mati
+
+- **Sudah:** **#266 → PR #268** `morrow-core::agent_process` + `morrow-platform::agent_process`. Yang diport adalah bagian yang menentukan: **apakah sebuah proses adalah sesi sama sekali** — binary Claude Code itu multicall, jadi `ugrep`, `bfs`, `rg` dan `apply-seccomp` adalah executable yang sama, begitu pula `claude bg-pty-host` dan MCP server. Tabel bundle `.app` (600 dari 796 LOC Swift) tidak diport: tidak ada `.app` di Linux/Windows. **#267 → PR #269** menyambungkannya ke `backfill_with`, jadi sesi hasil discovery punya `pid` dan `Watches` memangkasnya.
+- **Aturan yang salah dulu:** versi pertama memilih proses terbaru. Untuk dua sesi di satu direktori itu memberi sesi A proses milik sesi B (`[11, 10]` bukan `[10, 11]`) — kartu A hidup melewati prosesnya sendiri dan mati saat tetangganya keluar. Ditemukan oleh test, bukan review. Sekarang: proses harus mulai **pada atau sebelum** store terakhir ditulis.
+- **"Diukur, bukan diasumsikan":** test biaya **menghitung lintasan**, bukan waktu — 500 proses, 1 permintaan, harus 250 probe liveness. Satu pass per proses per sesi akan jadi 500.
+- **Bukti:** `cargo test --workspace` 769 lulus (753 sebelum dua slice ini); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11.
+- **Batasan:** di Windows korelasi hanya bisa mencocokkan nama executable (argv dan cwd ada di PEB proses lain), jadi dua `claude.exe` di dua direktori bisa tertukar. Implementasi `/proc` dikompilasi di setiap host tetapi hanya berjalan di Linux — cross-check Linux dari macOS gagal di build script `libsqlite3-sys`, jadi yang terbukti di sini hanyalah `parse_cmdline`.
+- **Berikutnya:** #244 (pembaca Cursor/Gemini yang belum didaftarkan ke `scan_once`), reader `codex`/`opencode` untuk backfill, watcher berbasis `scan_policy` (#259), dan sisa #232.
+- **Blocker:** gate hardware tidak berubah.
 
 ### 2026-11-22 (keenam) — #247 dan #248 selesai, dan panel tidak lagi kosong setelah restart
 
