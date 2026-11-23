@@ -8,6 +8,7 @@
 //! file, writes the result and keeps the back-up.
 
 pub mod claude_hooks;
+pub mod cline;
 pub mod codex_config;
 pub mod json_editor;
 pub mod kimi;

@@ -28,6 +28,9 @@ pub enum Format {
     /// `{command, matcher, timeout_ms}` — Kiro's agent file, beside Claude's
     /// naming a `matcher` on every entry.
     KiroAgent,
+    /// Google Antigravity: a named-config wrapper whose entries take **two
+    /// different shapes** depending on the event family.
+    AntigravityNamed,
 }
 
 /// One hook event to register, with the timeout the CLI expects (seconds,
@@ -118,6 +121,12 @@ impl Target {
         self.bridge_source.unwrap_or(self.source)
     }
 
+    /// Whether `event` is one of the tool events, which Antigravity wraps
+    /// differently from the rest.
+    pub fn is_tool_event(&self, event: &str) -> bool {
+        matches!(event, "PreToolUse" | "PostToolUse")
+    }
+
     /// The file this target's hooks live in.
     pub fn file(
         &self,
@@ -200,6 +209,18 @@ const KIRO_AGENT_EVENTS: &[TargetEvent] = &[
     event("preToolUse", 5, false),
     event("postToolUse", 5, true),
     event("stop", 5, true),
+];
+
+/// `defaultEvents(for: .antigravityNamed)`: the three actionable events.
+///
+/// `PreInvocation`/`PostInvocation` are pass-through with no meaning for a card, so
+/// they are left out. `PreToolUse` keeps the documented 30-second default rather
+/// than a day-long ceiling: Antigravity counts a killed hook as a denial, and a
+/// bridge that has to be killed should not be able to sit on an approval.
+const ANTIGRAVITY_EVENTS: &[TargetEvent] = &[
+    event("PreToolUse", 30, false),
+    event("PostToolUse", 5, false),
+    event("Stop", 5, false),
 ];
 
 /// Grok's managed events (`GrokHookForwardingPolicy.managedHookEvents`).
@@ -515,6 +536,21 @@ pub const TARGETS: &[Target] = &[
         bridge_source: None,
         seeds_version: false,
     },
+    // Google Antigravity — **not** the `antigravity` Claude fork above. It reads a
+    // standalone `~/.gemini/config/hooks.json` (not Gemini-CLI's settings file),
+    // wrapped in a named config keyed `codeisland`, and its stdin carries no event
+    // name, so every command needs `--event`.
+    Target {
+        source: "google-antigravity",
+        name: "Google Antigravity",
+        path: ".gemini/config/hooks.json",
+        root: Root::Home,
+        key: "codeisland",
+        format: Format::AntigravityNamed,
+        events: ANTIGRAVITY_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
     Target {
         source: "traecli-next",
         name: "Trae CLI Next",
@@ -554,7 +590,7 @@ pub fn command_for(target: &Target, bridge: &str, event: &str) -> String {
     match target.format {
         // Gemini and Copilot do not report their event on stdin.
         Format::Nested if target.source == "gemini" => format!("{base} --event {event}"),
-        Format::Flat | Format::Copilot | Format::TraeIde => {
+        Format::Flat | Format::Copilot | Format::TraeIde | Format::AntigravityNamed => {
             format!("{base} --event {event}")
         }
         _ => base,
@@ -596,6 +632,23 @@ fn entry_for(target: &Target, bridge: &str, event: &'static TargetEvent) -> Valu
                 "command": command,
                 "timeout": event.timeout,
             }],
+        }),
+        // Antigravity has two event families and **two entry shapes**, and getting
+        // it wrong is silent: a tool event wrapped the model-event way never runs,
+        // and a model event wrapped the tool way never fires either. Tool events
+        // take a matcher and a `hooks` array; the rest are the handler itself.
+        Format::AntigravityNamed if target.is_tool_event(event.name) => json!({
+            "matcher": "*",
+            "hooks": [{
+                "type": "command",
+                "command": command,
+                "timeout": event.timeout,
+            }],
+        }),
+        Format::AntigravityNamed => json!({
+            "type": "command",
+            "command": command,
+            "timeout": event.timeout,
         }),
         // Kiro's agent file names no `hooks` array and takes **milliseconds**
         // where every other target here takes seconds. The table stores seconds

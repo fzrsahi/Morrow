@@ -108,6 +108,7 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
         .collect();
     rows.push(zcode_status(paths));
     rows.push(minimax_status(paths));
+    rows.push(cline_status(paths));
     rows
 }
 
@@ -203,6 +204,9 @@ const CLI_DIRS: &[(&str, &str)] = &[
     ("trae", ".trae"),
     ("traecn", ".trae-cn"),
     ("kiro", ".kiro"),
+    // Google Antigravity proves itself by its own folder inside Gemini's, not by
+    // `~/.gemini` — a Gemini CLI user has that one and may have no Antigravity.
+    ("google-antigravity", ".gemini/antigravity-cli"),
 ];
 
 /// Install or repair one target with the Unix hook command.
@@ -231,6 +235,7 @@ pub fn install_target_with(
     match source {
         "zcode" => return install_zcode(paths, stamp, command),
         "minimax" => return install_minimax(paths, stamp, command),
+        "cline" => return install_cline(paths, &format!("{command} --source cline")),
         _ => {}
     }
     let Some(target) = targets::target_for(source) else {
@@ -290,6 +295,7 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
     match source {
         "zcode" => return uninstall_zcode(paths),
         "minimax" => return uninstall_minimax(paths),
+        "cline" => return uninstall_cline(paths),
         _ => {}
     }
     let Some(target) = targets::target_for(source) else {
@@ -421,6 +427,87 @@ fn uninstall_minimax(paths: &Paths) -> Result<Option<Report>, Error> {
         }
     }
     Ok(Some(report))
+}
+
+/// Cline's eight scripts (#234 batch 4). No file to merge: a directory of hooks.
+fn cline_hooks_dir(paths: &Paths) -> PathBuf {
+    paths.home.join("Documents/Cline/Hooks")
+}
+
+pub fn cline_status(paths: &Paths) -> TargetStatus {
+    let directory = cline_hooks_dir(paths);
+    let installed = morrow_core::installer::cline::EVENTS.iter().all(|event| {
+        read_text(&directory.join(event))
+            .ok()
+            .flatten()
+            .is_some_and(|text| morrow_core::installer::cline::is_ours(&text))
+    });
+    TargetStatus {
+        source: "cline",
+        name: "Cline",
+        // The VS Code extension's storage, or Cline's own folder. Creating
+        // `Documents/Cline` for someone without Cline would make the row claim a
+        // CLI they do not have.
+        detected: paths
+            .home
+            .join("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev")
+            .exists()
+            || paths.home.join("Documents/Cline").is_dir(),
+        installed,
+        path: directory,
+    }
+}
+
+fn install_cline(paths: &Paths, command: &str) -> Result<Option<Report>, Error> {
+    if !cline_status(paths).detected {
+        return Ok(None);
+    }
+    let directory = cline_hooks_dir(paths);
+    fs::create_dir_all(&directory)?;
+    let script = morrow_core::installer::cline::script(command);
+    let mut report = Report::default();
+    for event in morrow_core::installer::cline::EVENTS {
+        let path = directory.join(event);
+        if read_text(&path)?.as_deref() == Some(script.as_str()) {
+            continue;
+        }
+        fs::write(&path, &script)?;
+        set_executable(&path)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+fn uninstall_cline(paths: &Paths) -> Result<Option<Report>, Error> {
+    let directory = cline_hooks_dir(paths);
+    let mut report = Report::default();
+    for event in morrow_core::installer::cline::EVENTS {
+        let path = directory.join(event);
+        // Only a file that says it is ours: the user's own hook for the same
+        // event is theirs.
+        let Some(text) = read_text(&path)? else {
+            continue;
+        };
+        if !morrow_core::installer::cline::is_ours(&text) {
+            continue;
+        }
+        fs::remove_file(&path)?;
+        report.settings_changed = true;
+    }
+    Ok(report.settings_changed.then_some(report))
+}
+
+#[cfg(unix)]
+fn set_executable(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &std::path::Path) -> std::io::Result<()> {
+    // Cline on Windows runs these through Git Bash, where the mode is not what
+    // decides: the file existing is. Nothing to set.
+    Ok(())
 }
 
 /// The one environment lookup the target table needs, in one place so it can be

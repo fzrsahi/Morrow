@@ -595,3 +595,62 @@ fn minimax_writes_a_plugin_pack_and_refuses_a_foreign_one() {
             .contains("someone else")
     );
 }
+
+/// #234 batch 4: Cline is a directory of scripts, not a file with a key. Uninstall
+/// must not touch a hook the user wrote for the same event.
+#[test]
+fn cline_writes_eight_scripts_and_only_removes_its_own() {
+    let home = Home::new("cline");
+    let paths = home.paths();
+    fs::create_dir_all(home.root.join("Documents/Cline")).expect("cline");
+
+    let report = hooks::install_target(&paths, "cline", STAMP)
+        .expect("install")
+        .expect("a report");
+    assert!(report.settings_changed);
+
+    let hooks = home.root.join("Documents/Cline/Hooks");
+    for event in ["UserPromptSubmit", "TaskStart", "TaskComplete"] {
+        let script = home.read(&hooks.join(event));
+        assert!(script.contains("--source cline"), "{event}: {script}");
+        assert!(script.contains(r#"printf '{"cancel":false}'"#), "{event}");
+        // Cline blocks on the hook, so the answer must not wait for the bridge.
+        assert!(
+            script.contains('&'),
+            "{event}: the bridge must be backgrounded"
+        );
+    }
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "cline")
+            .expect("a cline row")
+            .installed
+    );
+
+    // The user's own hook for one of the same events stays.
+    home.write(&hooks.join("PreToolUse"), "#!/bin/bash\nexit 0\n");
+    hooks::uninstall_target(&paths, "cline").expect("uninstall");
+    assert_eq!(
+        home.read(&hooks.join("PreToolUse")),
+        "#!/bin/bash\nexit 0\n",
+        "a hook we did not write is not ours to delete"
+    );
+    assert!(!hooks.join("TaskStart").exists());
+}
+
+/// Cline is not "detected" just because we could create its folder.
+#[test]
+fn cline_is_not_detected_on_a_machine_without_it() {
+    let home = Home::new("cline-absent");
+    let status = hooks::targets_status(&home.paths());
+    let cline = status
+        .iter()
+        .find(|row| row.source == "cline")
+        .expect("a row");
+    assert!(!cline.detected);
+    assert!(
+        !home.root.join("Documents/Cline").exists(),
+        "nothing created"
+    );
+}
