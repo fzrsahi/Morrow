@@ -14,15 +14,19 @@ public struct PrayerMiniPeekBannerView: View {
     @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
     @ObservedObject private var nowPlaying = NowPlayingManager.shared
 
+    @State private var animatedArcProgress: Double = 0.0
+    @State private var celestialPulse: Bool = false
+
     private var isPixel: Bool {
         islandUITheme == IslandUITheme.pixel.rawValue
     }
 
-    private var pixelAccent: Color {
-        _ = syncThemeWithAlbumArt
-        _ = nowPlaying.albumPalette
+    private var prayerAccent: Color {
+        if (syncThemeWithAlbumArt || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
+        }
         return AppColorTheme.readableOnDark(
-            AppColorTheme.accent(for: musicHUDProgressColor, isModern: false)
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
         )
     }
 
@@ -33,6 +37,9 @@ public struct PrayerMiniPeekBannerView: View {
     }
 
     private var activePrayerType: PrayerType {
+        if let preview = manager.previewPrayerType {
+            return preview
+        }
         if let next = manager.upcomingPrayer {
             return next.prayer
         }
@@ -45,14 +52,21 @@ public struct PrayerMiniPeekBannerView: View {
         return .maghrib
     }
 
-    private var statusSubtitle: String {
-        let diff = manager.minutesUntilNextPrayer
-        let prefix = diff <= 0 ? "NOW" : "-\(diff)m"
-        let sub = manager.miniPeekBannerSubtitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if sub.isEmpty {
-            return "\(prefix) · Saatnya Salat \(activePrayerType.displayName)"
+    private var isNightMoon: Bool {
+        activePrayerType == .isya
+    }
+
+    private var isHalfSunHorizon: Bool {
+        activePrayerType == .subuh || activePrayerType == .maghrib
+    }
+
+    private var orbProgress: Double {
+        switch activePrayerType {
+        case .subuh: return 0.04
+        case .maghrib: return 0.96
+        case .isya: return 0.50
+        default: return arcProgress
         }
-        return "\(prefix) · \(sub)"
     }
 
     private struct PrayerSlot: Identifiable {
@@ -84,6 +98,10 @@ public struct PrayerMiniPeekBannerView: View {
     }
 
     private var arcProgress: Double {
+        if let preview = manager.previewPrayerType,
+           let idx = prayerSlots.firstIndex(where: { $0.type == preview }) {
+            return slotProgress(prayerSlots[idx], index: idx)
+        }
         let minH = manager.sunriseHour > 0 ? max(4.0, manager.sunriseHour - 1.2) : 4.5
         let maxH = manager.sunsetHour > minH ? max(18.5, manager.sunsetHour + 1.2) : 19.2
         let clamped = min(max(manager.currentFractionalHour, minH), maxH)
@@ -119,43 +137,64 @@ public struct PrayerMiniPeekBannerView: View {
         .onHover { hovering in
             manager.setMiniPeekBannerHovered(hovering)
         }
+        .onAppear {
+            startEntryAnimation()
+        }
+        .onChange(of: activePrayerType) { _, _ in
+            startEntryAnimation()
+        }
+    }
+
+    private func startEntryAnimation() {
+        let target = orbProgress
+        animatedArcProgress = max(0.0, target - 0.18)
+        celestialPulse = false
+        withAnimation(.easeOut(duration: 0.65)) {
+            animatedArcProgress = target
+        }
+        withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: true)) {
+            celestialPulse = true
+        }
     }
 
     // MARK: - 1. Pixel 32-Bit Compact Sun-Arc Banner
 
     private var pixelBanner: some View {
-        let accent = pixelAccent
+        let accent = prayerAccent
         return VStack(spacing: 3) {
             // Top context row
             HStack {
                 PixelText(
                     text: "PRAYER · \(manager.cityName.uppercased())",
-                    color: Color.white.opacity(0.58),
+                    color: Color.white.opacity(0.62),
                     pixelSize: 1.05
                 )
-                Spacer(minLength: 8)
+                .layoutPriority(0)
+                Spacer(minLength: 4)
                 PixelText(
-                    text: manager.currentTimeString,
-                    color: Color.white.opacity(0.76),
-                    pixelSize: 1.1
+                    text: "NOW",
+                    color: accent,
+                    pixelSize: 1.05
                 )
+                .fixedSize()
+                .layoutPriority(2)
             }
 
-            // Horizon Sun-Arc + Centered Hero
+            // Horizon Sun/Moon-Arc + Centered Hero
             ZStack(alignment: .bottom) {
                 pixelSunArc(accent: accent)
-                    .frame(height: 74)
+                    .frame(height: 84)
 
                 VStack(spacing: 3) {
                     PixelText(
                         text: "\(activePrayerType.displayName.uppercased()) · \(activePrayerTimeString)",
                         color: .white,
-                        pixelSize: 1.6
+                        pixelSize: 1.55
                     )
                     PixelText(
-                        text: statusSubtitle.uppercased(),
-                        color: accent,
-                        pixelSize: 1.05
+                        text: "TIME FOR PRAYER",
+                        color: accent.opacity(0.92),
+                        pixelSize: 1.0
                     )
                 }
                 .padding(.bottom, 10)
@@ -185,52 +224,48 @@ public struct PrayerMiniPeekBannerView: View {
         }
         .padding(.horizontal, displayMode == .dynamicIsland ? 18 : 14)
         .padding(.vertical, displayMode == .dynamicIsland ? 11 : 9)
-        .background(
-            RadialGradient(
-                colors: [accent.opacity(0.16), Color.clear],
-                center: UnitPoint(x: 0.5, y: 0.12),
-                startRadius: 4,
-                endRadius: 210
-            )
-        )
     }
 
     // MARK: - 2. Modern Clean Compact Sun-Arc Banner
 
     private var modernBanner: some View {
-        let skyCyan = Color(red: 0.49, green: 0.83, blue: 0.99)
+        let accent = prayerAccent
         return VStack(spacing: 3) {
             // Top context row
             HStack {
                 Text("Prayer · \(manager.cityName)")
                     .font(.system(size: 10.5, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.56))
+                    .foregroundStyle(Color.white.opacity(0.62))
                     .lineLimit(1)
-                Spacer(minLength: 8)
-                Text(manager.currentTimeString)
-                    .font(.system(size: 10.5, weight: .semibold, design: .rounded))
-                    .monospacedDigit()
-                    .foregroundStyle(Color.white.opacity(0.76))
+                    .minimumScaleFactor(0.85)
+                    .layoutPriority(0)
+                Spacer(minLength: 4)
+                Text("NOW")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(0.7)
+                    .foregroundStyle(accent)
+                    .fixedSize()
+                    .layoutPriority(2)
             }
 
-            // Horizon Sun-Arc + Centered Hero
+            // Horizon Sun/Moon-Arc + Centered Hero
             ZStack(alignment: .bottom) {
-                modernSunArc
-                    .frame(height: 74)
+                modernSunArc(accent: accent)
+                    .frame(height: 84)
 
                 VStack(spacing: 2) {
                     Text("\(activePrayerType.displayName) · \(activePrayerTimeString)")
-                        .font(.system(size: 16, weight: .heavy, design: .rounded))
+                        .font(.system(size: 15.5, weight: .heavy, design: .rounded))
                         .foregroundStyle(.white)
                         .shadow(color: Color.black.opacity(0.9), radius: 6, y: 1)
                         .lineLimit(1)
 
-                    Text(statusSubtitle)
-                        .font(.system(size: 10.5, weight: .bold, design: .rounded))
-                        .foregroundStyle(skyCyan)
+                    Text("Time for prayer")
+                        .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                        .foregroundStyle(accent.opacity(0.92))
                         .lineLimit(1)
                 }
-                .padding(.bottom, 9)
+                .padding(.bottom, 10)
             }
 
             // Bottom 5-Prayer Baseline
@@ -241,7 +276,7 @@ public struct PrayerMiniPeekBannerView: View {
                     VStack(spacing: 1) {
                         Text(slot.type.displayName)
                             .font(.system(size: 9.5, weight: isActive ? .bold : .medium, design: .rounded))
-                            .foregroundStyle(isActive ? skyCyan : Color.white.opacity(0.52))
+                            .foregroundStyle(isActive ? accent : Color.white.opacity(0.52))
                             .lineLimit(1)
                         Text(timeText)
                             .font(.system(size: 9.5, weight: isActive ? .semibold : .regular, design: .rounded))
@@ -255,18 +290,6 @@ public struct PrayerMiniPeekBannerView: View {
         }
         .padding(.horizontal, displayMode == .dynamicIsland ? 18 : 14)
         .padding(.vertical, displayMode == .dynamicIsland ? 11 : 9)
-        .background(
-            RadialGradient(
-                colors: [
-                    Color(red: 0.22, green: 0.74, blue: 0.97).opacity(0.18),
-                    Color(red: 0.15, green: 0.39, blue: 0.92).opacity(0.06),
-                    Color.clear
-                ],
-                center: UnitPoint(x: 0.5, y: 0.10),
-                startRadius: 4,
-                endRadius: 220
-            )
-        )
     }
 
     // MARK: - Horizon Arc Renderers
@@ -280,8 +303,50 @@ public struct PrayerMiniPeekBannerView: View {
         return CGPoint(x: x, y: y)
     }
 
-    private var modernSunArc: some View {
-        let prog = arcProgress
+    private static let pixelSunMatrix: [[Int]] = [
+        [0,0,0,0,0,1,0,0,0,0,0],
+        [0,1,0,0,0,1,0,0,0,1,0],
+        [0,0,1,0,1,1,1,0,1,0,0],
+        [0,0,0,1,1,1,1,1,0,0,0],
+        [0,0,1,1,1,1,1,1,1,0,0],
+        [1,1,1,1,1,1,1,1,1,1,1],
+        [0,0,1,1,1,1,1,1,1,0,0],
+        [0,0,0,1,1,1,1,1,0,0,0],
+        [0,0,1,0,1,1,1,0,1,0,0],
+        [0,1,0,0,0,1,0,0,0,1,0],
+        [0,0,0,0,0,1,0,0,0,0,0]
+    ]
+
+    // 12x12 crisp 2-tone 16-bit Crescent Moon (1 = warm highlight, 2 = gold shadow)
+    private static let pixelMoonMatrix: [[Int]] = [
+        [0,0,0,0,0,1,1,2,0,0,0,0],
+        [0,0,0,1,1,1,1,0,0,0,0,0],
+        [0,0,1,1,1,2,0,0,0,0,0,0],
+        [0,1,1,1,2,0,0,0,0,0,0,0],
+        [0,1,1,2,0,0,0,0,0,0,0,0],
+        [1,1,1,2,0,0,0,0,0,0,0,0],
+        [1,1,1,2,0,0,0,0,0,0,0,0],
+        [0,1,1,2,0,0,0,0,0,0,0,0],
+        [0,1,1,1,2,0,0,0,0,0,0,0],
+        [0,0,1,1,1,2,0,0,0,0,0,0],
+        [0,0,0,1,1,1,1,0,0,0,0,0],
+        [0,0,0,0,0,1,1,2,0,0,0,0]
+    ]
+
+    // 9x4 pixel half-sun dome above sea horizon
+    private static let pixelHalfSunMatrix: [[Int]] = [
+        [0,0,1,0,1,0,1,0,0],
+        [0,0,0,1,1,1,0,0,0],
+        [0,1,1,1,1,1,1,1,0],
+        [1,1,1,1,1,1,1,1,1]
+    ]
+
+    private func modernSunArc(accent: Color) -> some View {
+        let prog = animatedArcProgress
+        let isNight = isNightMoon
+        let isHalfSun = isHalfSunHorizon
+        let isRise = activePrayerType == .subuh
+        let haloAlpha = celestialPulse ? 0.34 : 0.16
         return Canvas { ctx, size in
             let w = size.width
             let h = size.height
@@ -305,18 +370,14 @@ public struct PrayerMiniPeekBannerView: View {
                     if i == 0 { pastArc.move(to: pt) } else { pastArc.addLine(to: pt) }
                 }
             }
-            let sun = arcPoint(t: prog, width: w, height: h)
-            if prog > 0 { pastArc.addLine(to: sun) }
+            let orb = arcPoint(t: prog, width: w, height: h)
+            if prog > 0 { pastArc.addLine(to: orb) }
 
             ctx.stroke(fullArc, with: .color(Color.white.opacity(0.16)), style: StrokeStyle(lineWidth: 2.2, lineCap: .round))
             ctx.stroke(
                 pastArc,
-                with: .linearGradient(
-                    Gradient(colors: [Color(red: 0.22, green: 0.74, blue: 0.97), Color(red: 0.23, green: 0.51, blue: 0.96)]),
-                    startPoint: CGPoint(x: 16, y: baseY),
-                    endPoint: sun
-                ),
-                style: StrokeStyle(lineWidth: 2.6, lineCap: .round)
+                with: .color(accent),
+                style: StrokeStyle(lineWidth: 2.4, lineCap: .round)
             )
 
             // 5 prayer nodes
@@ -329,27 +390,69 @@ public struct PrayerMiniPeekBannerView: View {
                 ctx.fill(Path(ellipseIn: rect), with: .color(isActive ? .white : Color.white.opacity(0.48)))
             }
 
-            // Sun glow + core
-            let glowRect = CGRect(x: sun.x - 10, y: sun.y - 10, width: 20, height: 20)
-            ctx.fill(
-                Path(ellipseIn: glowRect),
-                with: .radialGradient(
-                    Gradient(colors: [
-                        Color.white,
-                        Color(red: 0.99, green: 0.90, blue: 0.54).opacity(0.85),
-                        Color(red: 0.96, green: 0.62, blue: 0.04).opacity(0.0)
-                    ]),
-                    center: sun,
-                    startRadius: 0,
-                    endRadius: 10
+            if isNight {
+                for starPt in [CGPoint(x: w * 0.19, y: 26), CGPoint(x: w * 0.81, y: 22), CGPoint(x: w * 0.29, y: 16)] {
+                    ctx.fill(Path(ellipseIn: CGRect(x: starPt.x - 1.2, y: starPt.y - 1.2, width: 2.4, height: 2.4)), with: .color(Color.white.opacity(0.55)))
+                }
+            }
+
+            if isHalfSun {
+                let targetIdx = isRise ? 0 : 3
+                let targetT = slotProgress(prayerSlots[targetIdx], index: targetIdx)
+                let sunPt = arcPoint(t: targetT, width: w, height: h)
+                let sunX = sunPt.x
+                let sunY = baseY
+                let sunCol = isRise ? Color(red: 0.99, green: 0.90, blue: 0.54) : Color(red: 0.98, green: 0.57, blue: 0.24)
+                let seaCol = isRise ? Color(red: 0.22, green: 0.74, blue: 0.97) : Color(red: 0.98, green: 0.57, blue: 0.24)
+                var dome = Path()
+                dome.addArc(center: CGPoint(x: sunX, y: sunY), radius: 7, startAngle: .degrees(180), endAngle: .degrees(0), clockwise: false)
+                dome.closeSubpath()
+                ctx.fill(dome, with: .color(sunCol))
+
+                for (dx, dy, op) in [(9.0, 2.5, 0.6), (5.0, 5.0, 0.35)] {
+                    var ripple = Path()
+                    ripple.move(to: CGPoint(x: sunX - dx, y: sunY + dy))
+                    ripple.addLine(to: CGPoint(x: sunX + dx, y: sunY + dy))
+                    ctx.stroke(ripple, with: .color(seaCol.opacity(op)), style: StrokeStyle(lineWidth: 1.3, lineCap: .round))
+                }
+            } else {
+                // Smooth radial halo (no hard dark target circle)
+                ctx.fill(
+                    Path(ellipseIn: CGRect(x: orb.x - 14, y: orb.y - 14, width: 28, height: 28)),
+                    with: .radialGradient(
+                        Gradient(colors: [accent.opacity(haloAlpha), Color.clear]),
+                        center: orb,
+                        startRadius: 2,
+                        endRadius: 14
+                    )
                 )
-            )
-            ctx.fill(Path(ellipseIn: CGRect(x: sun.x - 3.5, y: sun.y - 3.5, width: 7, height: 7)), with: .color(.white))
+                if isNight {
+                    let moonColor = Color(red: 0.99, green: 0.94, blue: 0.54)
+                    var moonPath = Path()
+                    moonPath.addArc(center: orb, radius: 6.8, startAngle: .degrees(-65), endAngle: .degrees(65), clockwise: true)
+                    moonPath.addArc(center: CGPoint(x: orb.x + 2.8, y: orb.y), radius: 5.4, startAngle: .degrees(72), endAngle: .degrees(-72), clockwise: false)
+                    moonPath.closeSubpath()
+                    ctx.fill(moonPath, with: .color(moonColor))
+                } else {
+                    let coreColor = Color(red: 1.0, green: 0.82, blue: 0.40)
+                    for i in 0..<8 {
+                        let a = Double(i) * Double.pi / 4.0
+                        var ray = Path()
+                        ray.move(to: CGPoint(x: orb.x + cos(a) * 6.0, y: orb.y + sin(a) * 6.0))
+                        ray.addLine(to: CGPoint(x: orb.x + cos(a) * 9.0, y: orb.y + sin(a) * 9.0))
+                        ctx.stroke(ray, with: .color(coreColor), style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+                    }
+                    ctx.fill(Path(ellipseIn: CGRect(x: orb.x - 4.2, y: orb.y - 4.2, width: 8.4, height: 8.4)), with: .color(coreColor))
+                }
+            }
         }
     }
 
     private func pixelSunArc(accent: Color) -> some View {
-        let prog = arcProgress
+        let prog = animatedArcProgress
+        let isNight = isNightMoon
+        let isHalfSun = isHalfSunHorizon
+        let isRise = activePrayerType == .subuh
         return Canvas { ctx, size in
             let w = size.width
             let h = size.height
@@ -395,15 +498,53 @@ public struct PrayerMiniPeekBannerView: View {
                 )
             }
 
-            // Multi-tone pixel sun orb
-            let sun = arcPoint(t: prog, width: w, height: h)
-            let sx = (sun.x / 2).rounded() * 2
-            let sy = (sun.y / 2).rounded() * 2
-            ctx.fill(Path(CGRect(x: sx - 5, y: sy - 3, width: 10, height: 6)), with: .color(Color(red: 0.99, green: 0.88, blue: 0.28).opacity(0.24)))
-            ctx.fill(Path(CGRect(x: sx - 3, y: sy - 5, width: 6, height: 10)), with: .color(Color(red: 0.99, green: 0.88, blue: 0.28).opacity(0.24)))
-            ctx.fill(Path(CGRect(x: sx - 3, y: sy - 2, width: 6, height: 4)), with: .color(Color(red: 0.98, green: 0.75, blue: 0.14)))
-            ctx.fill(Path(CGRect(x: sx - 2, y: sy - 3, width: 4, height: 6)), with: .color(Color(red: 0.98, green: 0.75, blue: 0.14)))
-            ctx.fill(Path(CGRect(x: sx - 1.5, y: sy - 1.5, width: 3, height: 3)), with: .color(Color(red: 1.0, green: 0.98, blue: 0.92)))
+            if isNight {
+                for starPt in [CGPoint(x: w * 0.19, y: 26), CGPoint(x: w * 0.81, y: 22), CGPoint(x: w * 0.29, y: 16)] {
+                    ctx.fill(Path(CGRect(x: (starPt.x / 2).rounded() * 2, y: (starPt.y / 2).rounded() * 2, width: 2, height: 2)), with: .color(Color.white.opacity(0.50)))
+                }
+            }
+
+            if isHalfSun {
+                let targetIdx = isRise ? 0 : 3
+                let targetT = slotProgress(prayerSlots[targetIdx], index: targetIdx)
+                let sunPt = arcPoint(t: targetT, width: w, height: h)
+                let sunX = (sunPt.x / 2).rounded() * 2
+                let sunCol = isRise ? Color(red: 0.99, green: 0.90, blue: 0.54) : Color(red: 0.98, green: 0.57, blue: 0.24)
+                let seaCol = isRise ? Color(red: 0.22, green: 0.74, blue: 0.97) : Color(red: 0.98, green: 0.57, blue: 0.24)
+                let px: CGFloat = 2
+                let ox = sunX - (CGFloat(Self.pixelHalfSunMatrix[0].count) * px) / 2
+                let oy = baseY - CGFloat(Self.pixelHalfSunMatrix.count) * px
+                for (r, row) in Self.pixelHalfSunMatrix.enumerated() {
+                    for (c, bit) in row.enumerated() where bit == 1 {
+                        ctx.fill(
+                            Path(CGRect(x: ox + CGFloat(c) * px, y: oy + CGFloat(r) * px, width: px, height: px)),
+                            with: .color(sunCol)
+                        )
+                    }
+                }
+                ctx.fill(Path(CGRect(x: sunX - 8, y: baseY + 2, width: 16, height: 2)), with: .color(seaCol.opacity(0.55)))
+                ctx.fill(Path(CGRect(x: sunX - 5, y: baseY + 5, width: 10, height: 2)), with: .color(seaCol.opacity(0.32)))
+            } else {
+                let orb = arcPoint(t: prog, width: w, height: h)
+                let sx = (orb.x / 2).rounded() * 2
+                let sy = (orb.y / 2).rounded() * 2
+                ctx.fill(Path(CGRect(x: sx - 13, y: sy - 13, width: 26, height: 26)), with: .color(Color.black.opacity(0.72)))
+                let matrix = isNight ? Self.pixelMoonMatrix : Self.pixelSunMatrix
+                let px: CGFloat = 2
+                let ox = sx - (CGFloat(matrix[0].count) * px) / 2 + (isNight ? 2 : 0)
+                let oy = sy - (CGFloat(matrix.count) * px) / 2
+                for (r, row) in matrix.enumerated() {
+                    for (c, bit) in row.enumerated() where bit > 0 {
+                        let col: Color = isNight
+                            ? (bit == 1 ? Color(red: 0.99, green: 0.94, blue: 0.54) : Color(red: 0.96, green: 0.62, blue: 0.04))
+                            : Color(red: 1.0, green: 0.82, blue: 0.40)
+                        ctx.fill(
+                            Path(CGRect(x: ox + CGFloat(c) * px, y: oy + CGFloat(r) * px, width: px, height: px)),
+                            with: .color(col)
+                        )
+                    }
+                }
+            }
         }
     }
 }

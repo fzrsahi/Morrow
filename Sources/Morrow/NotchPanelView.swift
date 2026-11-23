@@ -1316,11 +1316,14 @@ struct NotchPanelView: View {
             shape
                 .fill(Color.black)
                 .overlay(chargingAmbientLayer(for: shape))
+                .overlay(prayerAmbientLayer(for: shape))
                 .overlay(
                     shape.stroke(
                         signals.showChargingBanner && !appState.surface.isExpanded
                             ? chargingAmbientColor.opacity(chargingAmbientStrokeOpacity)
-                            : currentStrokeColor,
+                            : (signals.showMiniPeekBanner && !appState.surface.isExpanded
+                                ? prayerAmbientAccentColor.opacity(0.22)
+                                : currentStrokeColor),
                         lineWidth: currentStrokeWidth
                     )
                 )
@@ -1446,6 +1449,92 @@ struct NotchPanelView: View {
                 y += cell
                 rowIdx += 1
             }
+        }
+    }
+
+    private var prayerAmbientAccentColor: Color {
+        let isModern = islandUITheme != IslandUITheme.pixel.rawValue
+        if (syncThemeWithAlbumArt || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
+        }
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: isModern)
+        )
+    }
+
+    @ViewBuilder
+    private func prayerAmbientLayer<S: Shape>(for shape: S) -> some View {
+        if signals.showMiniPeekBanner && !appState.surface.isExpanded {
+            let prayerAccent = prayerAmbientAccentColor
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let breath = 0.72 + 0.28 * (0.5 + 0.5 * sin(t * 2.1))
+                if islandUITheme == IslandUITheme.pixel.rawValue {
+                    Canvas { ctx, size in
+                        let w = Double(size.width)
+                        let maxY = min(90.0, Double(size.height))
+                        let cell = 3.0
+                        let dotColor = prayerAccent.opacity(0.20 * breath)
+
+                        var y = 0.0
+                        var rowIdx = 0
+                        while y < maxY {
+                            let ny = y / 90.0
+                            let bayerRow = Self.bayer4Matrix[rowIdx & 3]
+                            var x = 0.0
+                            var colIdx = 0
+                            while x < w {
+                                let nx = x / max(1.0, w)
+                                let leftBoost = exp(-pow((nx - 0.10) / 0.18, 2.0))
+                                let rightBoost = exp(-pow((nx - 0.90) / 0.18, 2.0))
+                                let wingBoost = max(leftBoost, rightBoost, 0.52)
+                                let intensity = (1.0 - ny) * 0.68 * wingBoost * breath
+                                let threshold = bayerRow[colIdx & 3] / 16.0
+                                if intensity > threshold + 0.08 {
+                                    ctx.fill(
+                                        Path(CGRect(x: x, y: y, width: cell - 1.0, height: cell - 1.0)),
+                                        with: .color(dotColor)
+                                    )
+                                }
+                                x += cell
+                                colIdx += 1
+                            }
+                            y += cell
+                            rowIdx += 1
+                        }
+                    }
+                    .padding(.horizontal, -16)
+                    .clipShape(shape)
+                } else {
+                    ZStack {
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [prayerAccent.opacity(0.18 * breath), Color.clear],
+                                center: UnitPoint(x: 0.12, y: 0.0),
+                                startRadiusFraction: 0.02,
+                                endRadiusFraction: 0.52
+                            )
+                        )
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [prayerAccent.opacity(0.18 * breath), Color.clear],
+                                center: UnitPoint(x: 0.88, y: 0.0),
+                                startRadiusFraction: 0.02,
+                                endRadiusFraction: 0.52
+                            )
+                        )
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [prayerAccent.opacity(0.12 * breath), Color.clear],
+                                center: UnitPoint(x: 0.5, y: 0.42),
+                                startRadiusFraction: 0.04,
+                                endRadiusFraction: 0.68
+                            )
+                        )
+                    }
+                }
+            }
+            .transition(.opacity)
         }
     }
 

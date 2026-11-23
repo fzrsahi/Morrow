@@ -1737,9 +1737,45 @@ private struct AppearancePage: View {
                             notificationPreviewButton(
                                 icon: "moon.stars.fill",
                                 color: Color(red: 0.0, green: 0.96, blue: 0.83),
-                                title: "Test Prayer Reminder"
+                                title: "Test Prayer (Maghrib)"
                             ) {
-                                PrayerTimeManager.shared.triggerTestBanner()
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .maghrib)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sunrise.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Subuh"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .subuh)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "sun.max.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Dzuhur"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .dzuhur)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sun.haze.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Ashar"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .ashar)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "moon.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Isya"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .isya)
                             }
                         }
 

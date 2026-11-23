@@ -472,6 +472,7 @@ public final class PrayerTimeManager: ObservableObject {
     private var bannerDismissWorkItem: DispatchWorkItem?
     private var isMiniPeekBannerHovered: Bool = false
 
+    @Published public var previewPrayerType: PrayerType? = nil
     private var miniPeekBannerDeadline: Date?
 
     public func dismissMiniPeekBanner() {
@@ -481,6 +482,7 @@ public final class PrayerTimeManager: ObservableObject {
         bannerDismissTask = nil
         isMiniPeekBannerHovered = false
         miniPeekBannerDeadline = nil
+        previewPrayerType = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             self.showMiniPeekBanner = false
         }
@@ -579,10 +581,12 @@ public final class PrayerTimeManager: ObservableObject {
         enqueueOrPresentBanner(title: title, subtitle: subtitle, appState: appState)
     }
 
-    public func triggerTestBanner() {
+    public func triggerTestBanner(prayer: PrayerType? = nil) {
+        let target = prayer ?? .maghrib
         presentBanner(
-            title: "WAKTU MAGHRIB TIBA",
-            subtitle: "Saatnya Menunaikan Ibadah Salat Maghrib"
+            title: "WAKTU \(target.displayName.uppercased()) TIBA",
+            subtitle: "Saatnya Menunaikan Ibadah Salat \(target.displayName)",
+            previewPrayer: prayer
         )
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
     }
@@ -617,10 +621,11 @@ public final class PrayerTimeManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: item)
     }
 
-    private func presentBanner(title: String, subtitle: String) {
+    private func presentBanner(title: String, subtitle: String, previewPrayer: PrayerType? = nil) {
         SystemMonitorManager.shared.dismissChargingBanner()
         isMiniPeekBannerHovered = false
         miniPeekBannerDeadline = Date().addingTimeInterval(3.0)
+        previewPrayerType = previewPrayer
         if let appState, appState.surface.isExpanded {
             appState.surface = .collapsed
         }
