@@ -723,13 +723,27 @@ fn install_extension(
             ))
         })?;
     let path = paths.home.join(relative);
-    if read_text(&path)?.as_deref() == Some(text.as_str()) {
-        return Ok(Some(Report::default()));
+    let existing = read_text(&path)?;
+    if let Some(existing_text) = existing.as_deref() {
+        // An extension someone else put here is theirs. Refuse rather than back
+        // it up and overwrite it — the same ownership rule uninstall applies
+        // (#311).
+        if !morrow_core::installer::extension::is_ours(existing_text) {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} holds an extension this installer did not write",
+                    path.display()
+                ),
+            )));
+        }
+        if existing_text == text {
+            return Ok(Some(Report::default()));
+        }
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let existing = read_text(&path)?;
     let mut report = Report::default();
     if existing.is_some() {
         report.backup = back_up(&path, stamp)?;

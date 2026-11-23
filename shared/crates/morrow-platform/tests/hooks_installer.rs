@@ -761,17 +761,30 @@ fn an_extension_is_rewritten_for_this_platforms_bridge() {
     assert!(!extension.exists());
 }
 
-/// A user who put their own `codeisland.ts` there keeps it.
+/// A user who put their own `codeisland.ts` there keeps it: neither install
+/// (replacing it) nor uninstall (deleting it) is ours to do (#311).
 #[test]
 fn a_users_own_extension_is_not_ours_to_replace_or_delete() {
     let home = Home::new("pi-own");
     let paths = home.paths();
     cli_dir(&home, ".pi");
     let extension = home.root.join(".pi/agent/extensions/codeisland.ts");
-    home.write(&extension, "// my own extension\nexport {};\n");
+    let mine = "// my own extension\nexport {};\n";
+    home.write(&extension, mine);
+
+    let refused = hooks::install_target(&paths, "pi", STAMP);
+    assert!(
+        refused.is_err(),
+        "install must refuse a file we did not write"
+    );
+    assert_eq!(home.read(&extension), mine, "install left it byte for byte");
 
     hooks::uninstall_target(&paths, "pi").expect("uninstall");
-    assert_eq!(home.read(&extension), "// my own extension\nexport {};\n");
+    assert_eq!(
+        home.read(&extension),
+        mine,
+        "uninstall left it byte for byte"
+    );
 }
 
 /// DSH is bridged by a third-party plugin, so there is nothing to install.
