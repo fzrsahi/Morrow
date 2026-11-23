@@ -78,6 +78,41 @@ const CLAUDE_EVENTS: &[TargetEvent] = &[
     event("PreCompact", 5, true),
 ];
 
+/// Qoder's own event list, shared by the international build, the China build and
+/// QoderWork: a Claude Code fork with its own documented `PermissionRequest` hook.
+const QODER_EVENTS: &[TargetEvent] = &[
+    event("UserPromptSubmit", 5, true),
+    event("PreToolUse", 5, false),
+    event("PostToolUse", 5, true),
+    event("PostToolUseFailure", 5, true),
+    event("PermissionRequest", 86_400, false),
+    event("Stop", 5, true),
+    event("SubagentStart", 5, true),
+    event("SubagentStop", 5, true),
+    event("SessionStart", 5, false),
+    event("SessionEnd", 5, true),
+    event("Notification", 86_400, false),
+    event("PreCompact", 5, true),
+];
+
+/// Qwen Code counts **milliseconds**, like Gemini, where every other Claude fork
+/// here counts seconds. Copying `CLAUDE_EVENTS` would give it a five-second
+/// timeout that expires in five thousandths of a second.
+const QWEN_EVENTS: &[TargetEvent] = &[
+    event("UserPromptSubmit", 5_000, true),
+    event("PreToolUse", 5_000, false),
+    event("PostToolUse", 5_000, true),
+    event("PostToolUseFailure", 5_000, true),
+    event("PermissionRequest", 86_400_000, false),
+    event("Stop", 5_000, true),
+    event("SubagentStart", 5_000, true),
+    event("SubagentStop", 5_000, true),
+    event("SessionStart", 5_000, false),
+    event("SessionEnd", 5_000, true),
+    event("Notification", 86_400_000, false),
+    event("PreCompact", 5_000, true),
+];
+
 /// Every target this module can install. Claude Code is not here: it has its
 /// own installer, because its events and its script came first.
 pub const TARGETS: &[Target] = &[
@@ -152,20 +187,7 @@ pub const TARGETS: &[Target] = &[
         path: ".qoder/settings.json",
         key: "hooks",
         format: Format::Claude,
-        events: &[
-            event("UserPromptSubmit", 5, true),
-            event("PreToolUse", 5, false),
-            event("PostToolUse", 5, true),
-            event("PostToolUseFailure", 5, true),
-            event("PermissionRequest", 86_400, false),
-            event("Stop", 5, true),
-            event("SubagentStart", 5, true),
-            event("SubagentStop", 5, true),
-            event("SessionStart", 5, false),
-            event("SessionEnd", 5, true),
-            event("Notification", 86_400, false),
-            event("PreCompact", 5, true),
-        ],
+        events: QODER_EVENTS,
         bridge_source: None,
         seeds_version: false,
     },
@@ -208,6 +230,93 @@ pub const TARGETS: &[Target] = &[
         ],
         bridge_source: None,
         seeds_version: true,
+    },
+    // The seven Claude-schema forks of #234 batch 1. Each was 40 lines of table
+    // and path in the Swift installer, and each is the same 40 lines here — which
+    // is why they are one appended block and not seven slices.
+    //
+    // Qoder CN (国行) is the China build: same hook contract, own config root, and
+    // its own CLI name. Its events are reported under the **shared** `qoder-cli`
+    // source, as macOS does (#289) — a card keyed by `qoder-cn` would be a second
+    // card for one session.
+    Target {
+        source: "qoder-cn",
+        name: "Qoder CN",
+        path: ".qoder-cn/settings.json",
+        key: "hooks",
+        format: Format::Claude,
+        events: QODER_EVENTS,
+        bridge_source: Some("qoder-cli"),
+        seeds_version: false,
+    },
+    // QoderWork is Qoder's standalone desktop assistant, not the IDE: user-level
+    // `~/.qoderwork/settings.json` only, and it reads its hooks at launch — the
+    // user has to restart it after an install or uninstall.
+    Target {
+        source: "qoderwork",
+        name: "QoderWork",
+        path: ".qoderwork/settings.json",
+        key: "hooks",
+        format: Format::Claude,
+        events: QODER_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    // CodeBuddy's China variant, and the same schema.
+    Target {
+        source: "codybuddycn",
+        name: "CodyBuddyCN",
+        path: ".codybuddycn/settings.json",
+        key: "hooks",
+        format: Format::Claude,
+        events: CLAUDE_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    Target {
+        source: "stepfun",
+        name: "StepFun",
+        path: ".stepfun/settings.json",
+        key: "hooks",
+        format: Format::Claude,
+        events: CLAUDE_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    // AntiGravity — a Claude Code fork. **Not** `google-antigravity`, which is a
+    // different product with a named-config schema and a different file; writing
+    // one into the other's path would put hooks where nothing reads them. That
+    // one is #234 batch 4.
+    Target {
+        source: "antigravity",
+        name: "AntiGravity",
+        path: ".antigravity/settings.json",
+        key: "hooks",
+        format: Format::Claude,
+        events: CLAUDE_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    Target {
+        source: "workbuddy",
+        name: "WorkBuddy",
+        path: ".workbuddy/settings.json",
+        key: "hooks",
+        format: Format::Claude,
+        events: CLAUDE_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    // Qwen Code: Claude's schema, Gemini's unit.
+    Target {
+        source: "qwen",
+        name: "Qwen Code",
+        path: ".qwen/settings.json",
+        key: "hooks",
+        format: Format::Claude,
+        events: QWEN_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
     },
 ];
 

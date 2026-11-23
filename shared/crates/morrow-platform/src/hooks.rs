@@ -118,6 +118,16 @@ const CLI_DIRS: &[(&str, &str)] = &[
     ("droid", ".factory"),
     ("codebuddy", ".codebuddy"),
     ("copilot", ".copilot"),
+    // #234 batch 1. A target missing from this table is treated as always
+    // present, which is how Settings would end up claiming a CLI the user never
+    // installed — `tests/hooks_installer.rs` fails if a row is forgotten.
+    ("qoder-cn", ".qoder-cn"),
+    ("qoderwork", ".qoderwork"),
+    ("codybuddycn", ".codybuddycn"),
+    ("stepfun", ".stepfun"),
+    ("antigravity", ".antigravity"),
+    ("workbuddy", ".workbuddy"),
+    ("qwen", ".qwen"),
 ];
 
 /// Install or repair one target. `None` when the CLI is not on this machine, or

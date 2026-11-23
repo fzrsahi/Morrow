@@ -40,7 +40,16 @@ fn every_target_of_the_ticket_is_here() {
             "qoder",
             "droid",
             "codebuddy",
-            "copilot"
+            "copilot",
+            // #234 batch 1: the seven Claude-schema forks, which were a table entry
+            // each and nothing more.
+            "qoder-cn",
+            "qoderwork",
+            "codybuddycn",
+            "stepfun",
+            "antigravity",
+            "workbuddy",
+            "qwen"
         ]
     );
     // OpenCode is a plugin file, not a hooks key: its own slice.
@@ -56,9 +65,72 @@ fn the_paths_and_keys_are_the_ones_macos_writes() {
     assert_eq!(target("droid").path, ".factory/settings.json");
     assert_eq!(target("codebuddy").path, ".codebuddy/settings.json");
     assert_eq!(target("copilot").path, ".copilot/hooks/codeisland.json");
+    // #234 batch 1. A wrong path here writes a file the CLI never reads, and the
+    // install still reports success.
+    assert_eq!(target("qoder-cn").path, ".qoder-cn/settings.json");
+    assert_eq!(target("qoderwork").path, ".qoderwork/settings.json");
+    assert_eq!(target("codybuddycn").path, ".codybuddycn/settings.json");
+    assert_eq!(target("stepfun").path, ".stepfun/settings.json");
+    assert_eq!(target("antigravity").path, ".antigravity/settings.json");
+    assert_eq!(target("workbuddy").path, ".workbuddy/settings.json");
+    assert_eq!(target("qwen").path, ".qwen/settings.json");
     for target in TARGETS {
         assert_eq!(target.key, "hooks");
     }
+}
+
+/// Qwen Code counts milliseconds where every other Claude fork counts seconds.
+/// Copying the shared table would give it a timeout that expires a thousand times
+/// too early, and nothing would look wrong in the file.
+#[test]
+fn qwen_counts_milliseconds_where_the_others_count_seconds() {
+    let qwen = target("qwen");
+    assert_eq!(qwen.format, Format::Claude);
+    let timeout = |source: &str, event: &str| {
+        let text = install(target(source), None, BRIDGE)
+            .expect("an install")
+            .text;
+        parsed(&text)["hooks"][event][0]["hooks"][0]["timeout"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("{source} {event} has no timeout"))
+    };
+    assert_eq!(timeout("qwen", "PreToolUse"), 5_000);
+    assert_eq!(timeout("qwen", "Notification"), 86_400_000);
+    // The same event on a seconds-counting fork.
+    assert_eq!(timeout("qoderwork", "PreToolUse"), 5);
+    assert_eq!(timeout("qoderwork", "Notification"), 86_400);
+}
+
+/// Qoder CN is the same hook contract under a different CLI name, and macOS
+/// reports its events under the **shared** `qoder-cli` source. A card keyed
+/// `qoder-cn` would be a second card for one session.
+#[test]
+fn qoder_cn_reports_its_events_under_the_shared_source() {
+    let cn = target("qoder-cn");
+    assert_eq!(cn.source, "qoder-cn");
+    assert_eq!(cn.bridge_source(), "qoder-cli");
+    let text = install(cn, None, BRIDGE).expect("an install").text;
+    assert!(
+        text.contains("--source qoder-cli"),
+        "the bridge is told the shared source: {text}"
+    );
+    assert!(!text.contains("--source qoder-cn"));
+    // The international build is unchanged: it is its own source.
+    assert_eq!(target("qoder").bridge_source(), "qoder");
+}
+
+/// `antigravity` is a Claude Code fork; `google-antigravity` is a different
+/// product with a named-config schema and its own file. One written into the
+/// other's path is hooks nothing reads.
+#[test]
+fn antigravity_is_not_google_antigravity() {
+    let fork = target("antigravity");
+    assert_eq!(fork.format, Format::Claude);
+    assert_eq!(fork.key, "hooks");
+    assert_eq!(fork.path, ".antigravity/settings.json");
+    // Not yet installed at all: it is #234 batch 4, and an absent target is the
+    // honest answer until then.
+    assert!(target_for("google-antigravity").is_none());
 }
 
 #[test]
