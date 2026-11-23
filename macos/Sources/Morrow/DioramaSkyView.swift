@@ -90,9 +90,9 @@ public struct DioramaSkyPalette {
 
     public static func nightFactor(_ hour: Double) -> Double {
         let h = hour.truncatingRemainder(dividingBy: 24)
-        if h < 4.5 || h > 19.8 { return 1 }
-        if h < 6.0 { return (6.0 - h) / 1.5 }
-        if h > 18.3 { return (h - 18.3) / 1.5 }
+        if h < 4.4 || h > 19.8 { return 1 }
+        if h < 6.0 { return (6.0 - h) / 1.6 }
+        if h > 19.1 { return (h - 19.1) / 0.7 }
         return 0
     }
 
@@ -117,20 +117,62 @@ public struct DioramaSkyView: View {
     }
 
     private static let stars: [Star] = [
-        Star(x: 0.08, y: 0.16, isCross: false, brightness: 0.8),
-        Star(x: 0.16, y: 0.38, isCross: false, brightness: 0.75),
-        Star(x: 0.23, y: 0.12, isCross: true,  brightness: 0.95),
-        Star(x: 0.32, y: 0.26, isCross: false, brightness: 0.7),
-        Star(x: 0.43, y: 0.10, isCross: false, brightness: 0.85),
-        Star(x: 0.48, y: 0.34, isCross: true,  brightness: 0.90),
-        Star(x: 0.58, y: 0.16, isCross: false, brightness: 0.75),
-        Star(x: 0.67, y: 0.30, isCross: false, brightness: 0.8),
-        Star(x: 0.74, y: 0.08, isCross: true,  brightness: 0.95),
-        Star(x: 0.82, y: 0.24, isCross: false, brightness: 0.8),
-        Star(x: 0.90, y: 0.14, isCross: false, brightness: 0.7),
-        Star(x: 0.95, y: 0.32, isCross: false, brightness: 0.85),
+        Star(x: 0.27, y: 0.26, isCross: false, brightness: 0.55),
+        Star(x: 0.34, y: 0.25, isCross: false, brightness: 0.70),
+        Star(x: 0.42, y: 0.36, isCross: false, brightness: 0.65),
+        Star(x: 0.56, y: 0.23, isCross: false, brightness: 0.70),
+        Star(x: 0.65, y: 0.29, isCross: true,  brightness: 0.90),
+        Star(x: 0.74, y: 0.22, isCross: false, brightness: 0.75),
+        Star(x: 0.85, y: 0.24, isCross: false, brightness: 0.65),
     ]
-    private static let buildings: [Double] = [0.20, 0.30, 0.24, 0.38, 0.22, 0.32, 0.18, 0.28, 0.36, 0.21, 0.30, 0.16]
+
+    private static let spritePalette: [Character: Color] = [
+        "W": Color(red: 1.00, green: 0.97, blue: 0.84),
+        "Y": Color(red: 1.00, green: 0.83, blue: 0.28),
+        "O": Color(red: 1.00, green: 0.55, blue: 0.20),
+        "M": Color(red: 0.96, green: 0.96, blue: 1.00),
+        "L": Color(red: 0.72, green: 0.75, blue: 1.00),
+        "D": Color(red: 0.44, green: 0.47, blue: 0.79),
+        "S": Color(red: 1.00, green: 0.90, blue: 0.50),
+    ]
+
+    private static let moonSprite: [String] = [
+        "................",
+        ".......MM.......",
+        ".....MMLL.......",
+        "....MLLD....S...",
+        "...MLDD....SSS..",
+        "...MLD......S...",
+        "...MLD..........",
+        "...MLDD.........",
+        "....MLLD.....S..",
+        ".....MMLL.......",
+        ".......MM.......",
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+    ]
+
+    private static let sunSprite: [String] = [
+        ".......YY.......",
+        ".......YY.......",
+        "..Y..........Y..",
+        "...Y..WWWW..Y...",
+        ".....WYYYYW.....",
+        "....WYYYYYYW....",
+        "..Y.YYWWWWYY.Y..",
+        "YY..YYWWWWYY..YY",
+        "....YYYYYYYY....",
+        "....OYYYYYYO....",
+        "...Y..OOOO..Y...",
+        "..Y..........Y..",
+        ".......OO.......",
+        ".......OO.......",
+        "................",
+        "................",
+    ]
 
     public init(
         hour: Double,
@@ -199,7 +241,7 @@ public struct DioramaSkyView: View {
             if night > 0.05 {
                 for star in Self.stars {
                     let cx = snap(star.x * size.width)
-                    let cy = snap(star.y * size.height * 0.72)
+                    let cy = snap(star.y * size.height)
                     let a = night * star.brightness
                     if pixel {
                         // 8-bit stepped pixel stars & diamond crosses
@@ -216,88 +258,97 @@ public struct DioramaSkyView: View {
                             ctx.fill(Path(CGRect(x: cx - 2, y: cy, width: 5, height: 1)), with: .color(.white.opacity(a * 0.75)))
                             ctx.fill(Path(CGRect(x: cx, y: cy - 2, width: 1, height: 5)), with: .color(.white.opacity(a * 0.75)))
                         } else {
-                            ctx.fill(Path(CGRect(x: cx, y: cy, width: 1.5, height: 1.5)), with: .color(.white.opacity(a)))
+                            ctx.fill(Path(ellipseIn: CGRect(x: cx - 1.2, y: cy - 1.2, width: 2.4, height: 2.4)), with: .color(.white.opacity(a)))
                         }
                     }
                 }
             }
 
-            // Dynamic celestial arc: Sunrise -> Sunset (Sun), Sunset -> Next Sunrise (Moon)
+            // Elevated horizon ledge (74% height) so mosque & sun clear the timeline labels below
+            let baseSkylineY = skyline ? (size.height * 0.74) : (size.height * 0.95)
+            let h = hour.truncatingRemainder(dividingBy: 24)
             let sunrise = sunriseHour
             let sunset = sunsetHour
             let nextSunrise = sunrise + 24.0
-            let horizonY = size.height * (skyline ? 0.78 : 0.95)
-            let archH = horizonY * 0.72
-            func arcPoint(_ p: Double) -> CGPoint {
-                CGPoint(x: size.width * (0.08 + 0.84 * p), y: horizonY - archH * sin(.pi * p))
-            }
-            let h = hour
-            if h >= sunrise && h <= sunset {
-                let p = (h - sunrise) / max(0.1, sunset - sunrise)
-                let c = arcPoint(p)
-                let r = min(size.width, size.height) * 0.08
-                let col = (h >= (sunset - 2.8) && h < sunset) ? Color(red: 1.0, green: 0.58, blue: 0.20) : Color(red: 1.0, green: 0.92, blue: 0.45)
-                let rimCol = Color(red: 1.0, green: 0.65, blue: 0.15)
+            let isDawnHorizon = h >= 4.4 && h < 6.1
+            let isSunsetHorizon = h >= 17.4 && h < 19.1
+            let isHorizonSun = isDawnHorizon || isSunsetHorizon
+            let isDay = (h >= sunrise && h <= sunset) || isHorizonSun
 
-                if pixel {
-                    // True 8-bit stepped pixel sun
-                    let cx = snap(c.x)
-                    let cy = snap(c.y)
-                    let pr = snap(r)
-                    // Outer golden rim
-                    ctx.fill(Path(CGRect(x: cx - pr, y: cy - pr * 0.6, width: pr * 2, height: pr * 1.2)), with: .color(rimCol))
-                    ctx.fill(Path(CGRect(x: cx - pr * 0.6, y: cy - pr, width: pr * 1.2, height: pr * 2)), with: .color(rimCol))
-                    // Inner bright core
-                    let ir = pr * 0.7
-                    ctx.fill(Path(CGRect(x: cx - ir, y: cy - ir * 0.6, width: ir * 2, height: ir * 1.2)), with: .color(col))
-                    ctx.fill(Path(CGRect(x: cx - ir * 0.6, y: cy - ir, width: ir * 1.2, height: ir * 2)), with: .color(col))
-                    // 4-directional pixel rays
-                    ctx.fill(Path(CGRect(x: cx - 1.5, y: cy - pr - 5, width: 3, height: 4)), with: .color(col.opacity(0.85)))
-                    ctx.fill(Path(CGRect(x: cx - 1.5, y: cy + pr + 1, width: 3, height: 4)), with: .color(col.opacity(0.85)))
-                    ctx.fill(Path(CGRect(x: cx - pr - 5, y: cy - 1.5, width: 4, height: 3)), with: .color(col.opacity(0.85)))
-                    ctx.fill(Path(CGRect(x: cx + pr + 1, y: cy - 1.5, width: 4, height: 3)), with: .color(col.opacity(0.85)))
+            let p: Double = {
+                if isDay {
+                    return max(0.05, min(0.95, (h - sunrise) / max(0.1, sunset - sunrise)))
                 } else {
-                    ctx.fill(Path(ellipseIn: CGRect(x: c.x - r * 1.8, y: c.y - r * 1.8, width: r * 3.6, height: r * 3.6)), with: .color(col.opacity(0.20)))
-                    ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)), with: .color(col))
+                    let hh = h < sunrise ? h + 24.0 : h
+                    return max(0.05, min(0.95, (hh - sunset) / max(0.1, nextSunrise - sunset)))
                 }
+            }()
+
+            let cx: CGFloat
+            let cy: CGFloat
+            if isDawnHorizon {
+                cx = snap(size.width * 0.40)
+                cy = snap(baseSkylineY)
+            } else if isSunsetHorizon {
+                cx = snap(size.width * 0.60)
+                cy = snap(baseSkylineY)
             } else {
-                let hh = h < sunrise ? h + 24.0 : h
-                let p = max(0, min(1, (hh - sunset) / max(0.1, nextSunrise - sunset)))
-                let c = arcPoint(p)
-                let r = min(size.width, size.height) * 0.08
-                let cx = snap(c.x)
-                let cy = snap(c.y)
-                let pr = snap(r)
+                cx = snap(size.width * (0.48 + 0.12 * p))
+                cy = snap(size.height * (0.36 - 0.14 * sin(.pi * p)))
+            }
+
+            // Clip celestial body to sky above horizon so horizon suns are cleanly half-submerged
+            ctx.drawLayer { skyLayer in
+                skyLayer.clip(to: Path(CGRect(x: 0, y: 0, width: size.width, height: baseSkylineY)))
 
                 if pixel {
-                    // True 8-bit stepped pixel crescent moon
-                    let moonColor = Color(red: 0.98, green: 0.98, blue: 0.92)
-                    let skyBands = DioramaSkyPalette.pixelBands(hour)
-                    let skyBack = skyBands.first ?? Color(red: 0.05, green: 0.07, blue: 0.16)
-
-                    // Base stepped circle
-                    ctx.fill(Path(CGRect(x: cx - pr, y: cy - pr * 0.6, width: pr * 2, height: pr * 1.2)), with: .color(moonColor))
-                    ctx.fill(Path(CGRect(x: cx - pr * 0.6, y: cy - pr, width: pr * 1.2, height: pr * 2)), with: .color(moonColor))
-
-                    // Stepped crescent cutout
-                    let shift: CGFloat = 4.0
-                    ctx.fill(Path(CGRect(x: cx - pr + shift, y: cy - pr * 0.6, width: pr * 2, height: pr * 1.2)), with: .color(skyBack))
-                    ctx.fill(Path(CGRect(x: cx - pr * 0.6 + shift, y: cy - pr, width: pr * 1.2, height: pr * 2)), with: .color(skyBack))
+                    let rows = isDay ? Self.sunSprite : Self.moonSprite
+                    let cellSize: CGFloat = 2.5
+                    let total = 16.0 * cellSize
+                    let x0 = (cx - total / 2.0).rounded()
+                    let y0 = (cy - total / 2.0).rounded()
+                    for (ry, row) in rows.enumerated() {
+                        for (rx, ch) in row.enumerated() {
+                            guard let col = Self.spritePalette[ch] else { continue }
+                            let rect = CGRect(
+                                x: x0 + CGFloat(rx) * cellSize,
+                                y: y0 + CGFloat(ry) * cellSize,
+                                width: cellSize,
+                                height: cellSize
+                            )
+                            skyLayer.fill(Path(rect), with: .color(col))
+                        }
+                    }
                 } else {
-                    let phaseRatio = Double(max(1, min(30, hijriDay))) / 29.5
-                    let illuminated = 0.5 * (1.0 - cos(2.0 * .pi * phaseRatio))
-                    let moonRect = CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2)
-                    let moonPath = Path(ellipseIn: moonRect)
-                    ctx.fill(moonPath, with: .color(Color(red: 0.96, green: 0.96, blue: 0.92)))
-
-                    if illuminated < 0.92 {
-                        ctx.drawLayer { layer in
-                            layer.clip(to: moonPath)
-                            let cutoutR = r * 1.02
-                            let shift = (phaseRatio < 0.5 ? 1.0 : -1.0) * Double(r) * (0.28 + illuminated * 1.9)
-                            let cutoutRect = CGRect(x: c.x - cutoutR + CGFloat(shift), y: c.y - cutoutR, width: cutoutR * 2, height: cutoutR * 2)
-                            let (top, _) = DioramaSkyPalette.colors(hour)
-                            layer.fill(Path(ellipseIn: cutoutRect), with: .color(top))
+                    if isDay {
+                        let r: CGFloat = isHorizonSun ? 20 : 16
+                        let sunCol = isHorizonSun
+                            ? Color(red: 1.0, green: 0.56, blue: 0.24)
+                            : ((h >= (sunset - 2.8) && h < sunset) ? Color(red: 1.0, green: 0.58, blue: 0.20) : Color(red: 1.0, green: 0.92, blue: 0.45))
+                        let glowAlpha = isHorizonSun ? 0.22 : 0.18
+                        skyLayer.fill(
+                            Path(ellipseIn: CGRect(x: cx - r * 1.75, y: cy - r * 1.75, width: r * 3.5, height: r * 3.5)),
+                            with: .color(sunCol.opacity(glowAlpha))
+                        )
+                        skyLayer.fill(
+                            Path(ellipseIn: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)),
+                            with: .color(sunCol)
+                        )
+                    } else {
+                        let r: CGFloat = 16
+                        skyLayer.drawLayer { moonLayer in
+                            moonLayer.fill(
+                                Path(ellipseIn: CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2)),
+                                with: .color(Color(red: 0.96, green: 0.96, blue: 0.92))
+                            )
+                            moonLayer.blendMode = .destinationOut
+                            let cutR = r * 0.88
+                            let cutX = cx + r * 0.48
+                            let cutY = cy - r * 0.12
+                            moonLayer.fill(
+                                Path(ellipseIn: CGRect(x: cutX - cutR, y: cutY - cutR, width: cutR * 2, height: cutR * 2)),
+                                with: .color(.black)
+                            )
                         }
                     }
                 }
@@ -329,40 +380,31 @@ public struct DioramaSkyView: View {
                 }
             }
 
-            // Skyline / Mosque Architecture
+            // Skyline / Mosque Architecture (elevated on horizon ledge so timeline below stays clean)
             if skyline {
-                let baseSkylineY = size.height * 0.98
                 let lit = DioramaSkyPalette.windowsLit(hour)
-                let silhouetteColor = Color(red: 0.05, green: 0.04, blue: 0.10)
+                let silhouetteColor = Color(red: 0.035, green: 0.035, blue: 0.08)
                 let windowGold = Color(red: 1.0, green: 0.88, blue: 0.38)
 
                 if pixel {
                     // ── AUTHENTIC 8-BIT PIXEL MOSQUE SILHOUETTE ──
-                    // Left Minaret
-                    let m1X = snap(size.width * 0.12)
-                    let mH: CGFloat = snap(size.height * 0.34)
-                    ctx.fill(Path(CGRect(x: m1X - 5, y: baseSkylineY - mH, width: 10, height: mH)), with: .color(silhouetteColor))
-                    // Minaret Balcony
-                    ctx.fill(Path(CGRect(x: m1X - 7, y: baseSkylineY - mH * 0.72, width: 14, height: 3)), with: .color(silhouetteColor))
-                    // Minaret Spire
-                    ctx.fill(Path(CGRect(x: m1X - 2.5, y: baseSkylineY - mH - 7, width: 5, height: 8)), with: .color(silhouetteColor))
-                    ctx.fill(Path(CGRect(x: m1X - 1, y: baseSkylineY - mH - 10, width: 2, height: 4)), with: .color(silhouetteColor))
+                    let m1X = snap(size.width * 0.34)
+                    let m2X = snap(size.width * 0.66)
+                    let mH: CGFloat = snap(size.height * 0.25)
 
-                    // Right Minaret
-                    let m2X = snap(size.width * 0.88)
-                    ctx.fill(Path(CGRect(x: m2X - 5, y: baseSkylineY - mH, width: 10, height: mH)), with: .color(silhouetteColor))
-                    ctx.fill(Path(CGRect(x: m2X - 7, y: baseSkylineY - mH * 0.72, width: 14, height: 3)), with: .color(silhouetteColor))
-                    ctx.fill(Path(CGRect(x: m2X - 2.5, y: baseSkylineY - mH - 7, width: 5, height: 8)), with: .color(silhouetteColor))
-                    ctx.fill(Path(CGRect(x: m2X - 1, y: baseSkylineY - mH - 10, width: 2, height: 4)), with: .color(silhouetteColor))
+                    for mx in [m1X, m2X] {
+                        ctx.fill(Path(CGRect(x: mx - 5, y: baseSkylineY - mH, width: 10, height: mH)), with: .color(silhouetteColor))
+                        ctx.fill(Path(CGRect(x: mx - 7, y: baseSkylineY - mH * 0.72, width: 14, height: 3)), with: .color(silhouetteColor))
+                        ctx.fill(Path(CGRect(x: mx - 2.5, y: baseSkylineY - mH - 7, width: 5, height: 8)), with: .color(silhouetteColor))
+                        ctx.fill(Path(CGRect(x: mx - 1, y: baseSkylineY - mH - 10, width: 2, height: 4)), with: .color(silhouetteColor))
+                    }
 
                     // Central Grand Mosque Dome (Stepped 8-bit hemisphere)
                     let domeCX = snap(size.width * 0.50)
-                    let domeBaseH = snap(size.height * 0.14)
-                    let domeWallW = snap(min(size.width * 0.32, 110))
-                    // Base building wall
+                    let domeBaseH = snap(size.height * 0.11)
+                    let domeWallW = snap(min(size.width * 0.28, 110))
                     ctx.fill(Path(CGRect(x: domeCX - domeWallW / 2, y: baseSkylineY - domeBaseH, width: domeWallW, height: domeBaseH)), with: .color(silhouetteColor))
 
-                    // Stepped Dome Curves
                     let steps: [(w: CGFloat, h: CGFloat)] = [
                         (domeWallW * 0.85, 5),
                         (domeWallW * 0.72, 6),
@@ -376,43 +418,78 @@ public struct DioramaSkyView: View {
                         currY -= step.h
                         ctx.fill(Path(CGRect(x: domeCX - step.w / 2, y: currY, width: step.w, height: step.h)), with: .color(silhouetteColor))
                     }
-                    // Dome Finial Crescent
                     ctx.fill(Path(CGRect(x: domeCX - 1.5, y: currY - 6, width: 3, height: 6)), with: .color(silhouetteColor))
                     ctx.fill(Path(CGRect(x: domeCX - 3, y: currY - 8, width: 4, height: 2)), with: .color(silhouetteColor))
 
-                    // Lit Golden Pixel Windows inside Mosque
                     if lit {
                         for offX in [-20.0, 0.0, 20.0] as [CGFloat] {
                             let wx = snap(domeCX + offX - 2.5)
-                            let wy = snap(baseSkylineY - domeBaseH * 0.65)
-                            ctx.fill(Path(CGRect(x: wx, y: wy, width: 5, height: 7)), with: .color(windowGold.opacity(0.9)))
-                            ctx.fill(Path(CGRect(x: wx + 1, y: wy - 2, width: 3, height: 2)), with: .color(windowGold.opacity(0.9)))
+                            let wy = snap(baseSkylineY - domeBaseH * 0.70)
+                            ctx.fill(Path(CGRect(x: wx, y: wy, width: 5, height: 7)), with: .color(windowGold.opacity(0.52)))
+                            ctx.fill(Path(CGRect(x: wx + 1, y: wy - 2, width: 3, height: 2)), with: .color(windowGold.opacity(0.52)))
                         }
                     }
 
-                    // Connecting Side Walls
-                    let wall1W = m1X - 5
-                    ctx.fill(Path(CGRect(x: 0, y: baseSkylineY - 10, width: wall1W, height: 10)), with: .color(silhouetteColor))
-                    let wall2W = size.width - (m2X + 5)
-                    ctx.fill(Path(CGRect(x: m2X + 5, y: baseSkylineY - 10, width: wall2W, height: 10)), with: .color(silhouetteColor))
+                    // Solid ground dock below horizon
+                    ctx.fill(Path(CGRect(x: 0, y: baseSkylineY, width: size.width, height: size.height - baseSkylineY)), with: .color(silhouetteColor))
                 } else {
-                    // Modern Clean Skyline + Silhouette
-                    let n = Self.buildings.count
-                    let w = size.width / CGFloat(n)
-                    for (i, bh) in Self.buildings.enumerated() {
-                        let bHeight = snap(size.height * skylineHeight * CGFloat(bh) / 0.38)
-                        let rect = CGRect(x: snap(CGFloat(i) * w), y: baseSkylineY - bHeight, width: snap(w) + 0.5, height: bHeight + size.height * 0.15)
-                        ctx.fill(Path(rect), with: .color(Color(red: 0.07, green: 0.06, blue: 0.13)))
-                        if lit {
-                            var wy = rect.minY + 4
-                            while wy < baseSkylineY - 4 {
-                                let wx = rect.minX + w * 0.32
-                                ctx.fill(Path(CGRect(x: snap(wx), y: snap(wy), width: 2.2, height: 2.2)),
-                                         with: .color(Color(red: 1.0, green: 0.85, blue: 0.45).opacity(0.85)))
-                                wy += 6.5
-                            }
+                    // ── MODERN SMOOTH VECTOR MOSQUE SILHOUETTE ──
+                    let modernSil = Color(red: 0.043, green: 0.047, blue: 0.086).opacity(0.92)
+                    let domeCX = size.width * 0.50
+                    let bH = size.height * 0.105
+                    let domeR: CGFloat = 35
+
+                    var domePath = Path()
+                    domePath.addArc(
+                        center: CGPoint(x: domeCX, y: baseSkylineY - bH),
+                        radius: domeR,
+                        startAngle: .degrees(180),
+                        endAngle: .degrees(0),
+                        clockwise: false
+                    )
+                    domePath.addLine(to: CGPoint(x: domeCX + 52, y: baseSkylineY - bH))
+                    domePath.addLine(to: CGPoint(x: domeCX + 52, y: baseSkylineY))
+                    domePath.addLine(to: CGPoint(x: domeCX - 52, y: baseSkylineY))
+                    domePath.addLine(to: CGPoint(x: domeCX - 52, y: baseSkylineY - bH))
+                    domePath.closeSubpath()
+                    ctx.fill(domePath, with: .color(modernSil))
+
+                    // Dome Finial Spire & Hilal Crescent
+                    let peakY = baseSkylineY - bH - domeR
+                    ctx.fill(Path(CGRect(x: domeCX - 1, y: peakY - 9, width: 2, height: 10)), with: .color(modernSil))
+                    var hilal = Path()
+                    hilal.addArc(
+                        center: CGPoint(x: domeCX, y: peakY - 11),
+                        radius: 3.2,
+                        startAngle: .degrees(63),
+                        endAngle: .degrees(297),
+                        clockwise: false
+                    )
+                    ctx.stroke(hilal, with: .color(modernSil), lineWidth: 1.6)
+
+                    // Left & Right Minarets with Shurfah Balconies & Tapered Spires
+                    let mH = size.height * 0.24
+                    for mx in [size.width * 0.34, size.width * 0.66] {
+                        ctx.fill(Path(CGRect(x: mx - 4.5, y: baseSkylineY - mH, width: 9, height: mH)), with: .color(modernSil))
+                        ctx.fill(Path(roundedRect: CGRect(x: mx - 7.5, y: baseSkylineY - mH * 0.72, width: 15, height: 3), cornerRadius: 1.5), with: .color(modernSil))
+                        ctx.fill(Path(CGRect(x: mx - 3, y: baseSkylineY - mH - 6, width: 6, height: 6)), with: .color(modernSil))
+                        var spire = Path()
+                        spire.move(to: CGPoint(x: mx - 3.5, y: baseSkylineY - mH - 6))
+                        spire.addLine(to: CGPoint(x: mx, y: baseSkylineY - mH - 14))
+                        spire.addLine(to: CGPoint(x: mx + 3.5, y: baseSkylineY - mH - 6))
+                        spire.closeSubpath()
+                        ctx.fill(spire, with: .color(modernSil))
+                    }
+
+                    if lit {
+                        for offX in [-18.0, 0.0, 18.0] as [CGFloat] {
+                            let winRect = CGRect(x: domeCX + offX - 2.5, y: baseSkylineY - bH * 0.68, width: 5, height: 7.5)
+                            ctx.fill(Path(roundedRect: winRect, cornerRadius: 2.5), with: .color(windowGold.opacity(0.52)))
                         }
                     }
+
+                    // Solid ground dock below horizon
+                    ctx.fill(Path(CGRect(x: 0, y: baseSkylineY, width: size.width, height: size.height - baseSkylineY)), with: .color(modernSil))
                 }
             }
         }
