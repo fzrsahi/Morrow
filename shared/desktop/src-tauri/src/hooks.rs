@@ -4,8 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use morrow_platform::hooks;
 #[cfg(unix)]
-use morrow_platform::hooks::{self, Paths};
+use morrow_platform::hooks::Paths;
 use morrow_platform::hooks::{Report, Status, TargetStatus};
 #[cfg(windows)]
 use morrow_platform::hooks_windows;
@@ -55,11 +56,12 @@ pub fn hooks_status(site: State<'_, HooksSite>) -> HooksSnapshot {
     {
         HooksSnapshot {
             status: hooks_windows::status(&windows_paths(&site), version.as_deref()),
-            // The other eight CLIs' files are read by the same core policy, but
-            // their Windows locations are #99's follow-up, not this ticket's:
-            // an entry pointing at `~/.codex/config.toml` on Windows would be a
-            // path that does not exist.
-            targets: Vec::new(),
+            // The other CLIs' files are `<home>/<target.path>` on both platforms
+            // — every one of them is a CLI that calls `os.homedir()`, and that is
+            // `%USERPROFILE%` here — so the same table and the same policy read
+            // them. What was Windows-specific was the *command* each entry names,
+            // and that lives in `hooks_windows`.
+            targets: hooks::targets_status(&site.paths),
             opencode: opencode::Status {
                 detected: false,
                 plugin_installed: false,
@@ -74,7 +76,7 @@ pub fn hooks_status(site: State<'_, HooksSite>) -> HooksSnapshot {
             yaml: Vec::new(),
             version,
             note: Some(
-                "On Windows this build hooks Claude Code only; the other eight targets arrive with their Windows paths."
+                "On Windows this build leaves OpenCode, Kimi and the YAML sources alone: their plugins and file formats are Unix paths today."
                     .to_owned(),
             ),
         }
@@ -199,11 +201,17 @@ pub fn target_install(
 ) -> Result<Option<Report>, String> {
     #[cfg(windows)]
     {
-        let _ = (site, source);
-        Err(
-            "The other eight targets have no Windows paths yet: that follows this build."
-                .to_owned(),
+        // The script first: a fork installed on a profile whose Claude hooks were
+        // never installed still needs the `.cmd` its entries name.
+        let paths = windows_paths(&site);
+        hooks_windows::ensure_script(&paths).map_err(|error| error.to_string())?;
+        hooks::install_target_with(
+            &site.paths,
+            &source,
+            &stamp(),
+            &hooks_windows::command(&paths),
         )
+        .map_err(|error| error.to_string())
     }
     #[cfg(unix)]
     {
@@ -217,18 +225,9 @@ pub fn target_uninstall(
     site: State<'_, HooksSite>,
     source: String,
 ) -> Result<Option<Report>, String> {
-    #[cfg(windows)]
-    {
-        let _ = (site, source);
-        Err(
-            "The other eight targets have no Windows paths yet: that follows this build."
-                .to_owned(),
-        )
-    }
-    #[cfg(unix)]
-    {
-        hooks::uninstall_target(&site.paths, &source).map_err(|error| error.to_string())
-    }
+    // No command needed: uninstall removes entries by recognising our own, and
+    // that test is the same on both platforms.
+    hooks::uninstall_target(&site.paths, &source).map_err(|error| error.to_string())
 }
 
 /// Remove: the script, the bridge, and our entries in `settings.json`.

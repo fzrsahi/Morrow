@@ -130,9 +130,26 @@ const CLI_DIRS: &[(&str, &str)] = &[
     ("qwen", ".qwen"),
 ];
 
-/// Install or repair one target. `None` when the CLI is not on this machine, or
-/// when its file does not parse as a JSON object (nothing is written then).
+/// Install or repair one target with the Unix hook command.
+///
+/// Targets are not a Unix-only idea: on Windows the same files sit at
+/// `%USERPROFILE%\<target.path>` and the same policy applies. What differs is the
+/// **command** each entry names — `~/.codeisland/codeisland-hook.sh` there,
+/// `…\morrow-hook.cmd` here — so the caller that knows its own shape passes it.
+/// `install_target` is the Unix answer and stays as the short form.
 pub fn install_target(paths: &Paths, source: &str, stamp: &str) -> Result<Option<Report>, Error> {
+    install_target_with(paths, source, stamp, claude_hooks::HOOK_COMMAND)
+}
+
+/// Install or repair one target, naming the command its hooks should carry.
+/// `None` when the CLI is not on this machine, or when its file does not parse as
+/// a JSON object (nothing is written then).
+pub fn install_target_with(
+    paths: &Paths,
+    source: &str,
+    stamp: &str,
+    command: &str,
+) -> Result<Option<Report>, Error> {
     let Some(target) = targets::target_for(source) else {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -144,7 +161,7 @@ pub fn install_target(paths: &Paths, source: &str, stamp: &str) -> Result<Option
     }
     let path = paths.home.join(target.path);
     let existing = read_text(&path)?;
-    let outcome = targets::install(target, existing.as_deref(), claude_hooks::HOOK_COMMAND)
+    let outcome = targets::install(target, existing.as_deref(), command)
         .ok_or_else(|| Error::UnparseableSettings(path.clone()))?;
 
     let mut report = Report::default();

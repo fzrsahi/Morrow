@@ -11,7 +11,6 @@
 
 use std::process::ExitCode;
 
-#[cfg(unix)]
 use morrow_platform::hooks;
 use morrow_platform::hooks::Report;
 use morrow_platform::kimi;
@@ -91,10 +90,20 @@ fn status(site: &HooksSite) {
     }
     #[cfg(windows)]
     {
-        let _ = site;
-        // The Windows build hooks [CC] only; the other eight arrive with their
-        // Windows paths (#99's follow-up), which is what Settings says too.
         println!("claude: {}", windows_state(site));
+        // The other CLIs' files are `<home>/<target.path>` here too, so the table
+        // is the same one Linux walks.
+        for target in hooks::targets_status(&site.paths) {
+            println!(
+                "{}: {}",
+                target.source,
+                match (target.detected, target.installed) {
+                    (false, _) => "not-detected",
+                    (true, true) => "installed",
+                    (true, false) => "absent",
+                }
+            );
+        }
     }
     let opencode = opencode::status(&site.opencode);
     println!(
@@ -197,10 +206,26 @@ fn target(site: &HooksSite, source: &str, install: bool) -> Result<(), String> {
 
 #[cfg(windows)]
 fn target(site: &HooksSite, source: &str, install: bool) -> Result<(), String> {
-    let _ = (site, install);
-    Err(format!(
-        "{source}: no Windows path for this source yet (#234)"
-    ))
+    let report = if install {
+        // `--hooks install` for a fork must leave the `.cmd` behind too, or the
+        // command it writes names a file that is not there.
+        let paths = crate::hooks::windows_paths(site);
+        morrow_platform::hooks_windows::ensure_script(&paths).map_err(|error| error.to_string())?;
+        hooks::install_target_with(
+            &site.paths,
+            source,
+            &crate::hooks::stamp(),
+            &morrow_platform::hooks_windows::command(&paths),
+        )
+    } else {
+        hooks::uninstall_target(&site.paths, source)
+    };
+    report
+        .map(|report| match report {
+            None => println!("{source}: not-detected"),
+            Some(report) => print_report(source, &report),
+        })
+        .map_err(|error| error.to_string())
 }
 
 /// Every source this machine has, in table order, so a caller does not have to
@@ -255,7 +280,19 @@ fn status_sources(site: &HooksSite) -> Vec<(String, &'static str)> {
         }
     }
     #[cfg(windows)]
-    sources.push(("claude".to_owned(), windows_state(site)));
+    {
+        sources.push(("claude".to_owned(), windows_state(site)));
+        for target in hooks::targets_status(&site.paths) {
+            sources.push((
+                target.source.to_owned(),
+                match (target.detected, target.installed) {
+                    (false, _) => "not-detected",
+                    (true, true) => "installed",
+                    (true, false) => "absent",
+                },
+            ));
+        }
+    }
     let opencode = opencode::status(&site.opencode);
     sources.push((
         "opencode".to_owned(),
