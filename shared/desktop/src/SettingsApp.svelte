@@ -8,7 +8,14 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
+  import PrayerPage from './lib/components/PrayerPage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
+  import {
+    DEFAULT_PRAYER_SETTINGS,
+    prayerSettingsFromSettings,
+    type PrayerCity,
+    type PrayerSettings,
+  } from './lib/prayer';
   import {
     DEFAULT_APPEARANCE,
     SETTINGS_NAV,
@@ -39,6 +46,8 @@
   let capabilities = $state<CapabilityRow[]>([]);
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
+  let prayer = $state<PrayerSettings>({ ...DEFAULT_PRAYER_SETTINGS });
+  let cities = $state<PrayerCity[]>([]);
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -50,16 +59,19 @@
 
   async function load() {
     try {
-      const [h, c, a, stored] = await Promise.all([
+      const [h, c, a, stored, availableCities] = await Promise.all([
         invoke<HooksSnapshot>('hooks_status'),
         invoke<CapabilityRow[]>('capabilities'),
         invoke<AutostartStatus>('autostart_status'),
         invoke<unknown>('settings_load'),
+        invoke<PrayerCity[]>('prayer_cities'),
       ]);
       hooks = h;
       capabilities = c;
       autostart = a;
       appearance = appearanceFromSettings(stored);
+      prayer = prayerSettingsFromSettings(stored);
+      cities = availableCities;
       applyAppearance();
       error = null;
     } catch (cause) {
@@ -140,6 +152,12 @@
         />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} />
+      {:else if page === 'prayer'}
+        <PrayerPage
+          settings={prayer}
+          {cities}
+          onChange={(key, value) => run(() => invoke('prayer_settings_set', { key, value }))}
+        />
       {:else if page === 'about'}
         <AboutPage />
       {/if}

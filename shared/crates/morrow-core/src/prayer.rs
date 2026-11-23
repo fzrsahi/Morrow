@@ -18,11 +18,13 @@
 //! Haversine reverse geocoding and the longitude-band UTC offset fallback.
 
 pub mod cities;
+pub mod wake;
 
 pub use cities::{
     OfflineCity, all_cities, city_by_id, city_by_name, closest_city, default_city,
     haversine_distance_kilometers,
 };
+pub use wake::{PrayerMilestone, PrayerWakePolicy};
 
 use serde::{Deserialize, Serialize};
 
@@ -56,6 +58,31 @@ pub struct YearMonthDay {
 impl YearMonthDay {
     pub fn new(year: i32, month: i32, day: i32) -> Self {
         Self { year, month, day }
+    }
+
+    /// The local calendar day containing an epoch instant at the given UTC
+    /// offset. The inverse of `julian_day` for a day's start; integer-only so
+    /// no time zone database or wall clock is consulted. Used by the shell to
+    /// pick the schedule to display for an injected "now".
+    pub fn from_epoch_seconds(epoch_seconds: i64, utc_offset_seconds: i32) -> Self {
+        // Days since 1970-01-01, shifted to the civil calendar's day-zero of
+        // 0000-03-01 (Howard Hinnant's days_from_civil inverse).
+        let local_day = (epoch_seconds + utc_offset_seconds as i64).div_euclid(86_400);
+        let z = local_day + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let day_of_era = z - era * 146_097;
+        let year_of_era =
+            (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let year = year_of_era + era * 400;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_prime = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+        let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+        Self::new(
+            (year + if month <= 2 { 1 } else { 0 }) as i32,
+            month as i32,
+            day as i32,
+        )
     }
 }
 
@@ -160,6 +187,20 @@ impl PrayerType {
         Self::Maghrib,
         Self::Isya,
     ];
+
+    /// The serde/wire key of this milestone (`"subuh"`, `"maghrib"`, …).
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Imsak => "imsak",
+            Self::Subuh => "subuh",
+            Self::Terbit => "terbit",
+            Self::Dhuha => "dhuha",
+            Self::Dzuhur => "dzuhur",
+            Self::Ashar => "ashar",
+            Self::Maghrib => "maghrib",
+            Self::Isya => "isya",
+        }
+    }
 
     pub fn display_name(self) -> &'static str {
         match self {
@@ -861,6 +902,32 @@ mod tests {
         assert_eq!(julian_day(2026, 1, 15.0), 2_461_055.5);
         // January and February roll into the previous year, month + 12.
         assert_eq!(julian_day(2026, 2, 1.0), julian_day(2025, 14, 1.0));
+    }
+
+    #[test]
+    fn year_month_day_from_epoch_seconds_uses_the_injected_offset() {
+        let day = YearMonthDay::new(2026, 1, 15);
+        let start = ((julian_day(2026, 1, 15.0) - julian_day(1970, 1, 1.0)) * 86_400.0).round()
+            as i64
+            - 25_200;
+        assert_eq!(YearMonthDay::from_epoch_seconds(start, 25_200), day);
+        assert_eq!(
+            YearMonthDay::from_epoch_seconds(start + 86_399, 25_200),
+            day
+        );
+        assert_eq!(
+            YearMonthDay::from_epoch_seconds(start - 1, 25_200),
+            YearMonthDay::new(2026, 1, 14)
+        );
+        assert_eq!(
+            YearMonthDay::from_epoch_seconds(start + 86_400, 25_200),
+            YearMonthDay::new(2026, 1, 16)
+        );
+        // The same instant is still the previous UTC day at offset zero.
+        assert_eq!(
+            YearMonthDay::from_epoch_seconds(start + 10_000, 0),
+            YearMonthDay::new(2026, 1, 14)
+        );
     }
 
     #[test]

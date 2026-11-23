@@ -16,6 +16,7 @@ export type SettingsPageId =
   | 'shortcuts'
   | 'agents'
   | 'music'
+  | 'prayer'
   | 'behavior'
   | 'hooks'
   | 'capabilities'
@@ -44,6 +45,7 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
     items: [
       { id: 'agents', label: 'Agents', icon: 'agents', available: false },
       { id: 'music', label: 'Music', icon: 'music', available: false },
+      { id: 'prayer', label: 'Prayer times', icon: 'workspace', available: true },
     ],
   },
   {
@@ -71,6 +73,11 @@ export const SETTINGS_KEYS = {
   /** #185: the filter choice and row density live in the same document. */
   sessionFilter: 'sessionFilter',
   sessionDensity: 'sessionDensity',
+  /** #307 — the four keys owned by the Prayer settings page. */
+  prayerCityId: 'prayerManualCityId',
+  prayerMethod: 'prayerCalculationMethod',
+  prayerCorrectionMinutes: 'prayerCorrectionMinutes',
+  prayerHijriSource: 'prayerHijriCalendarSource',
 } as const;
 
 export type AppearanceSettings = {
