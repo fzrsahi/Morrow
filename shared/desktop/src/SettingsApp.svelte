@@ -8,6 +8,7 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
+  import BehaviorPage from './lib/components/BehaviorPage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
   import {
     DEFAULT_APPEARANCE,
@@ -16,6 +17,10 @@
     type AppearanceSettings,
     type SettingsPageId,
   } from './lib/settings';
+  import {
+    followUpMinutesFromSettings,
+    SETTINGS_KEY_FOLLOW_UP_MINUTES,
+  } from './lib/reminders';
   import { cssVariables } from './lib/tokens';
   import type {
     AutostartStatus,
@@ -39,6 +44,7 @@
   let capabilities = $state<CapabilityRow[]>([]);
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
+  let followUpMinutes = $state(1);
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -60,6 +66,9 @@
       capabilities = c;
       autostart = a;
       appearance = appearanceFromSettings(stored);
+      followUpMinutes = followUpMinutesFromSettings(
+        (stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
+      );
       applyAppearance();
       error = null;
     } catch (cause) {
@@ -83,6 +92,11 @@
     const next = { ...appearance, [key]: value } as AppearanceSettings;
     appearance = next;
     applyAppearance();
+    void run(() => invoke('settings_set', { key, value }), false);
+  }
+
+  function saveFollowUpMinutes(key: string, value: number) {
+    followUpMinutes = value;
     void run(() => invoke('settings_set', { key, value }), false);
   }
 
@@ -140,6 +154,8 @@
         />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} />
+      {:else if page === 'behavior'}
+        <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
       {:else if page === 'about'}
         <AboutPage />
       {/if}

@@ -49,7 +49,7 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
   {
     group: 'Morrow',
     items: [
-      { id: 'behavior', label: 'Behavior', icon: 'workspace', available: false },
+      { id: 'behavior', label: 'Behavior', icon: 'workspace', available: true },
       { id: 'hooks', label: 'Hooks', icon: 'checkmark', available: true },
       { id: 'capabilities', label: 'Capabilities', icon: 'workspace', available: true },
       { id: 'about', label: 'About', icon: 'settings', available: true },
