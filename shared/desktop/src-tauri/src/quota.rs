@@ -15,7 +15,9 @@
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use morrow_core::quota::{ChipMode, Kind, Level, QuotaError, Snapshot as CoreSnapshot, Tone};
+use morrow_core::quota::{
+    ChipMode, Credential, Kind, Level, QuotaError, Snapshot as CoreSnapshot, Tone,
+};
 use morrow_core::reduce::Timestamp;
 use morrow_platform::quota::{FetchAction, QuotaFetcher};
 use morrow_platform::runner::SystemRunner;
@@ -80,10 +82,37 @@ impl QuotaSnapshotView {
     }
 }
 
+/// The seam the IPC boundary needs: the command can be exercised with a fake
+/// source instead of a real HOME and a real `curl` (#308 review).
+pub trait QuotaSource: Send {
+    fn read_credentials(&self) -> Result<Option<Credential>, String>;
+    fn fetch_if_due(
+        &mut self,
+        now: Timestamp,
+        credential: &Credential,
+        wants_live: bool,
+    ) -> FetchAction;
+}
+
+impl<R: morrow_platform::runner::Runner + Send> QuotaSource for QuotaFetcher<R> {
+    fn read_credentials(&self) -> Result<Option<Credential>, String> {
+        QuotaFetcher::read_credentials(self)
+    }
+
+    fn fetch_if_due(
+        &mut self,
+        now: Timestamp,
+        credential: &Credential,
+        wants_live: bool,
+    ) -> FetchAction {
+        QuotaFetcher::fetch_if_due(self, now, credential, wants_live)
+    }
+}
+
 /// The fetcher owns the scheduler; the last view lets a throttled call repeat
 /// the numbers we already have instead of showing a spinner or a fake zero.
 pub struct QuotaState {
-    fetcher: QuotaFetcher<SystemRunner>,
+    source: Box<dyn QuotaSource>,
     last: Option<QuotaSnapshotView>,
 }
 
@@ -92,9 +121,14 @@ pub type ManagedQuota = Mutex<QuotaState>;
 /// Build the managed state from the real HOME already resolved for the hooks.
 pub fn new_state(site: &HooksSite) -> ManagedQuota {
     Mutex::new(QuotaState {
-        fetcher: QuotaFetcher::new(SystemRunner, site.paths.home.clone()),
+        source: Box::new(QuotaFetcher::new(SystemRunner, site.paths.home.clone())),
         last: None,
     })
+}
+
+#[cfg(test)]
+pub fn state_with_source(source: Box<dyn QuotaSource>) -> ManagedQuota {
+    Mutex::new(QuotaState { source, last: None })
 }
 
 impl QuotaState {
@@ -236,39 +270,42 @@ pub fn quota_snapshot(state: State<'_, ManagedQuota>) -> Result<QuotaSnapshotVie
     let mut state = state
         .lock()
         .map_err(|_| "quota state is unavailable".to_owned())?;
-    let now = clock_now();
+    Ok(snapshot_with(&mut state, clock_now()))
+}
 
-    let credential = match state.fetcher.read_credentials() {
+/// The command's whole decision, with the clock injected. Tests drive this with
+/// a fake `QuotaSource`; no HOME, network or Tauri runtime is involved.
+fn snapshot_with(state: &mut QuotaState, now: Timestamp) -> QuotaSnapshotView {
+    let credential = match state.source.read_credentials() {
         Ok(Some(credential)) => credential,
         Ok(None) => {
-            return Ok(state.remember(QuotaSnapshotView::problem(
+            return state.remember(QuotaSnapshotView::problem(
                 QuotaStatus::NotConnected,
                 NOT_CONNECTED,
-            )));
+            ));
         }
         // The reader's own error names a path, never a token; keep the
         // sentence fixed anyway so nothing from disk reaches the webview.
         Err(_) => {
-            return Ok(state.remember(QuotaSnapshotView::problem(
+            return state.remember(QuotaSnapshotView::problem(
                 QuotaStatus::Unavailable,
                 CREDENTIALS_UNREADABLE,
-            )));
+            ));
         }
     };
 
-    match state.fetcher.fetch_if_due(now, &credential, true) {
+    match state.source.fetch_if_due(now, &credential, true) {
         // Throttled or paused: the numbers on screen are the last ones we got.
-        FetchAction::Skipped => Ok(state.last.clone().unwrap_or_else(|| {
-            QuotaSnapshotView::problem(QuotaStatus::Unavailable, SERVICE_ERROR)
-        })),
-        FetchAction::Fetched(Ok(snapshot)) => {
-            Ok(state.remember(view_from_snapshot(&snapshot, now)))
-        }
-        FetchAction::Fetched(Err(error)) => Ok(state.remember(view_from_error(&error))),
-        FetchAction::Error(error) => Ok(state.remember(QuotaSnapshotView::problem(
+        FetchAction::Skipped => state
+            .last
+            .clone()
+            .unwrap_or_else(|| QuotaSnapshotView::problem(QuotaStatus::Unavailable, SERVICE_ERROR)),
+        FetchAction::Fetched(Ok(snapshot)) => state.remember(view_from_snapshot(&snapshot, now)),
+        FetchAction::Fetched(Err(error)) => state.remember(view_from_error(&error)),
+        FetchAction::Error(error) => state.remember(QuotaSnapshotView::problem(
             QuotaStatus::Unavailable,
             scrub(&error, &credential.access_token),
-        ))),
+        )),
     }
 }
 
@@ -294,6 +331,79 @@ mod tests {
 
     fn json(view: &QuotaSnapshotView) -> String {
         serde_json::to_string(view).expect("a serializable view")
+    }
+
+    /// A source with no HOME and no network: the same seam the command uses.
+    struct FakeSource {
+        credential: Option<Credential>,
+        action: FetchAction,
+        calls: std::cell::Cell<usize>,
+    }
+
+    impl FakeSource {
+        fn credential() -> Credential {
+            Credential {
+                access_token: TOKEN.to_owned(),
+                subscription_type: Some("max".to_owned()),
+                expires_at: None,
+            }
+        }
+    }
+
+    impl QuotaSource for FakeSource {
+        fn read_credentials(&self) -> Result<Option<Credential>, String> {
+            Ok(self.credential.clone())
+        }
+
+        fn fetch_if_due(
+            &mut self,
+            _now: Timestamp,
+            _credential: &Credential,
+            _wants_live: bool,
+        ) -> FetchAction {
+            self.calls.set(self.calls.get() + 1);
+            // A fake cannot move a stored action out; rebuild the equivalent.
+            match &self.action {
+                FetchAction::Skipped => FetchAction::Skipped,
+                FetchAction::Fetched(Ok(snapshot)) => FetchAction::Fetched(Ok(snapshot.clone())),
+                FetchAction::Fetched(Err(error)) => FetchAction::Fetched(Err(*error)),
+                FetchAction::Error(error) => FetchAction::Error(error.clone()),
+            }
+        }
+    }
+
+    #[test]
+    fn quota_snapshot_decision_runs_with_an_injected_fetcher() {
+        // #308 review: the command's decision is exercised end to end with a
+        // fake source — no HOME, no curl, no Tauri runtime.
+        let source = FakeSource {
+            credential: Some(FakeSource::credential()),
+            action: FetchAction::Fetched(Ok(CoreSnapshot {
+                limits: vec![limit(Kind::Session, "warning", 42.0, Some(1800.0))],
+                fetched_at: now(),
+            })),
+            calls: std::cell::Cell::new(0),
+        };
+        let managed = state_with_source(Box::new(source));
+        let mut state = managed.lock().expect("state");
+        let view = snapshot_with(&mut state, now());
+        assert_eq!(view.status, QuotaStatus::Ok);
+        assert_eq!(view.limits.as_ref().map(Vec::len), Some(1));
+        assert_eq!(view.limits.as_ref().unwrap()[0].percent, 42.0);
+        let wire = json(&view);
+        assert!(!wire.contains(TOKEN), "token leaked into the view");
+        drop(state);
+
+        let managed = state_with_source(Box::new(FakeSource {
+            credential: None,
+            action: FetchAction::Skipped,
+            calls: std::cell::Cell::new(0),
+        }));
+        let mut state = managed.lock().expect("state");
+        let view = snapshot_with(&mut state, now());
+        assert_eq!(view.status, QuotaStatus::NotConnected);
+        assert!(view.limits.is_none(), "no numbers without a credential");
+        assert!(!json(&view).contains(TOKEN));
     }
 
     fn stored_mode(raw: &str) -> Value {
