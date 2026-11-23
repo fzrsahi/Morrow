@@ -128,13 +128,7 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
         ".omp/agent/extensions/codeisland.ts",
         ".omp",
     ));
-    rows.push(extension_status(
-        paths,
-        "openclaw",
-        "OpenClaw",
-        ".openclaw/codeisland-plugin/index.ts",
-        ".openclaw",
-    ));
+    rows.push(openclaw_status(paths));
     rows.push(dsh_status(paths));
     rows
 }
@@ -266,7 +260,17 @@ pub fn install_target_with(
         "mimo" => return install_mimo(paths, stamp),
         "pi" => return install_extension(paths, "pi", stamp, crate::plugins::PI),
         "omp" => return install_extension(paths, "omp", stamp, crate::plugins::OMP),
-        "openclaw" => return install_extension(paths, "openclaw", stamp, crate::plugins::OPENCLAW),
+        "openclaw" => {
+            let installed = install_extension(paths, "openclaw", stamp, crate::plugins::OPENCLAW)?;
+            // The file is only half of it: the gateway loads what its config names,
+            // so an unregistered plugin is a file nothing reads.
+            let registration = register_openclaw(paths, stamp)?;
+            return Ok(installed.map(|mut report| {
+                report.settings_changed |= registration.settings_changed;
+                report.backup = report.backup.or(registration.backup);
+                report
+            }));
+        }
         // Nothing to write: AiWork has no hooks, so "install" is the row itself.
         "aiwork" | "aiwork-cli" => return Ok(Some(Report::default())),
         // The plugin is third-party; the row is the feature.
@@ -332,7 +336,21 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
         "minimax" => return uninstall_minimax(paths),
         "cline" => return uninstall_cline(paths),
         "mimo" => return uninstall_mimo(paths),
-        "pi" | "omp" | "openclaw" => return uninstall_extension(paths, source),
+        "pi" | "omp" => return uninstall_extension(paths, source),
+        "openclaw" => {
+            let removed = uninstall_extension(paths, source)?;
+            let config = openclaw_config_path(paths);
+            if let Some(existing) = read_text(&config)? {
+                if let Some(outcome) = morrow_core::installer::openclaw::unregister(&existing) {
+                    fs::write(&config, &outcome.text)?;
+                    return Ok(Some(Report {
+                        settings_changed: true,
+                        ..removed.unwrap_or_default()
+                    }));
+                }
+            }
+            return Ok(removed);
+        }
         // Nothing of ours to remove: the plugin is the user's.
         "dsh" => return Ok(None),
         "aiwork" | "aiwork-cli" => return Ok(None),
@@ -755,6 +773,52 @@ fn uninstall_extension(paths: &Paths, source: &str) -> Result<Option<Report>, Er
         settings_changed: true,
         ..Report::default()
     }))
+}
+
+/// OpenClaw: the plugin file **and** its registration (#234 batch 4b).
+///
+/// `installed` needs both. A plugin on disk that the gateway never loads is the
+/// silent half-install this whole batch keeps finding.
+pub fn openclaw_status(paths: &Paths) -> TargetStatus {
+    let plugin = paths.home.join(".openclaw/codeisland-plugin/index.ts");
+    let config = openclaw_config_path(paths);
+    let file_installed = read_text(&plugin)
+        .ok()
+        .flatten()
+        .is_some_and(|text| morrow_core::installer::extension::is_ours(&text));
+    let registered = read_text(&config)
+        .ok()
+        .flatten()
+        .is_some_and(|text| morrow_core::installer::openclaw::is_registered(&text));
+    TargetStatus {
+        source: "openclaw",
+        name: "OpenClaw",
+        detected: paths.home.join(".openclaw").is_dir(),
+        installed: file_installed && registered,
+        path: paths.home.join(".openclaw/codeisland-plugin"),
+    }
+}
+
+fn openclaw_config_path(paths: &Paths) -> PathBuf {
+    paths.home.join(".openclaw/openclaw.json")
+}
+
+fn register_openclaw(paths: &Paths, stamp: &str) -> Result<Report, Error> {
+    let plugin = paths.home.join(".openclaw/codeisland-plugin");
+    let config = openclaw_config_path(paths);
+    let existing = read_text(&config)?;
+    let outcome =
+        morrow_core::installer::openclaw::register(existing.as_deref(), &plugin.to_string_lossy())
+            .ok_or_else(|| Error::UnparseableSettings(config.clone()))?;
+    let mut report = Report::default();
+    if outcome.changed {
+        if existing.is_some() {
+            report.backup = back_up(&config, stamp)?;
+        }
+        fs::write(&config, &outcome.text)?;
+        report.settings_changed = true;
+    }
+    Ok(report)
 }
 
 /// DSH is bridged by a third-party plugin the user installs themselves

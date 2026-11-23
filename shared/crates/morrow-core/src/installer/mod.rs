@@ -15,6 +15,7 @@ pub mod json_editor;
 pub mod kimi;
 pub mod mimo;
 pub mod minimax;
+pub mod openclaw;
 pub mod opencode;
 pub mod settings;
 pub mod targets;
