@@ -637,6 +637,260 @@ pub mod transcript_files {
     }
 }
 
+/// Timestamps, parsed the one way every store here needs (#279).
+///
+/// Not a general ISO 8601 implementation: Grok, Kiro and Cline write
+/// `YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)` and nothing else, and a full parser would
+/// be more surface than the three callers need.
+pub mod time {
+    /// Milliseconds since the Unix epoch. `None` for anything that is not the
+    /// shape above — a guess here would put a session in the wrong order.
+    pub fn parse_iso8601_ms(text: &str) -> Option<u64> {
+        let text = text.trim();
+        let bytes = text.as_bytes();
+        if bytes.len() < 19 {
+            return None;
+        }
+        let year: i64 = text.get(0..4)?.parse().ok()?;
+        let month: u32 = text.get(5..7)?.parse().ok()?;
+        let day: u32 = text.get(8..10)?.parse().ok()?;
+        let hour: i64 = text.get(11..13)?.parse().ok()?;
+        let minute: i64 = text.get(14..16)?.parse().ok()?;
+        let second: i64 = text.get(17..19)?.parse().ok()?;
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+            return None;
+        }
+        // The separators are checked rather than skipped: nineteen digits parse
+        // field by field and are not a timestamp.
+        if bytes[4] != b'-' || bytes[7] != b'-' {
+            return None;
+        }
+        if bytes[10] != b'T' && bytes[10] != b' ' {
+            return None;
+        }
+        if bytes[13] != b':' || bytes[16] != b':' {
+            return None;
+        }
+
+        let mut rest = &text[19..];
+        let mut millis: u64 = 0;
+        if let Some(fraction) = rest.strip_prefix('.') {
+            let digits: String = fraction.chars().take_while(char::is_ascii_digit).collect();
+            if digits.is_empty() {
+                return None;
+            }
+            // `.5` is half a second, not five milliseconds.
+            let scaled = format!("{digits:0<3}");
+            millis = scaled.get(0..3)?.parse().ok()?;
+            rest = &fraction[digits.len()..];
+        }
+
+        let offset_seconds: i64 = match rest {
+            "" | "Z" | "z" => 0,
+            _ => {
+                let (sign, tail) = match rest.split_at(1) {
+                    ("+", tail) => (1, tail),
+                    ("-", tail) => (-1, tail),
+                    _ => return None,
+                };
+                let tail = tail.strip_suffix(['Z', 'z']).unwrap_or(tail);
+                let (hours, minutes) = tail.split_once(':')?;
+                let hours: i64 = hours.parse().ok()?;
+                let minutes: i64 = minutes.parse().ok()?;
+                sign * (hours * 3600 + minutes * 60)
+            }
+        };
+
+        let days = days_from_civil(year, month, day);
+        let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_seconds;
+        if seconds < 0 {
+            return None;
+        }
+        Some(seconds as u64 * 1_000 + millis)
+    }
+
+    /// Howard Hinnant's `days_from_civil`: days since 1970-01-01, for a proleptic
+    /// Gregorian date. Written out rather than pulled in, because the alternative
+    /// is a date crate for three callers.
+    fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+        let year = if month <= 2 { year - 1 } else { year };
+        let era = if year >= 0 { year } else { year - 399 } / 400;
+        let year_of_era = year - era * 400;
+        let month_prime = (month as i64 + 9) % 12;
+        let day_of_year = (153 * month_prime + 2) / 5 + day as i64 - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        era * 146_097 + day_of_era - 719_468
+    }
+}
+
+/// GitHub Copilot CLI sessions (#279): `~/.copilot/session-state/<id>/events.jsonl`,
+/// where the event stream itself records which cwd the session belongs to.
+pub mod copilot {
+    use super::ChatMessage;
+
+    /// Whether the head of an event stream belongs to `cwd`.
+    ///
+    /// Two events carry it: `session.start` under `data.context.cwd` and
+    /// `hook.start` under `data.input.cwd`. Either is enough — a session recorded
+    /// by a hook-only path has no `session.start`.
+    pub fn matches_cwd(head: &str, cwd: &str) -> bool {
+        for line in head.lines().filter(|line| !line.is_empty()) {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let kind = json.get("type").and_then(|kind| kind.as_str());
+            let data = json.get("data");
+            let found = match kind {
+                Some("session.start") => data
+                    .and_then(|data| data.get("context"))
+                    .and_then(|context| context.get("cwd")),
+                Some("hook.start") => data
+                    .and_then(|data| data.get("input"))
+                    .and_then(|input| input.get("cwd")),
+                _ => None,
+            };
+            if found.and_then(|found| found.as_str()) == Some(cwd) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The last three turns from an event stream, and the model if it names one.
+    ///
+    /// Copilot is the second agent whose model is spelled three ways
+    /// (`currentModel`, `model`, or the keys of `modelMetrics`); the first one seen
+    /// wins, as in the Swift reader.
+    pub fn recent_messages(tail: &str) -> (Option<String>, Vec<ChatMessage>) {
+        let mut model: Option<String> = None;
+        let mut turns: Vec<(usize, ChatMessage)> = Vec::new();
+        for (index, line) in tail.lines().filter(|line| !line.is_empty()).enumerate() {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let kind = json.get("type").and_then(|kind| kind.as_str());
+            let Some(payload) = json.get("data") else {
+                continue;
+            };
+            if model.is_none() {
+                model = ["currentModel", "model"]
+                    .into_iter()
+                    .find_map(|key| {
+                        payload
+                            .get(key)
+                            .and_then(|model| model.as_str())
+                            .filter(|model| !model.is_empty())
+                            .map(str::to_owned)
+                    })
+                    .or_else(|| {
+                        // `modelMetrics` is keyed by model name; the last key is the
+                        // one sorted last, which is what the Swift reader takes.
+                        let metrics = payload.get("modelMetrics")?.as_object()?;
+                        let mut keys: Vec<&String> = metrics.keys().collect();
+                        keys.sort();
+                        keys.last()
+                            .filter(|key| !key.is_empty())
+                            .map(|key| (*key).clone())
+                    });
+            }
+            let text = payload
+                .get("content")
+                .and_then(|content| content.as_str())
+                .filter(|text| !text.is_empty());
+            let Some(text) = text else { continue };
+            let is_user = match kind {
+                Some("user.message") => true,
+                Some("assistant.message") => false,
+                _ => continue,
+            };
+            turns.push((
+                index,
+                ChatMessage {
+                    is_user,
+                    text: text.to_owned(),
+                },
+            ));
+        }
+        let start = turns.len().saturating_sub(3);
+        (
+            model,
+            turns.split_off(start).into_iter().map(|(_, t)| t).collect(),
+        )
+    }
+}
+
+/// Grok CLI sessions (#279): `~/<GROK_HOME>/sessions/<percent-encoded cwd>/<id>/`.
+pub mod grok {
+    /// Grok percent-encodes the **whole** cwd into one path component, `/` as
+    /// `%2F`, so `/Users/me` becomes `%2FUsers%2Fme`.
+    ///
+    /// Unreserved characters only (`A-Z a-z 0-9 - . _ ~`), which is what
+    /// `addingPercentEncoding(withAllowedCharacters:)` is given on the Swift side.
+    /// A different allowed set produces a directory Grok never wrote, and the
+    /// reader then finds nothing while looking correct.
+    pub fn encoded_cwd(cwd: &str) -> String {
+        let mut encoded = String::with_capacity(cwd.len());
+        for byte in cwd.as_bytes() {
+            let keep = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~');
+            if keep {
+                encoded.push(*byte as char);
+            } else {
+                encoded.push_str(&format!("%{byte:02X}"));
+            }
+        }
+        encoded
+    }
+
+    /// What `summary.json` says about a session.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Summary {
+        pub session_id: Option<String>,
+        pub cwd: Option<String>,
+        pub model: Option<String>,
+        /// The newest of `last_active_at`, `updated_at`, `created_at`.
+        pub activity_at_ms: Option<u64>,
+    }
+
+    pub fn summary_metadata(summary_json: &str) -> Option<Summary> {
+        let json = serde_json::from_str::<serde_json::Value>(summary_json).ok()?;
+        let info = json.get("info");
+        let string = |value: Option<&serde_json::Value>| {
+            value
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        let activity = ["last_active_at", "updated_at", "created_at"]
+            .into_iter()
+            .filter_map(|key| {
+                super::time::parse_iso8601_ms(json.get(key).and_then(|v| v.as_str())?)
+            })
+            .max();
+        Some(Summary {
+            session_id: string(info.and_then(|info| info.get("id"))),
+            cwd: string(info.and_then(|info| info.get("cwd"))),
+            model: string(json.get("current_model_id")),
+            activity_at_ms: activity,
+        })
+    }
+
+    /// Grok mints UUIDv7 session ids, whose leading 48 bits are the creation time
+    /// in Unix milliseconds. That stands in for `created_at` when the summary has
+    /// none, and it is the only creation time an index-only session has.
+    pub fn creation_ms_from_session_id(session_id: &str) -> Option<u64> {
+        let hex: String = session_id.chars().filter(|c| *c != '-').collect();
+        if hex.len() != 32 {
+            return None;
+        }
+        let first_twelve = hex.get(0..12)?;
+        // Version 7 and the RFC 4122 variant, or this is not a time-ordered id.
+        if hex.get(12..13)? != "7" || !matches!(hex.get(16..17)?, "8" | "9" | "a" | "b") {
+            return None;
+        }
+        u64::from_str_radix(first_twelve, 16).ok()
+    }
+}
+
 /// Cline sessions (#278): the VS Code extension `saoudrizwan.claude-dev`.
 ///
 /// No process: Cline is an extension inside VS Code, so macOS gives it no pid
@@ -791,6 +1045,195 @@ pub mod flat_store {
             .and_then(|model| model.as_str())
             .filter(|model| !model.is_empty())
             .map(str::to_owned)
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::time::parse_iso8601_ms;
+
+    #[test]
+    fn a_utc_timestamp_is_milliseconds_since_the_epoch() {
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:01Z"), Some(1_000));
+        // A known instant, so a wrong epoch or a wrong leap-day rule shows up.
+        assert_eq!(
+            parse_iso8601_ms("2024-02-29T12:00:00Z"),
+            Some(1_709_208_000_000)
+        );
+    }
+
+    #[test]
+    fn a_fraction_is_a_fraction_of_a_second() {
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00.5Z"), Some(500));
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00.123Z"), Some(123));
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00.123456Z"), Some(123));
+    }
+
+    #[test]
+    fn an_offset_is_applied_rather_than_ignored() {
+        assert_eq!(
+            parse_iso8601_ms("1970-01-01T07:00:00+07:00"),
+            Some(0),
+            "Jakarta is seven hours ahead"
+        );
+        assert_eq!(parse_iso8601_ms("1969-12-31T19:00:00-05:00"), Some(0));
+    }
+
+    #[test]
+    fn a_space_instead_of_a_t_is_accepted_and_anything_else_is_not() {
+        assert_eq!(parse_iso8601_ms("1970-01-01 00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_ms(""), None);
+        assert_eq!(parse_iso8601_ms("1970-01-01"), None);
+        assert_eq!(parse_iso8601_ms("19700101T000000Z"), None);
+        assert_eq!(parse_iso8601_ms("not a timestamp"), None);
+        assert_eq!(parse_iso8601_ms("1970-13-01T00:00:00Z"), None, "month 13");
+    }
+}
+
+#[cfg(test)]
+mod grok_tests {
+    use super::grok;
+
+    #[test]
+    fn the_whole_cwd_becomes_one_encoded_component() {
+        assert_eq!(grok::encoded_cwd("/Users/me"), "%2FUsers%2Fme");
+        assert_eq!(
+            grok::encoded_cwd("/home/dev/project"),
+            "%2Fhome%2Fdev%2Fproject"
+        );
+        // Unreserved characters survive: a different allowed set reads a directory
+        // Grok never wrote.
+        assert_eq!(grok::encoded_cwd("/a/b-c.d_e~f"), "%2Fa%2Fb-c.d_e~f");
+        // A space is encoded, not turned into `-`: this is not Claude's encoding.
+        assert_eq!(grok::encoded_cwd("/a b"), "%2Fa%20b");
+    }
+
+    #[test]
+    fn the_summary_names_the_cwd_the_model_and_the_newest_activity() {
+        let json = r#"{
+            "info": {"id": "0192f0aa-7cbb-7000-8000-000000000000", "cwd": "/home/dev/p"},
+            "current_model_id": "grok-code-fast-1",
+            "created_at": "2025-11-22T10:00:00Z",
+            "updated_at": "2025-11-22T10:05:00Z",
+            "last_active_at": "2025-11-22T10:02:00Z"
+        }"#;
+        let summary = grok::summary_metadata(json).expect("a summary");
+        assert_eq!(summary.cwd.as_deref(), Some("/home/dev/p"));
+        assert_eq!(summary.model.as_deref(), Some("grok-code-fast-1"));
+        assert_eq!(
+            summary.activity_at_ms,
+            Some(1_763_805_900_000),
+            "updated_at is the newest of the three"
+        );
+    }
+
+    #[test]
+    fn an_empty_field_is_absent_rather_than_empty() {
+        let json = r#"{"info":{"id":"","cwd":""},"current_model_id":""}"#;
+        let summary = grok::summary_metadata(json).expect("a summary");
+        assert_eq!(summary.session_id, None);
+        assert_eq!(summary.cwd, None);
+        assert_eq!(summary.model, None);
+        assert_eq!(summary.activity_at_ms, None);
+        assert_eq!(grok::summary_metadata("not json"), None);
+    }
+
+    #[test]
+    fn a_uuidv7_carries_its_creation_time_in_the_first_48_bits() {
+        // 0x0192f0aa7cbb = 1_730_614_557_883 ms.
+        assert_eq!(
+            grok::creation_ms_from_session_id("0192f0aa-7cbb-7000-8000-000000000000"),
+            Some(1_730_614_557_883)
+        );
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_uuidv7_has_no_creation_time() {
+        // A client may pass its own id with `-s`, and a UUIDv4 has no time in it.
+        assert_eq!(grok::creation_ms_from_session_id("my-own-id"), None);
+        assert_eq!(
+            grok::creation_ms_from_session_id("2f0aa7cb-b123-4000-8000-000000000000"),
+            None,
+            "version 4, not 7"
+        );
+        assert_eq!(grok::creation_ms_from_session_id(""), None);
+    }
+}
+
+#[cfg(test)]
+mod copilot_tests {
+    use super::copilot;
+
+    fn events(lines: &[&str]) -> String {
+        lines.join("\n")
+    }
+
+    #[test]
+    fn a_session_start_names_its_cwd() {
+        let head =
+            events(&[r#"{"type":"session.start","data":{"context":{"cwd":"/home/dev/p"}}}"#]);
+        assert!(copilot::matches_cwd(&head, "/home/dev/p"));
+        assert!(!copilot::matches_cwd(&head, "/home/dev/other"));
+    }
+
+    #[test]
+    fn a_hook_only_session_names_its_cwd_too() {
+        // A session recorded through the hook path has no `session.start`.
+        let head = events(&[r#"{"type":"hook.start","data":{"input":{"cwd":"/home/dev/p"}}}"#]);
+        assert!(copilot::matches_cwd(&head, "/home/dev/p"));
+    }
+
+    #[test]
+    fn an_unreadable_head_matches_nothing() {
+        let head = events(&["not json", r#"{"type":"user.message","data":{}}"#]);
+        assert!(!copilot::matches_cwd(&head, "/home/dev/p"));
+        assert!(!copilot::matches_cwd("", ""));
+    }
+
+    #[test]
+    fn the_last_three_turns_keep_their_order() {
+        let tail = events(&[
+            r#"{"type":"user.message","data":{"content":"one"}}"#,
+            r#"{"type":"assistant.message","data":{"content":"two"}}"#,
+            r#"{"type":"user.message","data":{"content":"three"}}"#,
+            r#"{"type":"assistant.message","data":{"content":"four"}}"#,
+            r#"{"type":"user.message","data":{"content":"five"}}"#,
+        ]);
+        let (_, messages) = copilot::recent_messages(&tail);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "three");
+        assert!(messages[2].is_user);
+    }
+
+    #[test]
+    fn the_model_is_spelled_three_ways_and_the_first_one_wins() {
+        let tail = events(&[r#"{"type":"session.info","data":{"currentModel":"gpt-5"}}"#]);
+        assert_eq!(copilot::recent_messages(&tail).0.as_deref(), Some("gpt-5"));
+        let tail = events(&[r#"{"type":"session.info","data":{"model":"claude-sonnet"}}"#]);
+        assert_eq!(
+            copilot::recent_messages(&tail).0.as_deref(),
+            Some("claude-sonnet")
+        );
+        // `modelMetrics` is keyed by model name; the last key wins.
+        let tail = events(&[
+            r#"{"type":"session.info","data":{"modelMetrics":{"a-model":1,"b-model":2}}}"#,
+        ]);
+        assert_eq!(
+            copilot::recent_messages(&tail).0.as_deref(),
+            Some("b-model")
+        );
+    }
+
+    #[test]
+    fn a_content_that_is_not_a_string_is_skipped() {
+        let tail = events(&[
+            r#"{"type":"user.message","data":{"content":[{"type":"text","text":"no"}]}}"#,
+            r#"{"type":"user.message","data":{"content":"yes"}}"#,
+        ]);
+        let (_, messages) = copilot::recent_messages(&tail);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "yes");
     }
 }
 

@@ -503,6 +503,279 @@ impl ProcessReader for FlatStore {
     }
 }
 
+/// GitHub Copilot CLI (#279), found from a process.
+///
+/// `~/.copilot/session-state/<id>/events.jsonl`. The store directory is named by
+/// the session, not by the cwd — so the cwd has to be read **out of the event
+/// stream**, and the candidate list is walked newest-first until one matches.
+pub struct CopilotSessions {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+/// How many of the newest event streams are tried before giving up. Copilot keeps
+/// one directory per session forever, and a machine with a year of them would
+/// otherwise walk thousands to find one.
+pub const COPILOT_CANDIDATE_LIMIT: usize = 50;
+
+/// Five minutes, as macOS uses.
+pub const COPILOT_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for CopilotSessions {
+    fn source(&self) -> &'static str {
+        "copilot"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl CopilotSessions {
+    fn base(&self) -> PathBuf {
+        Path::new(&self.home).join(".copilot/session-state")
+    }
+
+    /// The newest event stream that names `cwd`, and started no earlier than the
+    /// process did.
+    fn session_for(&self, cwd: &str, started_ms: Option<u64>) -> Option<(String, String, u64)> {
+        // One directory per session, each holding its own `events.jsonl` — the
+        // store is named by session, not by cwd.
+        let base = self.base();
+        let mut files: Vec<(String, u64)> = std::fs::read_dir(&base)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path().join("events.jsonl");
+                let modified = transcript_files::mtime_ms(&path.to_string_lossy())?;
+                Some((path.to_string_lossy().into_owned(), modified))
+            })
+            .collect();
+        files.sort_by_key(|file| std::cmp::Reverse(file.1));
+        for (path, modified_ms) in files.into_iter().take(COPILOT_CANDIDATE_LIMIT) {
+            // Ten seconds of slack: a session writes its first event after the
+            // process has already been recorded as started.
+            if let Some(started_ms) = started_ms {
+                if modified_ms.saturating_add(10_000) < started_ms {
+                    continue;
+                }
+            }
+            let Some(head) = read_head(Path::new(&path), 32_768) else {
+                continue;
+            };
+            if !morrow_core::discovery::copilot::matches_cwd(&head, cwd) {
+                continue;
+            }
+            let Some(session_id) = Path::new(&path)
+                .parent()
+                .and_then(|directory| directory.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+            else {
+                continue;
+            };
+            return Some((session_id, path, modified_ms));
+        }
+        None
+    }
+}
+
+impl ProcessReader for CopilotSessions {
+    fn source(&self) -> &'static str {
+        "copilot"
+    }
+
+    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        let Some((session_id, path, modified_ms)) = self.session_for(cwd, process.start_time_ms)
+        else {
+            return Vec::new();
+        };
+        if self.now_ms.saturating_sub(modified_ms) > COPILOT_FRESHNESS_MS {
+            return Vec::new();
+        }
+        let (model, recent_messages) = read_tail(Path::new(&path))
+            .map(|tail| morrow_core::discovery::copilot::recent_messages(&tail))
+            .unwrap_or_default();
+        vec![DiscoveryHit {
+            session_id,
+            source: "copilot",
+            cwd: cwd.to_owned(),
+            tty: None,
+            model,
+            pid: Some(process.pid),
+            modified_at: Some(modified_ms),
+            recent_messages,
+            transcript_path: Some(path),
+        }]
+    }
+}
+
+/// Grok CLI (#279), found from a process.
+///
+/// `$GROK_HOME/sessions/<percent-encoded cwd>/<session dir>/`, where the summary
+/// names the cwd, the model and the last activity. Grok's
+/// `session_search.sqlite` is **not** read: it indexes sessions whose transcript
+/// is gone or absent, and a card with no transcript is a card that cannot be
+/// shown — every row it adds would be empty.
+pub struct GrokSessions {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+/// Five minutes, as macOS uses.
+pub const GROK_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for GrokSessions {
+    fn source(&self) -> &'static str {
+        "grok"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl GrokSessions {
+    /// `GROK_HOME` first: a second account keeps its own store, and reading only
+    /// `~/.grok` would show the wrong account's sessions.
+    fn homes(&self) -> Vec<PathBuf> {
+        match std::env::var("GROK_HOME") {
+            Ok(root) if !root.trim().is_empty() => vec![PathBuf::from(root.trim())],
+            _ => vec![Path::new(&self.home).join(".grok")],
+        }
+    }
+}
+
+impl ProcessReader for GrokSessions {
+    fn source(&self) -> &'static str {
+        "grok"
+    }
+
+    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        let encoded = morrow_core::discovery::grok::encoded_cwd(cwd);
+        let mut best: Option<(String, String, String, u64, Option<String>)> = None;
+        for home in self.homes() {
+            let cwd_directory = home.join("sessions").join(&encoded);
+            let Ok(entries) = std::fs::read_dir(&cwd_directory) else {
+                continue;
+            };
+            for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
+                let directory = entry.path();
+                let Ok(summary_json) = std::fs::read_to_string(directory.join("summary.json"))
+                else {
+                    continue;
+                };
+                let Some(summary) = morrow_core::discovery::grok::summary_metadata(&summary_json)
+                else {
+                    continue;
+                };
+                // The directory is keyed by cwd, but the summary says so itself:
+                // trusting the key alone would take a session whose cwd moved.
+                if summary.cwd.as_deref() != Some(cwd) {
+                    continue;
+                }
+                let session_id = summary
+                    .session_id
+                    .clone()
+                    .or_else(|| {
+                        entry
+                            .file_name()
+                            .to_str()
+                            .filter(|name| !name.is_empty())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_default();
+                if session_id.is_empty() {
+                    continue;
+                }
+                let Some(activity_ms) = summary.activity_at_ms else {
+                    continue;
+                };
+                if let Some(started_ms) = process.start_time_ms {
+                    if activity_ms < started_ms.saturating_sub(10_000) {
+                        continue;
+                    }
+                }
+                let chat = directory.join("chat_history.jsonl");
+                let chat_path = chat.is_file().then(|| chat.to_string_lossy().into_owned());
+                match &best {
+                    Some((_, _, _, best_ms, _)) if *best_ms >= activity_ms => {}
+                    _ => {
+                        best = Some((
+                            session_id,
+                            cwd.to_owned(),
+                            chat_path.clone().unwrap_or_default(),
+                            activity_ms,
+                            summary.model,
+                        ))
+                    }
+                }
+            }
+        }
+        let Some((session_id, _, chat_path, activity_ms, model)) = best else {
+            return Vec::new();
+        };
+        if self.now_ms.saturating_sub(activity_ms) > GROK_FRESHNESS_MS {
+            return Vec::new();
+        }
+        // An index-only session has no transcript once chat_history is missing;
+        // there is nothing to tail and nothing to show.
+        let Some(chat_path) = Some(chat_path).filter(|path| !path.is_empty()) else {
+            return Vec::new();
+        };
+        let recent_messages = read_tail(Path::new(&chat_path))
+            .and_then(|tail| {
+                let name = Path::new(&chat_path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                morrow_core::discovery::read_transcript_tail(&tail, &name)
+            })
+            .map(|summary| summary.recent_messages)
+            .unwrap_or_default();
+        vec![DiscoveryHit {
+            session_id,
+            source: "grok",
+            cwd: cwd.to_owned(),
+            tty: None,
+            model,
+            pid: Some(process.pid),
+            modified_at: Some(activity_ms),
+            recent_messages,
+            transcript_path: Some(chat_path),
+        }]
+    }
+}
+
+/// The first `limit` bytes of a file, for a store that names the session rather
+/// than the cwd.
+fn read_head(path: &Path, limit: u64) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = Vec::new();
+    file.by_ref().take(limit).read_to_end(&mut buffer).ok()?;
+    Some(String::from_utf8_lossy(&buffer).into_owned())
+}
+
 /// A `.worktrees/` or `-worktree` checkout a subagent was given: it is not a
 /// project the user opened, so a card for it would be a card nobody asked for.
 fn is_subagent_worktree(cwd: &str) -> bool {
@@ -819,8 +1092,17 @@ pub fn scan_with(
         source: "droid",
         now_ms,
     };
-    let process_readers: Vec<&dyn ProcessReader> =
-        vec![&cursor, &gemini, &qoder, &codebuddy, &droid];
+    let copilot = CopilotSessions {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let grok = GrokSessions {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let process_readers: Vec<&dyn ProcessReader> = vec![
+        &cursor, &gemini, &qoder, &codebuddy, &droid, &copilot, &grok,
+    ];
     scan::run_all(
         readers,
         &process_readers,
@@ -1574,6 +1856,215 @@ mod tests {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(hits[0].pid, Some(33));
+    }
+
+    /// #279: Copilot names its store by session, so the cwd has to be read out of
+    /// the event stream — and a stream belonging to another cwd must be refused.
+    #[test]
+    fn a_copilot_process_finds_the_stream_that_names_its_cwd() {
+        let scratch = Scratch::new("copilot");
+        let base = scratch.0.join(".copilot/session-state");
+        for (id, cwd) in [("other", "/home/dev/other"), ("mine", "/home/dev/project")] {
+            std::fs::create_dir_all(base.join(id)).expect("a store");
+            std::fs::write(
+                base.join(id).join("events.jsonl"),
+                format!(
+                    concat!(
+                        r#"{{"type":"session.start","data":{{"context":{{"cwd":"{cwd}"}}}}}}"#,
+                        "\n",
+                        r#"{{"type":"user.message","data":{{"content":"Fix the flaky test"}}}}"#,
+                        "\n",
+                        r#"{{"type":"session.info","data":{{"model":"claude-sonnet"}}}}"#
+                    ),
+                    cwd = cwd
+                ),
+            )
+            .expect("a stream");
+        }
+
+        let table = vec![process_with_cwd(
+            71,
+            "/usr/bin/copilot",
+            "copilot",
+            "/home/dev/project",
+        )];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result
+            .hits
+            .iter()
+            .filter(|h| h.source == "copilot")
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "mine");
+        assert_eq!(hits[0].pid, Some(71));
+        assert_eq!(hits[0].model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(hits[0].recent_messages.len(), 1);
+    }
+
+    /// A newline cannot be read out of a store that names the cwd, so the head is
+    /// what decides: a stream whose cwd never appears is nothing.
+    #[test]
+    fn a_copilot_stream_for_another_cwd_is_not_this_session() {
+        let scratch = Scratch::new("copilot-other");
+        let base = scratch.0.join(".copilot/session-state/mine");
+        std::fs::create_dir_all(&base).expect("a store");
+        std::fs::write(
+            base.join("events.jsonl"),
+            r#"{"type":"session.start","data":{"context":{"cwd":"/home/dev/elsewhere"}}}"#,
+        )
+        .expect("a stream");
+
+        let table = vec![process_with_cwd(
+            72,
+            "/usr/bin/copilot",
+            "copilot",
+            "/home/dev/project",
+        )];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &table, now_ms())
+                .hits
+                .iter()
+                .all(|h| h.source != "copilot")
+        );
+    }
+
+    /// #279: Grok's directory is keyed by the percent-encoded cwd, and the summary
+    /// is what names the session and its activity.
+    #[test]
+    fn a_grok_process_finds_its_session_and_reads_its_transcript() {
+        let scratch = Scratch::new("grok");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".grok/sessions")
+            .join(morrow_core::discovery::grok::encoded_cwd(cwd))
+            .join("session-abc");
+        std::fs::create_dir_all(&directory).expect("a store");
+        let now = now_ms();
+        let stamp = iso8601(now - 60_000);
+        std::fs::write(
+            directory.join("summary.json"),
+            format!(
+                r#"{{"info":{{"id":"0192f0aa-7cbb-7000-8000-000000000000","cwd":"{cwd}"}},
+                    "current_model_id":"grok-code-fast-1",
+                    "updated_at":"{stamp}"}}"#
+            ),
+        )
+        .expect("a summary");
+        std::fs::write(
+            directory.join("chat_history.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add a retry"}]}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added it"}]}}"#
+            ),
+        )
+        .expect("a transcript");
+
+        let table = vec![process_with_cwd(81, "/usr/bin/grok", "grok", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now);
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "grok").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "0192f0aa-7cbb-7000-8000-000000000000");
+        assert_eq!(hits[0].model.as_deref(), Some("grok-code-fast-1"));
+        assert_eq!(hits[0].pid, Some(81));
+        assert_eq!(hits[0].recent_messages.len(), 2);
+    }
+
+    /// The directory is keyed by cwd, but the summary says so itself: a session
+    /// whose cwd moved is not this process's session.
+    #[test]
+    fn a_grok_session_whose_summary_names_another_cwd_is_skipped() {
+        let scratch = Scratch::new("grok-moved");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".grok/sessions")
+            .join(morrow_core::discovery::grok::encoded_cwd(cwd))
+            .join("session-abc");
+        std::fs::create_dir_all(&directory).expect("a store");
+        let now = now_ms();
+        std::fs::write(
+            directory.join("summary.json"),
+            format!(
+                r#"{{"info":{{"id":"s","cwd":"/home/dev/moved"}},"updated_at":"{}"}}"#,
+                iso8601(now)
+            ),
+        )
+        .expect("a summary");
+
+        let table = vec![process_with_cwd(82, "/usr/bin/grok", "grok", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &table, now)
+                .hits
+                .iter()
+                .all(|h| h.source != "grok")
+        );
+    }
+
+    /// An index-only session has no transcript, so there is nothing to show.
+    #[test]
+    fn a_grok_session_without_a_transcript_is_skipped() {
+        let scratch = Scratch::new("grok-notranscript");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".grok/sessions")
+            .join(morrow_core::discovery::grok::encoded_cwd(cwd))
+            .join("session-abc");
+        std::fs::create_dir_all(&directory).expect("a store");
+        let now = now_ms();
+        std::fs::write(
+            directory.join("summary.json"),
+            format!(
+                r#"{{"info":{{"id":"s","cwd":"{cwd}"}},"updated_at":"{}"}}"#,
+                iso8601(now)
+            ),
+        )
+        .expect("a summary");
+
+        let table = vec![process_with_cwd(83, "/usr/bin/grok", "grok", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &table, now)
+                .hits
+                .iter()
+                .all(|h| h.source != "grok")
+        );
+    }
+
+    /// An ISO 8601 stamp for a millisecond instant, so a fresh store can be seeded
+    /// without a date crate.
+    fn iso8601(ms: u64) -> String {
+        let seconds = ms / 1000;
+        let days = seconds / 86_400;
+        let rest = seconds % 86_400;
+        let (year, month, day) = civil_from_days(days as i64);
+        format!(
+            "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+            rest / 3_600,
+            (rest % 3_600) / 60,
+            rest % 60,
+            ms % 1000
+        )
+    }
+
+    /// Howard Hinnant's `civil_from_days`, the inverse of the core's parser.
+    fn civil_from_days(days: i64) -> (i64, u32, u32) {
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
     }
 
     /// A subagent worktree is not a project the user opened.
