@@ -80,7 +80,11 @@ pub fn fetch(runner: &dyn Runner, credential: &Credential, now: Timestamp) -> Fe
     }
 
     let token = &credential.access_token;
-    let auth = format!("Authorization: Bearer {token}");
+    // #306 AC: the token must never appear in recorded arguments. curl reads
+    // its config from stdin, so the Authorization header is a config line,
+    // not an argv element visible in `ps`. The injected Runner's
+    // `run_with_stdin` is the only channel that carries the secret.
+    let config = format!("header = \"Authorization: Bearer {token}\"\n");
     let args = [
         "--silent",
         "--show-error",
@@ -90,21 +94,18 @@ pub fn fetch(runner: &dyn Runner, credential: &Credential, now: Timestamp) -> Fe
         // different host. A 3xx is reported as `QuotaError::Http` instead.
         "--max-redirs",
         "0",
+        "--config",
+        "-",
         "-w",
         "\\n%{http_code}",
         "-X",
         "GET",
-        "-H",
-        auth.as_str(),
         USAGE_URL,
     ];
-    // Honest limitation: the bearer token lives in curl's argv while the
-    // request runs, so another process on this machine could see it in a
-    // process listing. The injected `Runner` only accepts program + args, so
-    // there is no stdin/header channel to hide it in. We never log the args,
-    // and every error string is scrubbed by `redact` before it escapes.
+    // No token in argv and nothing to redact from it; errors still pass through
+    // `redact` in case a tool echoes the config back on stderr.
     let output = runner
-        .run("curl", &args)
+        .run_with_stdin("curl", &args, &config)
         .map_err(|error| format!("usage request failed: {}", redact(&error, token)))?;
 
     // `-w '\n%{http_code}'` appends one line holding the status. Splitting at
@@ -260,6 +261,7 @@ mod tests {
         response: String,
         error: Option<String>,
         calls: RefCell<Vec<(String, Vec<String>)>>,
+        stdin_log: RefCell<Vec<String>>,
     }
 
     impl FakeRunner {
@@ -268,6 +270,7 @@ mod tests {
                 response: format!("{body}\n{status}"),
                 error: None,
                 calls: RefCell::new(Vec::new()),
+                stdin_log: RefCell::new(Vec::new()),
             }
         }
 
@@ -276,6 +279,7 @@ mod tests {
                 response: String::new(),
                 error: Some(error),
                 calls: RefCell::new(Vec::new()),
+                stdin_log: RefCell::new(Vec::new()),
             }
         }
 
@@ -286,10 +290,20 @@ mod tests {
 
     impl Runner for FakeRunner {
         fn run(&self, program: &str, args: &[&str]) -> Result<String, String> {
+            self.run_with_stdin(program, args, "")
+        }
+
+        fn run_with_stdin(
+            &self,
+            program: &str,
+            args: &[&str],
+            stdin: &str,
+        ) -> Result<String, String> {
             self.calls.borrow_mut().push((
                 program.to_owned(),
                 args.iter().map(|arg| (*arg).to_owned()).collect(),
             ));
+            self.stdin_log.borrow_mut().push(stdin.to_owned());
             match &self.error {
                 Some(error) => Err(error.clone()),
                 None => Ok(self.response.clone()),
@@ -391,10 +405,23 @@ mod tests {
             );
         }
         assert!(args.iter().any(|arg| arg.as_str() == "\\n%{http_code}"));
-        let header = format!("Authorization: Bearer {TOKEN}");
+        // #306: the bearer header goes through stdin, never argv.
         assert!(
-            args.iter().any(|arg| arg.as_str() == header.as_str()),
+            !args
+                .iter()
+                .any(|arg| arg.contains(TOKEN) || arg.contains("Bearer")),
+            "token leaked into argv: {args:?}"
+        );
+        assert!(
+            args.windows(2)
+                .any(|pair| pair[0] == "--config" && pair[1] == "-"),
             "{args:?}"
+        );
+        let config = runner.stdin_log.borrow();
+        let header = format!("header = \"Authorization: Bearer {TOKEN}\"");
+        assert_eq!(
+            config.first().map(|line| line.trim()),
+            Some(header.as_str())
         );
     }
 
