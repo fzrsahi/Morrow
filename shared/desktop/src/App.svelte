@@ -1086,7 +1086,7 @@
             onOpenSettings={openSettings}
           />
         {/if}
-        {#if quota}
+        {#if quota && quota.status !== 'off'}
           <QuotaCard {quota} />
         {/if}
       </div>

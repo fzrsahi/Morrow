@@ -123,6 +123,7 @@ export type Completion = {
 
 /** #308 — the five states the shell can report for plan limits. */
 export type QuotaStatus =
+  | 'off'
   | 'unavailable'
   | 'not_connected'
   | 'unauthorized'

@@ -34,6 +34,7 @@ const CHIP_MODE_KEY: &str = "claudeQuotaChip";
 
 const CREDENTIALS_UNREADABLE: &str = "Claude credentials could not be read.";
 const NOT_CONNECTED: &str = "Sign in to Claude Code once to share your plan limits.";
+const OFF: &str = "Plan limits are turned off in Settings.";
 const SERVICE_ERROR: &str = "Claude's usage service returned an error.";
 const UNEXPECTED_RESPONSE: &str = "Claude's usage service returned an unexpected response.";
 const UNAUTHORIZED: &str = "Claude sign-in was rejected. Sign in again in Claude Code.";
@@ -43,6 +44,7 @@ const RATE_LIMITED: &str = "Claude is rate limiting requests. Try again shortly.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaStatus {
+    Off,
     Unavailable,
     NotConnected,
     Unauthorized,
@@ -129,13 +131,6 @@ pub fn new_state(site: &HooksSite) -> ManagedQuota {
 #[cfg(test)]
 pub fn state_with_source(source: Box<dyn QuotaSource>) -> ManagedQuota {
     Mutex::new(QuotaState { source, last: None })
-}
-
-impl QuotaState {
-    fn remember(&mut self, view: QuotaSnapshotView) -> QuotaSnapshotView {
-        self.last = Some(view.clone());
-        view
-    }
 }
 
 /// Wall clock, read only at the IPC boundary. The core and the platform are
@@ -266,47 +261,77 @@ pub fn quota_settings_set(
 
 /// Fetch (or repeat the last view) for the panel. Never returns a token.
 #[tauri::command]
-pub fn quota_snapshot(state: State<'_, ManagedQuota>) -> Result<QuotaSnapshotView, String> {
+pub fn quota_snapshot(
+    site: State<'_, HooksSite>,
+    state: State<'_, ManagedQuota>,
+) -> Result<QuotaSnapshotView, String> {
+    let stored = settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())?;
+    let mode = mode_from_settings(&stored);
     let mut state = state
         .lock()
         .map_err(|_| "quota state is unavailable".to_owned())?;
-    Ok(snapshot_with(&mut state, clock_now()))
+    Ok(snapshot_with(&mut state, clock_now(), mode))
 }
 
 /// The command's whole decision, with the clock injected. Tests drive this with
 /// a fake `QuotaSource`; no HOME, network or Tauri runtime is involved.
-fn snapshot_with(state: &mut QuotaState, now: Timestamp) -> QuotaSnapshotView {
+fn snapshot_with(state: &mut QuotaState, now: Timestamp, mode: ChipMode) -> QuotaSnapshotView {
+    if mode == ChipMode::Off {
+        // A setting the shell never reads is a lie. "off" must change what the
+        // command returns, not only what Settings persists.
+        return scrub_view(QuotaSnapshotView::problem(QuotaStatus::Off, OFF), "");
+    }
     let credential = match state.source.read_credentials() {
         Ok(Some(credential)) => credential,
         Ok(None) => {
-            return state.remember(QuotaSnapshotView::problem(
-                QuotaStatus::NotConnected,
-                NOT_CONNECTED,
-            ));
+            return scrub_view(
+                QuotaSnapshotView::problem(QuotaStatus::NotConnected, NOT_CONNECTED),
+                "",
+            );
         }
         // The reader's own error names a path, never a token; keep the
         // sentence fixed anyway so nothing from disk reaches the webview.
         Err(_) => {
-            return state.remember(QuotaSnapshotView::problem(
-                QuotaStatus::Unavailable,
-                CREDENTIALS_UNREADABLE,
-            ));
+            return scrub_view(
+                QuotaSnapshotView::problem(QuotaStatus::Unavailable, CREDENTIALS_UNREADABLE),
+                "",
+            );
         }
     };
 
-    match state.source.fetch_if_due(now, &credential, true) {
+    let token = credential.access_token.as_str();
+    let view = match state.source.fetch_if_due(now, &credential, true) {
         // Throttled or paused: the numbers on screen are the last ones we got.
-        FetchAction::Skipped => state
-            .last
-            .clone()
-            .unwrap_or_else(|| QuotaSnapshotView::problem(QuotaStatus::Unavailable, SERVICE_ERROR)),
-        FetchAction::Fetched(Ok(snapshot)) => state.remember(view_from_snapshot(&snapshot, now)),
-        FetchAction::Fetched(Err(error)) => state.remember(view_from_error(&error)),
-        FetchAction::Error(error) => state.remember(QuotaSnapshotView::problem(
-            QuotaStatus::Unavailable,
-            scrub(&error, &credential.access_token),
-        )),
-    }
+        FetchAction::Skipped => {
+            return scrub_view(
+                state.last.clone().unwrap_or_else(|| {
+                    QuotaSnapshotView::problem(QuotaStatus::Unavailable, SERVICE_ERROR)
+                }),
+                token,
+            );
+        }
+        FetchAction::Fetched(Ok(snapshot)) => {
+            let view = view_from_snapshot(&snapshot, now);
+            state.last = Some(view.clone());
+            view
+        }
+        // A transport/provider failure must not erase the last real numbers.
+        FetchAction::Fetched(Err(error)) => return scrub_view(view_from_error(&error), token),
+        FetchAction::Error(error) => {
+            return scrub_view(
+                QuotaSnapshotView::problem(QuotaStatus::Unavailable, error),
+                token,
+            );
+        }
+    };
+    scrub_view(view, token)
+}
+
+/// Defence in depth: no reason string leaving this boundary may contain a
+/// bearer token, whichever branch produced it.
+fn scrub_view(mut view: QuotaSnapshotView, token: &str) -> QuotaSnapshotView {
+    view.reason = scrub(&view.reason, token);
+    view
 }
 
 #[cfg(test)]
@@ -373,6 +398,43 @@ mod tests {
     }
 
     #[test]
+    fn off_mode_changes_the_command_result_and_a_failure_keeps_the_last_numbers() {
+        // #308 review: selecting `off` in Settings must be visible to the
+        // command, and a transient failure must not erase a good cached view.
+        let source = FakeSource {
+            credential: Some(FakeSource::credential()),
+            action: FetchAction::Fetched(Ok(CoreSnapshot {
+                limits: vec![limit(Kind::Session, "normal", 12.0, None)],
+                fetched_at: now(),
+            })),
+            calls: std::cell::Cell::new(0),
+        };
+        let managed = state_with_source(Box::new(source));
+        let mut state = managed.lock().expect("state");
+        assert_eq!(
+            snapshot_with(&mut state, now(), ChipMode::Off).status,
+            QuotaStatus::Off
+        );
+
+        let view = snapshot_with(&mut state, now(), ChipMode::Auto);
+        assert_eq!(view.status, QuotaStatus::Ok);
+        drop(state);
+
+        // Rebuild the same state with a failing source while keeping the cached
+        // view: a provider error must not clobber the last real numbers.
+        let mut state = managed.lock().expect("state");
+        state.source = Box::new(FakeSource {
+            credential: Some(FakeSource::credential()),
+            action: FetchAction::Error("sk-ant-oat01-very-secret failed".to_owned()),
+            calls: std::cell::Cell::new(0),
+        });
+        let view = snapshot_with(&mut state, at(700.0), ChipMode::Auto);
+        assert_eq!(view.status, QuotaStatus::Unavailable);
+        assert!(!view.reason.contains(TOKEN), "token scrubbed on every path");
+        assert!(state.last.is_some(), "the good snapshot survives a failure");
+    }
+
+    #[test]
     fn quota_snapshot_decision_runs_with_an_injected_fetcher() {
         // #308 review: the command's decision is exercised end to end with a
         // fake source — no HOME, no curl, no Tauri runtime.
@@ -386,7 +448,7 @@ mod tests {
         };
         let managed = state_with_source(Box::new(source));
         let mut state = managed.lock().expect("state");
-        let view = snapshot_with(&mut state, now());
+        let view = snapshot_with(&mut state, now(), ChipMode::Auto);
         assert_eq!(view.status, QuotaStatus::Ok);
         assert_eq!(view.limits.as_ref().map(Vec::len), Some(1));
         assert_eq!(view.limits.as_ref().unwrap()[0].percent, 42.0);
@@ -400,7 +462,7 @@ mod tests {
             calls: std::cell::Cell::new(0),
         }));
         let mut state = managed.lock().expect("state");
-        let view = snapshot_with(&mut state, now());
+        let view = snapshot_with(&mut state, now(), ChipMode::Auto);
         assert_eq!(view.status, QuotaStatus::NotConnected);
         assert!(view.limits.is_none(), "no numbers without a credential");
         assert!(!json(&view).contains(TOKEN));

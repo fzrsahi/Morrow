@@ -6,6 +6,7 @@
 import type { QuotaLevel, QuotaPaceTone, QuotaSnapshot, QuotaStatus } from './types';
 
 export const QUOTA_STATUS_LABEL: Record<QuotaStatus, string> = {
+  off: 'Plan limits are off',
   unavailable: 'Plan limits unavailable',
   not_connected: 'Not connected to Claude',
   unauthorized: 'Claude sign-in needed',
