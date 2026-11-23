@@ -1767,67 +1767,126 @@ private struct AppearancePage: View {
 
                     Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                         GridRow {
-                            Button(action: {
-                                SystemMonitorManager.shared.triggerChargingBanner()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "battery.100.bolt")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 0.19, green: 0.82, blue: 0.35))
-                                    Text("Test MagSafe Charging")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "battery.100.bolt",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test MagSafe Charging"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .charging(kind: .magSafe, watts: 140, timeToFullMinutes: 28),
+                                    previewBatteryLevel: 54
+                                )
                             }
-                            .buttonStyle(.bordered)
 
-                            Button(action: {
-                                PrayerTimeManager.shared.triggerTestBanner()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "moon.stars.fill")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83))
-                                    Text("Test Prayer Reminder")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "moon.stars.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Prayer (Maghrib)"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .maghrib)
                             }
-                            .buttonStyle(.bordered)
                         }
 
                         GridRow {
-                            Button(action: {
-                                SystemVolumeManager.shared.presentHUD()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "speaker.wave.2.fill")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 1.0, green: 0.8, blue: 0.15))
-                                    Text("Test Volume HUD")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "sunrise.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Subuh"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .subuh)
                             }
-                            .buttonStyle(.bordered)
 
-                            Button(action: {
-                                NowPlayingManager.shared.triggerTestTrackChange()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "music.note")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 1.0, green: 0.16, blue: 0.53))
-                                    Text("Test Track Auto-Expand")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "sun.max.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Dzuhur"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .dzuhur)
                             }
-                            .buttonStyle(.bordered)
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sun.haze.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Ashar"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .ashar)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "moon.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Isya"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .isya)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "cable.connector",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test USB-C Charging"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .charging(kind: .usbC, watts: 65, timeToFullMinutes: 42),
+                                    previewBatteryLevel: 48
+                                )
+                            }
+
+                            notificationPreviewButton(
+                                icon: "pause.circle.fill",
+                                color: Color(red: 1.0, green: 0.72, blue: 0.12),
+                                title: "Test Charging On Hold"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .onHold(kind: .magSafe),
+                                    previewBatteryLevel: 80
+                                )
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "checkmark.circle.fill",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test Fully Charged"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .fullyCharged(kind: .magSafe),
+                                    previewBatteryLevel: 100
+                                )
+                            }
+
+                            notificationPreviewButton(
+                                icon: "battery.25",
+                                color: Color(red: 1.0, green: 0.36, blue: 0.25),
+                                title: "Test Low Battery"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .lowBattery(percent: 15),
+                                    previewBatteryLevel: 15
+                                )
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "speaker.wave.2.fill",
+                                color: Color(red: 1.0, green: 0.8, blue: 0.15),
+                                title: "Test Volume HUD"
+                            ) {
+                                SystemVolumeManager.shared.presentHUD()
+                            }
+
+                            notificationPreviewButton(
+                                icon: "music.note",
+                                color: Color(red: 1.0, green: 0.16, blue: 0.53),
+                                title: "Test Track Auto-Expand"
+                            ) {
+                                NowPlayingManager.shared.triggerTestTrackChange()
+                            }
                         }
 
                         GridRow {
@@ -1871,6 +1930,26 @@ private struct AppearancePage: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func notificationPreviewButton(
+        icon: String,
+        color: Color,
+        title: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+        }
+        .buttonStyle(.bordered)
     }
 }
 
