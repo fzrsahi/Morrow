@@ -265,11 +265,17 @@ pub fn install_target_with(
             // The file is only half of it: the gateway loads what its config names,
             // so an unregistered plugin is a file nothing reads.
             let registration = register_openclaw(paths, stamp)?;
-            return Ok(installed.map(|mut report| {
-                report.settings_changed |= registration.settings_changed;
-                report.backup = report.backup.or(registration.backup);
-                report
-            }));
+            return Ok(match installed {
+                Some(mut report) => {
+                    report.settings_changed |= registration.settings_changed;
+                    report.backup = report.backup.or(registration.backup);
+                    Some(report)
+                }
+                // A file that needed no repair can still have needed a config
+                // registration; dropping that report hid the write (#314).
+                None => (registration.settings_changed || registration.backup.is_some())
+                    .then_some(registration),
+            });
         }
         // Nothing to write: AiWork has no hooks, so "install" is the row itself.
         "aiwork" | "aiwork-cli" => return Ok(Some(Report::default())),
@@ -341,7 +347,13 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
             let removed = uninstall_extension(paths, source)?;
             let config = openclaw_config_path(paths);
             if let Some(existing) = read_text(&config)? {
-                if let Some(outcome) = morrow_core::installer::openclaw::unregister(&existing) {
+                if let Some(outcome) = morrow_core::installer::openclaw::unregister(
+                    &existing,
+                    &paths
+                        .home
+                        .join(".openclaw/codeisland-plugin")
+                        .to_string_lossy(),
+                ) {
                     fs::write(&config, &outcome.text)?;
                     return Ok(Some(Report {
                         settings_changed: true,
@@ -786,10 +798,15 @@ pub fn openclaw_status(paths: &Paths) -> TargetStatus {
         .ok()
         .flatten()
         .is_some_and(|text| morrow_core::installer::extension::is_ours(&text));
-    let registered = read_text(&config)
-        .ok()
-        .flatten()
-        .is_some_and(|text| morrow_core::installer::openclaw::is_registered(&text));
+    let registered = read_text(&config).ok().flatten().is_some_and(|text| {
+        morrow_core::installer::openclaw::is_registered(
+            &text,
+            &paths
+                .home
+                .join(".openclaw/codeisland-plugin")
+                .to_string_lossy(),
+        )
+    });
     TargetStatus {
         source: "openclaw",
         name: "OpenClaw",

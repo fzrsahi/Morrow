@@ -73,20 +73,26 @@ pub fn register(existing: Option<&str>, plugin_dir: &str) -> Option<Outcome> {
     entry.insert("enabled".to_owned(), json!(true));
     entries.insert(ENTRY.to_owned(), Value::Object(entry));
     plugins.insert("entries".to_owned(), Value::Object(entries));
-    root.insert("plugins".to_owned(), Value::Object(plugins));
 
-    let text = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&Value::Object(root)).ok()?
-    );
+    // Keep the user's comments and formatting everywhere outside `plugins`:
+    // rewriting the whole document with to_string_pretty silently ate them.
+    let text = if source.trim().is_empty() {
+        root.insert("plugins".to_owned(), Value::Object(plugins));
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&Value::Object(root)).ok()?
+        )
+    } else {
+        super::json_editor::set_top_level_value(source, "plugins", &Value::Object(plugins))?
+    };
     let changed = !same_document(source, &text);
     Some(Outcome { changed, text })
 }
 
 /// The config with our path and entry taken back out, or `None` when nothing of
 /// ours was in it.
-pub fn unregister(existing: &str) -> Option<Outcome> {
-    let mut root = object(existing)?;
+pub fn unregister(existing: &str, plugin_dir: &str) -> Option<Outcome> {
+    let root = object(existing)?;
     let mut plugins = root.get("plugins").and_then(Value::as_object)?.clone();
     let mut changed = false;
 
@@ -96,9 +102,9 @@ pub fn unregister(existing: &str) -> Option<Outcome> {
             let kept: Vec<Value> = paths
                 .into_iter()
                 .filter(|path| {
-                    let ours = path
-                        .as_str()
-                        .is_some_and(|path| path.contains("codeisland-plugin"));
+                    // Exact path, not a substring: a user's own plugin whose
+                    // name merely contains "codeisland-plugin" is not ours.
+                    let ours = path.as_str() == Some(plugin_dir);
                     if ours {
                         changed = true;
                     }
@@ -134,15 +140,11 @@ pub fn unregister(existing: &str) -> Option<Outcome> {
     if !changed {
         return None;
     }
-    if plugins.is_empty() {
-        root.remove("plugins");
+    let text = if plugins.is_empty() {
+        super::json_editor::delete_top_level_key(existing, "plugins")?
     } else {
-        root.insert("plugins".to_owned(), Value::Object(plugins));
-    }
-    let text = format!(
-        "{}\n",
-        serde_json::to_string_pretty(&Value::Object(root)).ok()?
-    );
+        super::json_editor::set_top_level_value(existing, "plugins", &Value::Object(plugins))?
+    };
     Some(Outcome {
         changed: true,
         text,
@@ -150,7 +152,7 @@ pub fn unregister(existing: &str) -> Option<Outcome> {
 }
 
 /// Whether this config already names our plugin and switches it on.
-pub fn is_registered(existing: &str) -> bool {
+pub fn is_registered(existing: &str, plugin_dir: &str) -> bool {
     let Some(root) = object(existing) else {
         return false;
     };
@@ -159,12 +161,7 @@ pub fn is_registered(existing: &str) -> bool {
         .and_then(|plugins| plugins.get("load"))
         .and_then(|load| load.get("paths"))
         .and_then(Value::as_array)
-        .is_some_and(|paths| {
-            paths.iter().any(|path| {
-                path.as_str()
-                    .is_some_and(|path| path.contains("codeisland-plugin"))
-            })
-        });
+        .is_some_and(|paths| paths.iter().any(|path| path.as_str() == Some(plugin_dir)));
     let enabled = plugins
         .and_then(|plugins| plugins.get("entries"))
         .and_then(|entries| entries.get(ENTRY))
@@ -190,7 +187,7 @@ mod tests {
         let root = parsed(&outcome.text);
         assert_eq!(root["plugins"]["load"]["paths"][0], DIR);
         assert_eq!(root["plugins"]["entries"]["codeisland"]["enabled"], true);
-        assert!(is_registered(&outcome.text));
+        assert!(is_registered(&outcome.text, DIR));
     }
 
     #[test]
@@ -226,18 +223,18 @@ mod tests {
     fn unregister_takes_out_only_ours() {
         let source = r#"{"plugins": {"load": {"paths": ["/some/other"]}, "entries": {"other": {"enabled": true}}}}"#;
         let registered = register(Some(source), DIR).expect("a plan");
-        let back = unregister(&registered.text).expect("a plan");
+        let back = unregister(&registered.text, DIR).expect("a plan");
         let root = parsed(&back.text);
         assert_eq!(root["plugins"]["load"]["paths"][0], "/some/other");
         assert!(root["plugins"]["entries"]["codeisland"].is_null());
         assert_eq!(root["plugins"]["entries"]["other"]["enabled"], true);
-        assert!(!is_registered(&back.text));
+        assert!(!is_registered(&back.text, DIR));
     }
 
     #[test]
     fn a_plugins_object_that_was_only_ours_is_deleted() {
         let registered = register(None, DIR).expect("a plan");
-        let back = unregister(&registered.text).expect("a plan");
+        let back = unregister(&registered.text, DIR).expect("a plan");
         assert!(parsed(&back.text).get("plugins").is_none());
     }
 
@@ -248,13 +245,36 @@ mod tests {
         assert!(register(Some("{ // my gateway\n}"), DIR).is_some());
         let json5 = "{ gateway: { port: 18789 },\n}\n";
         assert!(register(Some(json5), DIR).is_none());
-        assert!(unregister(json5).is_none());
-        assert!(!is_registered(json5));
+        assert!(unregister(json5, DIR).is_none());
+        assert!(!is_registered(json5, DIR));
+    }
+
+    #[test]
+    fn a_foreign_path_that_merely_contains_the_plugin_name_is_not_ours() {
+        let source = r#"{"plugins":{"load":{"paths":["/home/dev/codeisland-plugin-backup"]},"entries":{"codeisland":{"enabled":true}}}}"#;
+        assert!(!is_registered(source, DIR), "the path must match exactly");
+        let back = unregister(source, DIR).expect("our entry is still removed");
+        let root = parsed(&back.text);
+        assert_eq!(
+            root["plugins"]["load"]["paths"][0],
+            "/home/dev/codeisland-plugin-backup"
+        );
+    }
+
+    #[test]
+    fn registration_keeps_the_users_comments_outside_plugins() {
+        let source = "{\n  // the user's own note\n  \"gateway\": {\"port\": 18789},\n  \"plugins\": {}\n}\n";
+        let outcome = register(Some(source), DIR).expect("a plan");
+        assert!(
+            outcome.text.contains("the user's own note"),
+            "{}",
+            outcome.text
+        );
     }
 
     #[test]
     fn unregister_of_a_config_with_nothing_of_ours_says_so() {
         let source = r#"{"plugins": {"entries": {"other": {"enabled": true}}}}"#;
-        assert!(unregister(source).is_none());
+        assert!(unregister(source, DIR).is_none());
     }
 }
