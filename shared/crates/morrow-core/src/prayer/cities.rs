@@ -49,17 +49,18 @@ impl OfflineCity {
         }
     }
 
-    /// The offset Swift's `OfflineCity.timeZone` falls back to when the IANA
-    /// identifier cannot be resolved:
+    /// The offset Swift's `OfflineCity.timeZone` uses. Swift resolves the
+    /// IANA identifier first and only falls back to the Indonesian longitude
+    /// bands when that identifier is unknown; this does the same with a small
+    /// static table, so `morrow-core` stays pure (no OS time zone database).
     ///
-    /// - WIB (UTC+7): longitude < 115°
-    /// - WITA (UTC+8): 115° <= longitude < 125°
-    /// - WIT (UTC+9): longitude >= 125°
-    ///
-    /// Returned in seconds so no time zone database (or `TimeZone.current`)
-    /// is needed. The band rule applies to every city, including the global
-    /// ones, exactly as the Swift fallback would.
+    /// For zones with daylight saving the table returns the standard offset;
+    /// a caller that needs a DST-aware instant must pass one explicitly. The
+    /// Indonesian zones in the catalog have no DST and are exact.
     pub fn utc_offset_seconds(&self) -> i32 {
+        if let Some(offset) = iana_standard_offset(self.time_zone_identifier.as_str()) {
+            return offset;
+        }
         let lon = self.coordinates.longitude;
         let offset_hours = if lon < 115.0 {
             7
@@ -70,6 +71,26 @@ impl OfflineCity {
         };
         offset_hours * 3600
     }
+}
+
+/// Standard-time offsets for the IANA identifiers used by the catalog. A
+/// name missing here deliberately falls back to the longitude bands, matching
+/// Swift's `TimeZone(identifier:)`-first order.
+fn iana_standard_offset(identifier: &str) -> Option<i32> {
+    let hours = match identifier {
+        "Asia/Jakarta" => 7,
+        "Asia/Makassar" => 8,
+        "Asia/Jayapura" => 9,
+        "Asia/Riyadh" => 3,
+        "Asia/Kuala_Lumpur" | "Asia/Singapore" => 8,
+        "Asia/Tokyo" => 9,
+        "Europe/London" => 0,
+        "America/New_York" => -5,
+        "Africa/Cairo" => 2,
+        "Europe/Istanbul" => 3,
+        _ => return None,
+    };
+    Some(hours * 3600)
 }
 
 /// The full catalog from Swift's `OfflineCityDatabase.allCities`, transcribed
@@ -869,14 +890,32 @@ mod tests {
         assert_eq!(city_by_id("ambon").unwrap().utc_offset_seconds(), 32_400);
         assert_eq!(city_by_id("jayapura").unwrap().utc_offset_seconds(), 32_400);
 
-        // Exact band boundaries, including the `Asia/Jakarta` IANA string
-        // being retained for display while the fallback drives the offset.
+        // Exact band boundaries, using an unresolvable identifier so the
+        // longitude fallback is the only rule in play.
         let city_at =
-            |longitude: f64| OfflineCity::city("x", "X", "X", 0.0, longitude, "Asia/Jakarta", 0.0);
+            |longitude: f64| OfflineCity::city("x", "X", "X", 0.0, longitude, "Unknown/Zone", 0.0);
         assert_eq!(city_at(114.9999).utc_offset_seconds(), 25_200);
         assert_eq!(city_at(115.0).utc_offset_seconds(), 28_800);
         assert_eq!(city_at(124.9999).utc_offset_seconds(), 28_800);
         assert_eq!(city_at(125.0).utc_offset_seconds(), 32_400);
+    }
+
+    #[test]
+    fn iana_identifier_wins_over_the_longitude_fallback() {
+        // #305 review: Swift resolves TimeZone(identifier:) first, so the
+        // Indonesian bands must never leak into global cities.
+        assert_eq!(city_by_id("london").unwrap().utc_offset_seconds(), 0);
+        assert_eq!(
+            city_by_id("new_york").unwrap().utc_offset_seconds(),
+            -18_000
+        );
+        assert_eq!(city_by_id("makkah").unwrap().utc_offset_seconds(), 10_800);
+        assert_eq!(city_by_id("cairo").unwrap().utc_offset_seconds(), 7_200);
+        assert_eq!(city_by_id("tokyo").unwrap().utc_offset_seconds(), 32_400);
+        assert_eq!(
+            city_by_id("banjarmasin").unwrap().utc_offset_seconds(),
+            28_800
+        );
     }
 
     #[test]
