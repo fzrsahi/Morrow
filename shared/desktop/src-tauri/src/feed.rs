@@ -341,25 +341,37 @@ impl Feed {
     ///
     /// Returns how many sessions were added, which is what the test asserts.
     pub fn backfill(&self) -> usize {
-        self.backfill_with(crate::discovery::claude_roots, crate::discovery::scan_once)
+        let home = std::path::PathBuf::from(self.lock().sessions.home_directory());
+        // Claude Code's config dir comes from the installer's own ladder (#258),
+        // so discovery reads the folder the hooks were written into.
+        let config_dir = crate::hooks::claude_config_dir(
+            &home,
+            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+        )
+        .unwrap_or_else(|| home.join(".claude"));
+        self.backfill_with(move |_| {
+            crate::discovery::scan_once(&config_dir, &home.join(".local/share"))
+        })
     }
 
-    /// `backfill` with the roots and the scan injected, so a test runs it against
-    /// a scratch tree and no real `~`.
+    /// One discovery scan, integrated as ordinary sessions.
+    ///
+    /// Deliberately outside the lock while it reads the stores — a scan walks
+    /// `~/.claude/projects`, reads tails and opens SQLite — and inside it only to
+    /// insert. A hook that arrives during the scan wins: `insert_discovered`
+    /// refuses a session that already exists, so a WORKING card is never taken
+    /// back to IDLE by a row the scan read a moment ago.
+    ///
+    /// Returns how many sessions were added, which is what the test asserts.
     pub fn backfill_with(
         &self,
-        roots: impl FnOnce(&std::path::Path) -> Vec<String>,
-        scan: impl FnOnce(&[String]) -> morrow_core::discovery::scan::ScanResult,
+        scan: impl FnOnce(&str) -> morrow_core::discovery::scan::ScanResult,
     ) -> usize {
         let home = {
             let state = self.lock();
             state.sessions.home_directory()
         };
-        let roots = roots(std::path::Path::new(&home));
-        if roots.is_empty() {
-            return 0;
-        }
-        let mut result = scan(&roots);
+        let mut result = scan(&home);
         // #267: a discovered session without a pid is a card that can never be
         // pruned. The table is read here, once, and only when something needs it.
         crate::discovery::correlate_pids(&mut result.hits);
@@ -382,8 +394,6 @@ impl Feed {
         added
     }
 
-    /// One liveness round. The adapters are injected so the decision can be
-    /// exercised without real processes; `prune_dead` supplies the shell's.
     fn prune_with(
         &self,
         capture: impl FnMut(Pid) -> Option<Watch>,
@@ -523,19 +533,13 @@ mod tests {
         let feed = Feed::default();
         assert!(feed.snapshot().sessions.is_empty(), "nothing to show yet");
 
-        let added = feed.backfill_with(
-            |_home| vec!["/roots/one".to_owned(), "/roots/two".to_owned()],
-            |roots| {
-                assert_eq!(roots, &["/roots/one".to_owned(), "/roots/two".to_owned()]);
-                morrow_core::discovery::scan::ScanResult {
-                    hits: vec![
-                        discovered("found-a", "/home/u/a"),
-                        discovered("found-b", "/home/u/b"),
-                    ],
-                    ..Default::default()
-                }
-            },
-        );
+        let added = feed.backfill_with(|_home| morrow_core::discovery::scan::ScanResult {
+            hits: vec![
+                discovered("found-a", "/home/u/a"),
+                discovered("found-b", "/home/u/b"),
+            ],
+            ..Default::default()
+        });
 
         assert_eq!(added, 2);
         let rows = feed.snapshot().sessions;
@@ -560,13 +564,10 @@ mod tests {
             .unwrap(),
         );
 
-        let added = feed.backfill_with(
-            |_home| vec!["/roots/one".to_owned()],
-            |_roots| morrow_core::discovery::scan::ScanResult {
-                hits: vec![discovered("found-a", "/home/u/elsewhere")],
-                ..Default::default()
-            },
-        );
+        let added = feed.backfill_with(|_home| morrow_core::discovery::scan::ScanResult {
+            hits: vec![discovered("found-a", "/home/u/elsewhere")],
+            ..Default::default()
+        });
 
         assert_eq!(added, 0, "the discovered row is the older witness");
         let rows = feed.snapshot().sessions;
@@ -579,10 +580,7 @@ mod tests {
     fn an_empty_scan_changes_nothing() {
         let feed = Feed::default();
         assert_eq!(
-            feed.backfill_with(
-                |_home| Vec::new(),
-                |_roots| panic!("a scan must not run when there are no roots"),
-            ),
+            feed.backfill_with(|_home| morrow_core::discovery::scan::ScanResult::default()),
             0
         );
         assert!(feed.snapshot().sessions.is_empty());

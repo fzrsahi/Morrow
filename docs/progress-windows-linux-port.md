@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (ketujuh) — tiga belas slice remediasi (#249–#269). #246, #247 dan #248 selesai; sisa #232 adalah #244 dan reader yang belum didaftarkan. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (kedelapan) — empat belas slice remediasi (#249–#271). #246, #247, #248 selesai; dua reader terdaftar; sisa #232 adalah #244 dan jalur process-first untuk Cursor/Gemini. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -126,6 +126,14 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (kedelapan) — reader yang sudah jadi, dan yang ternyata belum bisa
+
+- **Sudah:** **#270 → PR #271**. `opencode::recent_sessions` (query backfill) dan `StoreReader::roots()` — tiap reader menyatakan sendiri di mana ia mencari, karena Claude punya satu store per config root sementara OpenCode punya satu database untuk semua sesi. `scan_once(config_dir, data_dir)` sekarang menjalankan dua reader; `backfill` me-resolve config dir lewat tangga installer (#258).
+- **Yang ternyata tidak bisa didaftarkan:** `cursor` dan `gemini`. Direktori store-nya **diturunkan dari cwd sebuah proses** (`cwd.appProjectDirEncoded()`), dan encoding itu memetakan `/` dan spasi ke `-` yang sama — jadi tanpa proses, cwd tidak bisa dipulihkan dan mendekode-nya akan mengarang direktori yang tidak ada. Keduanya ditinggalkan dengan alasan tertulis di kode.
+- **Bukti:** `cargo test --workspace` 772 lulus (769 sebelum); tiga test baru menyemai database SQLite sungguhan dengan skema OpenCode; `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** jalur process-first untuk Cursor/Gemini (tabel proses #266 → cwd per pid → direktori store), Codex sebagai reader store-first berikutnya, #244 batch 2, dan watcher berbasis `scan_policy` (#259) yang sudah ada tapi belum dipakai.
+- **Blocker:** gate hardware tidak berubah.
 
 ### 2026-11-22 (ketujuh) — korelasi pid, dan kartu yang akhirnya bisa mati
 
