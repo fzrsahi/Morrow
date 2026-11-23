@@ -821,8 +821,9 @@
   function acceptSnapshot(snapshot: Snapshot) {
     sessions = snapshot.sessions;
     cards = snapshot.permissions;
-    // A future feed may carry the card itself; the command is the source today.
-    if ('prayer' in snapshot) prayer = snapshot.prayer ?? null;
+    // #307: the shell carries the card in the snapshot; the `prayer_next`
+    // command is only the explicit refresh on mount and after a settings write.
+    prayer = snapshot.prayer ?? null;
     // #189: a field whose card was answered or dropped elsewhere must not
     // leave the island holding keys meant for the app underneath.
     if (questionFocus.ownerId !== null && !cards.some((c) => c.id === questionFocus.ownerId)) {

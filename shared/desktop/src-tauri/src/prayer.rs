@@ -42,7 +42,7 @@ pub struct PrayerSettings {
 }
 
 /// One row of the expanded card.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrayerTimeView {
     pub key: String,
     pub name: String,
@@ -54,7 +54,7 @@ pub struct PrayerTimeView {
 /// The card's whole view model. `None` from `prayer_next` means the settings
 /// document has no prayer keys yet: the frontend renders no card at all
 /// rather than inventing a time for a city the user never chose.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct PrayerSnapshot {
     pub city_id: String,
     pub city_name: String,
@@ -313,21 +313,30 @@ pub fn prayer_cities() -> Vec<CityOption> {
 }
 
 #[tauri::command]
-pub fn prayer_next(site: State<'_, HooksSite>) -> Result<Option<PrayerSnapshot>, String> {
+pub fn prayer_next(
+    site: State<'_, HooksSite>,
+    feed: State<'_, crate::feed::Feed>,
+) -> Result<Option<PrayerSnapshot>, String> {
     let stored = match settings::load(&site.paths.codeisland_dir) {
         Ok(stored) => stored,
         Err(_) => return Ok(None),
     };
-    Ok(prayer_snapshot(&stored, now_epoch_seconds()?))
+    let view = prayer_snapshot(&stored, now_epoch_seconds()?);
+    feed.set_prayer(view.clone());
+    Ok(view)
 }
 
 #[tauri::command]
 pub fn prayer_tick(
     site: State<'_, HooksSite>,
     wake: State<'_, PrayerWakeState>,
+    feed: State<'_, crate::feed::Feed>,
 ) -> Result<usize, String> {
     let stored = settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())?;
     let now = now_epoch_seconds()?;
+    // #307: the card travels in the feed snapshot, not only in this command's
+    // return value. A tick refreshes it even when no notification is due.
+    feed.set_prayer(prayer_snapshot(&stored, now));
     let Some(prepared) = prepare(&stored, now) else {
         return Ok(0);
     };
