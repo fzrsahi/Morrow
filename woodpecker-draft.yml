@@ -1,0 +1,130 @@
+# Draft konfigurasi Woodpecker dengan path filtering per lane (#369).
+#
+# File ini BELUM aktif: Woodpecker membaca .woodpecker/*.yaml, bukan file ini.
+# Owner (@aazhrt) yang perlu memindahkan/ adopting 3 pipeline ini ke .woodpecker/.
+# Tidak ada file di .woodpecker/ yang diubah oleh PR #370.
+#
+# Cara kerja:
+#   - Pipeline tetap dibuat Woodpecker, tetapi step yang tidak relevan keluar
+#     lebih awal lewat scripts/ci/path-router.sh (cocok untuk semua versi).
+#   - Kalau Woodpecker Anda mendukung `when: path: include:` (native), itu lebih
+#     hemat karena pipeline tidak dibuat sama sekali. Contoh ada di komentar
+#     bawah; pilih salah satu, jangan keduanya.
+#
+#   router: linux/ shared/ crates/ Cargo.* rust-toolchain  -> linux
+#           macos/ Sources/ Tests/ Package.* Info.plist     -> macos
+#           windows/ scripts/ci/windows-*                    -> windows
+#           appcast.xml / macos/ci/                          -> release
+#           docs-only / *.md                                 -> tidak ada lane
+
+clone:
+  git:
+    image: woodpeckerci/plugin-git
+    settings:
+      lfs: false
+
+when:
+  - event: [pull_request, tag]
+  - event: push
+    branch: [dev, main]
+
+labels:
+  platform: linux/amd64
+
+# --- Pipeline 1: Linux & Windows fast lane ----------------------------------
+steps:
+  - name: test-linux
+    image: rust:1.98-bookworm
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - set -e
+      - |
+        report() {
+          python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / Linux & Rust Harness" --state "$1" --description "$2" || true
+        }
+        if [ "${CI_PIPELINE_EVENT:-}" = "pull_request" ] && ! scripts/ci/path-router.sh | grep -qx linux; then
+          echo "Notice: No Linux paths changed in PR. Skipping."
+          report success "Skipped — No Linux paths changed"
+          exit 0
+        fi
+        report pending "Running cargo test, fmt, clippy, purity..."
+        ./linux/ci/test.sh && report success "Linux & Rust tests passed" || { report failure "Linux & Rust tests failed"; exit 1; }
+
+  - name: check-windows
+    image: rust:1.98-bookworm
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - set -e
+      - |
+        report() {
+          python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / Windows MSVC Check" --state "$1" --description "$2" || true
+        }
+        if [ "${CI_PIPELINE_EVENT:-}" = "pull_request" ] && ! scripts/ci/path-router.sh | grep -qx windows; then
+          echo "Notice: No Windows paths changed in PR. Skipping."
+          report success "Skipped — No Windows paths changed"
+          exit 0
+        fi
+        report pending "Running cargo-xwin type check..."
+        rustup target add x86_64-pc-windows-msvc
+        ./windows/ci/check.sh && report success "Windows MSVC type-check passed" || { report failure "Windows MSVC type-check failed"; exit 1; }
+
+---
+
+# --- Pipeline 2: macOS native suite -----------------------------------------
+when:
+  - event: [pull_request, tag]
+  - event: push
+    branch: [dev, main]
+
+labels:
+  platform: darwin/amd64
+
+steps:
+  - name: test
+    image: bash
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - set -e
+      - |
+        skip_macos() {
+          python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / Syntax & Git Hygiene Guard" --state success --description "Skipped — No macOS paths changed" || true
+          python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / XCTest Core Harness" --state success --description "Skipped — No macOS paths changed" || true
+          exit 0
+        }
+        if [ "${CI_PIPELINE_EVENT:-}" = "pull_request" ] && ! scripts/ci/path-router.sh | grep -qx macos; then
+          echo "Notice: No macOS paths changed in PR. Skipping."
+          skip_macos
+        fi
+        swift --version
+        python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / XCTest Core Harness" --state pending --description "Running unit tests..." || true
+        ./macos/ci/test.sh && python3 ./scripts/report-status.py --repo "fzrsahi/Morrow" --context "Morrow / XCTest Core Harness" --state success --description "Unit tests passed" || true
+
+---
+
+# --- Pipeline 3: release (tag / push dev) ------------------------------------
+# Tidak dipath-filter: rilis memang di-trigger eksplisit oleh tag / branch dev.
+when:
+  - event: tag
+  - event: push
+    branch: dev
+
+labels:
+  platform: darwin/amd64
+
+steps:
+  - name: build-dev-dmg
+    image: bash
+    environment:
+      SPARKLE_PRIVATE_KEY:
+        from_secret: sparkle_private_key
+      GITHUB_TOKEN:
+        from_secret: github_token
+    commands:
+      - echo "==> Dev build ${CI_COMMIT_SHA:0:7}"
+      - ./macos/ci/package.sh "${BASE_VER:-1.0.42}-dev.${CI_PIPELINE_NUMBER}"
