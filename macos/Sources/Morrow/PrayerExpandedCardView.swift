@@ -2,7 +2,8 @@ import SwiftUI
 import MorrowCore
 
 /// Unified living diorama prayer card with an integrated 3-state timeline and Imsak/Sunrise horology.
-/// Fully supports both Compact (120pt) and Panoramic (242pt) display modes, across 16-bit Pixel and Modern themes.
+/// Uses Morrow's 5×7 dot-matrix `PixelText` in 16-bit Pixel Retro mode and SF Rounded in Modern Clean mode.
+/// Fully supports both Compact (120pt) and Panoramic (242pt) display modes.
 public struct PrayerExpandedCardView: View {
     @ObservedObject public var manager: PrayerTimeManager
 
@@ -85,10 +86,6 @@ public struct PrayerExpandedCardView: View {
         }
     }
 
-    private var fontDesign: Font.Design {
-        isPixel ? .monospaced : .rounded
-    }
-
     private var slotFill: Color {
         isPixel ? Pixel16Palette.slot.opacity(0.68) : Color.black.opacity(0.42)
     }
@@ -114,10 +111,6 @@ public struct PrayerExpandedCardView: View {
         return df.string(from: date)
     }
 
-    private func themedText(_ text: String) -> String {
-        isPixel ? text.uppercased() : text
-    }
-
     public var body: some View {
         Group {
             if isPanoramic {
@@ -139,7 +132,7 @@ public struct PrayerExpandedCardView: View {
         let schedule = manager.todaySchedule
         let phase = solarPhase
         let now = manager.simulatedDate ?? Date()
-        let gregorianFull = themedText(Self.fullGregorianDateText(at: now, timeZone: manager.timeZone))
+        let gregorianFull = Self.fullGregorianDateText(at: now, timeZone: manager.timeZone)
 
         return ZStack(alignment: .topLeading) {
             DioramaSkyView(
@@ -171,10 +164,14 @@ public struct PrayerExpandedCardView: View {
                 HStack(alignment: .center, spacing: 10) {
                     phaseChip(phase: phase)
 
-                    Text(themedText(manager.hijriDateString))
-                        .font(.system(size: 8.5, weight: .semibold, design: fontDesign))
-                        .foregroundStyle(Color.white.opacity(0.82))
-                        .lineLimit(1)
+                    themedLabel(
+                        manager.hijriDateString,
+                        pixelSize: 1.15,
+                        modernSize: 8.5,
+                        modernWeight: .semibold,
+                        color: Color.white.opacity(0.82)
+                    )
+                    .lineLimit(1)
 
                     Spacer(minLength: 8)
 
@@ -187,38 +184,59 @@ public struct PrayerExpandedCardView: View {
 
                 // Zone 2: Left Horology Stack & Right Imsak/Sunrise Card
                 HStack(alignment: .center, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 3) {
+                    VStack(alignment: .leading, spacing: isPixel ? 6 : 3) {
                         if let next = upcoming {
                             let diffMins = manager.minutesUntilNextPrayer
-                            HStack(spacing: 6) {
-                                Text(themedText(next.prayer.displayName))
-                                    .font(.system(size: 14.5, weight: .bold, design: fontDesign))
-                                    .foregroundStyle(Color.white.opacity(0.82))
+                            let countdownLabel = diffMins <= 0 ? "(Now)" : "(-\(manager.formattedCountdown))"
+                            HStack(alignment: .center, spacing: 6) {
+                                themedLabel(
+                                    next.prayer.displayName,
+                                    pixelSize: 1.75,
+                                    modernSize: 14.5,
+                                    modernWeight: .bold,
+                                    color: Color.white.opacity(0.85)
+                                )
 
-                                Text(manager.formattedPrayerTime(next.date))
-                                    .font(.system(size: 14.5, weight: .bold, design: fontDesign))
-                                    .foregroundStyle(accentColor)
+                                themedLabel(
+                                    manager.formattedPrayerTime(next.date),
+                                    pixelSize: 1.75,
+                                    modernSize: 14.5,
+                                    modernWeight: .bold,
+                                    color: accentColor
+                                )
 
-                                Text(diffMins <= 0 ? (isPixel ? "(NOW)" : "(Now)") : "(-\(manager.formattedCountdown))")
-                                    .font(.system(size: 9.5, weight: .bold, design: fontDesign))
-                                    .foregroundStyle(Color(red: 0.73, green: 0.77, blue: 0.84))
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(linelessSlotShape(cornerRadius: 3))
+                                themedLabel(
+                                    countdownLabel,
+                                    pixelSize: 1.15,
+                                    modernSize: 9.5,
+                                    modernWeight: .bold,
+                                    color: Color(red: 0.73, green: 0.77, blue: 0.84)
+                                )
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(linelessSlotShape(cornerRadius: 3))
                             }
                         }
 
                         TimelineView(.periodic(from: .now, by: 1)) { context in
-                            Text(Self.clockText(at: context.date, timeZone: manager.timeZone))
-                                .font(.system(size: 26, weight: .black, design: fontDesign))
-                                .foregroundStyle(Color.white)
-                                .shadow(color: Color.black.opacity(0.75), radius: 3)
+                            themedLabel(
+                                Self.clockText(at: context.date, timeZone: manager.timeZone),
+                                pixelSize: 3.2,
+                                modernSize: 26,
+                                modernWeight: .black,
+                                color: Color.white
+                            )
+                            .shadow(color: Color.black.opacity(0.75), radius: 3)
                         }
 
-                        Text(gregorianFull)
-                            .font(.system(size: 8.5, weight: .medium, design: fontDesign))
-                            .foregroundStyle(Color.white.opacity(0.52))
-                            .lineLimit(1)
+                        themedLabel(
+                            gregorianFull,
+                            pixelSize: 1.1,
+                            modernSize: 8.5,
+                            modernWeight: .medium,
+                            color: Color.white.opacity(0.55)
+                        )
+                        .lineLimit(1)
                     }
 
                     Spacer()
@@ -279,40 +297,61 @@ public struct PrayerExpandedCardView: View {
                 HStack(alignment: .center, spacing: 7) {
                     phaseChip(phase: phase)
 
-                    Text(themedText(manager.hijriDateString))
-                        .font(.system(size: 8, weight: .semibold, design: fontDesign))
-                        .foregroundStyle(Color.white.opacity(0.85))
-                        .lineLimit(1)
+                    themedLabel(
+                        manager.hijriDateString,
+                        pixelSize: 1.0,
+                        modernSize: 8,
+                        modernWeight: .semibold,
+                        color: Color.white.opacity(0.85)
+                    )
+                    .lineLimit(1)
 
                     Spacer(minLength: 4)
 
                     if let next = upcoming {
                         let diffMins = manager.minutesUntilNextPrayer
-                        HStack(spacing: 5) {
-                            Text(themedText(next.prayer.displayName))
-                                .font(.system(size: 8.5, weight: .bold, design: fontDesign))
-                                .foregroundStyle(Color.white.opacity(0.85))
+                        let countdownLabel = diffMins <= 0 ? "(Now)" : "(-\(manager.formattedCountdown))"
+                        HStack(alignment: .center, spacing: 5) {
+                            themedLabel(
+                                next.prayer.displayName,
+                                pixelSize: 1.05,
+                                modernSize: 8.5,
+                                modernWeight: .bold,
+                                color: Color.white.opacity(0.88)
+                            )
 
-                            Text(manager.formattedPrayerTime(next.date))
-                                .font(.system(size: 8.5, weight: .bold, design: fontDesign))
-                                .foregroundStyle(accentColor)
+                            themedLabel(
+                                manager.formattedPrayerTime(next.date),
+                                pixelSize: 1.05,
+                                modernSize: 8.5,
+                                modernWeight: .bold,
+                                color: accentColor
+                            )
 
-                            Text(diffMins <= 0 ? (isPixel ? "(NOW)" : "(Now)") : "(-\(manager.formattedCountdown))")
-                                .font(.system(size: 7.5, weight: .bold, design: fontDesign))
-                                .foregroundStyle(Color(red: 0.73, green: 0.77, blue: 0.84))
+                            themedLabel(
+                                countdownLabel,
+                                pixelSize: 0.95,
+                                modernSize: 7.5,
+                                modernWeight: .bold,
+                                color: Color(red: 0.73, green: 0.77, blue: 0.84)
+                            )
                         }
                         .padding(.horizontal, 7)
-                        .padding(.vertical, 3)
+                        .padding(.vertical, 3.5)
                         .background(linelessSlotShape(cornerRadius: 3.5))
                     }
 
                     if let sched = schedule {
-                        Text("\(themedText("Imsak")) \(manager.formattedPrayerTime(sched.imsak))")
-                            .font(.system(size: 7.5, weight: .bold, design: fontDesign))
-                            .foregroundStyle(Color.white.opacity(0.70))
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(linelessSlotShape(cornerRadius: 3.5))
+                        themedLabel(
+                            "Imsak \(manager.formattedPrayerTime(sched.imsak))",
+                            pixelSize: 0.95,
+                            modernSize: 7.5,
+                            modernWeight: .bold,
+                            color: Color.white.opacity(0.72)
+                        )
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3.5)
+                        .background(linelessSlotShape(cornerRadius: 3.5))
                     }
 
                     cityChip
@@ -333,19 +372,40 @@ public struct PrayerExpandedCardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
     }
 
-    // MARK: - 3. SHARED LINELESS COMPONENTS
+    // MARK: - 3. SHARED DUAL-THEME TEXT & LINELESS COMPONENTS
+
+    @ViewBuilder
+    private func themedLabel(
+        _ text: String,
+        pixelSize: CGFloat,
+        modernSize: CGFloat,
+        modernWeight: Font.Weight = .bold,
+        color: Color
+    ) -> some View {
+        if isPixel {
+            PixelText(text: text.uppercased(), color: color, pixelSize: pixelSize)
+        } else {
+            Text(text)
+                .font(.system(size: modernSize, weight: modernWeight, design: .rounded))
+                .foregroundStyle(color)
+        }
+    }
 
     private func phaseChip(phase: SolarPhaseStyle) -> some View {
         HStack(spacing: 5) {
             Image(systemName: phase.icon)
                 .font(.system(size: 8.5, weight: .bold))
                 .foregroundStyle(accentColor)
-            Text(phase.label)
-                .font(.system(size: 8, weight: .bold, design: fontDesign))
-                .foregroundStyle(Color.white)
+            themedLabel(
+                phase.label,
+                pixelSize: 1.05,
+                modernSize: 8,
+                modernWeight: .bold,
+                color: Color.white
+            )
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.vertical, 3.5)
         .background(linelessSlotShape(cornerRadius: 3.5))
         .fixedSize()
     }
@@ -355,41 +415,61 @@ public struct PrayerExpandedCardView: View {
             Image(systemName: "mappin.and.ellipse")
                 .font(.system(size: 8.5, weight: .bold))
                 .foregroundStyle(accentColor)
-            Text(themedText(manager.cityName))
-                .font(.system(size: 8, weight: .bold, design: fontDesign))
-                .foregroundStyle(Color.white.opacity(0.95))
+            themedLabel(
+                manager.cityName,
+                pixelSize: 1.05,
+                modernSize: 8,
+                modernWeight: .bold,
+                color: Color.white.opacity(0.95)
+            )
         }
         .padding(.horizontal, 8)
-        .padding(.vertical, 3)
+        .padding(.vertical, 3.5)
         .background(linelessSlotShape(cornerRadius: 3.5))
         .fixedSize()
     }
 
     private func milestonesCard(sched: DailyPrayerSchedule) -> some View {
-        VStack(spacing: 6) {
+        VStack(spacing: isPixel ? 8 : 6) {
             HStack {
-                Text(themedText("Imsak"))
-                    .font(.system(size: 8, weight: .bold, design: fontDesign))
-                    .foregroundStyle(Color.white.opacity(0.52))
+                themedLabel(
+                    "Imsak",
+                    pixelSize: 1.05,
+                    modernSize: 8,
+                    modernWeight: .bold,
+                    color: Color.white.opacity(0.55)
+                )
                 Spacer()
-                Text(manager.formattedPrayerTime(sched.imsak))
-                    .font(.system(size: 10, weight: .bold, design: fontDesign))
-                    .foregroundStyle(Color.white)
+                themedLabel(
+                    manager.formattedPrayerTime(sched.imsak),
+                    pixelSize: 1.35,
+                    modernSize: 10,
+                    modernWeight: .bold,
+                    color: Color.white
+                )
             }
 
             HStack {
-                Text(themedText("Sunrise"))
-                    .font(.system(size: 8, weight: .bold, design: fontDesign))
-                    .foregroundStyle(Color.white.opacity(0.52))
+                themedLabel(
+                    "Sunrise",
+                    pixelSize: 1.05,
+                    modernSize: 8,
+                    modernWeight: .bold,
+                    color: Color.white.opacity(0.55)
+                )
                 Spacer()
-                Text(manager.formattedPrayerTime(sched.terbit))
-                    .font(.system(size: 10, weight: .bold, design: fontDesign))
-                    .foregroundStyle(Color(red: 1.0, green: 0.80, blue: 0.36))
+                themedLabel(
+                    manager.formattedPrayerTime(sched.terbit),
+                    pixelSize: 1.35,
+                    modernSize: 10,
+                    modernWeight: .bold,
+                    color: Color(red: 1.0, green: 0.80, blue: 0.36)
+                )
             }
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .frame(width: 140)
+        .padding(.vertical, 10)
+        .frame(width: 152)
         .background(linelessSlotShape(cornerRadius: 4, modernRadius: 12))
     }
 
@@ -446,37 +526,10 @@ public struct PrayerExpandedCardView: View {
                     let isPassed = (!isNext && !isCurrent && item.date < now)
                     let isHovered = (hoveredPrayer == item.prayer.rawValue)
 
-                    VStack(spacing: 2.5) {
+                    VStack(spacing: isPixel ? 3 : 2.5) {
                         // 1. Station Node Beacon
-                        ZStack {
-                            if isNext {
-                                Circle()
-                                    .fill(accentColor)
-                                    .frame(width: 10, height: 10)
-                                Circle()
-                                    .fill(Color.black)
-                                    .frame(width: 4, height: 4)
-                            } else if isCurrent {
-                                Circle()
-                                    .stroke(Color.white.opacity(0.85), lineWidth: 1.5)
-                                    .frame(width: 9, height: 9)
-                                Circle()
-                                    .fill(Color.white)
-                                    .frame(width: 4, height: 4)
-                            } else if isPassed {
-                                Circle()
-                                    .fill(accentColor.opacity(0.25))
-                                    .frame(width: 9, height: 9)
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 4.5, weight: .black))
-                                    .foregroundStyle(accentColor)
-                            } else {
-                                Circle()
-                                    .fill(Color.white.opacity(0.25))
-                                    .frame(width: 6, height: 6)
-                            }
-                        }
-                        .frame(height: 12)
+                        stationBeacon(isNext: isNext, isCurrent: isCurrent, isPassed: isPassed)
+                            .frame(height: 12)
 
                         // 2. Status Tag (Unified accent role for NEXT; subtle translucent pill for CURRENT)
                         if isNext {
@@ -484,29 +537,37 @@ public struct PrayerExpandedCardView: View {
                         } else if isCurrent {
                             statusTag(text: "CURRENT", foreground: Color.white.opacity(0.92), background: Color.white.opacity(0.13))
                         } else {
-                            Text(isPassed ? "PASSED" : "UPCOMING")
-                                .font(.system(size: 6.5, weight: .semibold, design: fontDesign))
-                                .foregroundStyle(Color.white.opacity(isPassed ? 0.34 : 0.42))
-                                .frame(height: 11)
+                            themedLabel(
+                                isPassed ? "PASSED" : "UPCOMING",
+                                pixelSize: 0.90,
+                                modernSize: 6.5,
+                                modernWeight: .semibold,
+                                color: Color.white.opacity(isPassed ? 0.36 : 0.45)
+                            )
+                            .frame(height: 11)
                         }
 
                         // 3. Prayer Name
-                        Text(item.prayer.displayName.uppercased())
-                            .font(.system(size: 8.5, weight: (isNext || isCurrent) ? .heavy : .bold, design: fontDesign))
-                            .foregroundStyle(
-                                isNext ? accentColor :
+                        themedLabel(
+                            item.prayer.displayName.uppercased(),
+                            pixelSize: 1.15,
+                            modernSize: 8.5,
+                            modernWeight: (isNext || isCurrent) ? .heavy : .bold,
+                            color: isNext ? accentColor :
                                 (isCurrent ? Color.white :
                                 (isPassed ? Color.white.opacity(0.45) : Color.white.opacity(0.82)))
-                            )
+                        )
 
                         // 4. Formatted Time
-                        Text(manager.formattedPrayerTime(item.date))
-                            .font(.system(size: 11, weight: isNext ? .black : .bold, design: fontDesign))
-                            .foregroundStyle(
-                                isNext ? accentColor :
+                        themedLabel(
+                            manager.formattedPrayerTime(item.date),
+                            pixelSize: 1.35,
+                            modernSize: 11,
+                            modernWeight: isNext ? .black : .bold,
+                            color: isNext ? accentColor :
                                 (isCurrent ? Color.white :
                                 (isPassed ? Color.white.opacity(0.48) : Color.white))
-                            )
+                        )
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 1)
@@ -530,20 +591,63 @@ public struct PrayerExpandedCardView: View {
     }
 
     @ViewBuilder
-    private func statusTag(text: String, foreground: Color, background: Color) -> some View {
-        Text(text)
-            .font(.system(size: 6.5, weight: .black, design: fontDesign))
-            .foregroundStyle(foreground)
-            .padding(.horizontal, 5)
-            .frame(height: 11)
-            .background(
-                Group {
-                    if isPixel {
-                        RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(background)
-                    } else {
-                        Capsule().fill(background)
-                    }
+    private func stationBeacon(isNext: Bool, isCurrent: Bool, isPassed: Bool) -> some View {
+        ZStack {
+            if isNext {
+                if isPixel {
+                    Rectangle().fill(accentColor).frame(width: 9, height: 9)
+                    Rectangle().fill(Color.black).frame(width: 3, height: 3)
+                } else {
+                    Circle().fill(accentColor).frame(width: 10, height: 10)
+                    Circle().fill(Color.black).frame(width: 4, height: 4)
                 }
-            )
+            } else if isCurrent {
+                if isPixel {
+                    Rectangle().stroke(Color.white.opacity(0.85), lineWidth: 1.5).frame(width: 8, height: 8)
+                    Rectangle().fill(Color.white).frame(width: 3, height: 3)
+                } else {
+                    Circle().stroke(Color.white.opacity(0.85), lineWidth: 1.5).frame(width: 9, height: 9)
+                    Circle().fill(Color.white).frame(width: 4, height: 4)
+                }
+            } else if isPassed {
+                if isPixel {
+                    Rectangle().fill(accentColor.opacity(0.25)).frame(width: 9, height: 9)
+                    PixelIcon(glyph: .checkmark, color: accentColor, pixelSize: 0.75)
+                } else {
+                    Circle().fill(accentColor.opacity(0.25)).frame(width: 9, height: 9)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 4.5, weight: .black))
+                        .foregroundStyle(accentColor)
+                }
+            } else {
+                if isPixel {
+                    Rectangle().fill(Color.white.opacity(0.25)).frame(width: 5, height: 5)
+                } else {
+                    Circle().fill(Color.white.opacity(0.25)).frame(width: 6, height: 6)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func statusTag(text: String, foreground: Color, background: Color) -> some View {
+        themedLabel(
+            text,
+            pixelSize: 0.90,
+            modernSize: 6.5,
+            modernWeight: .black,
+            color: foreground
+        )
+        .padding(.horizontal, 5)
+        .frame(height: 11)
+        .background(
+            Group {
+                if isPixel {
+                    RoundedRectangle(cornerRadius: 1.5, style: .continuous).fill(background)
+                } else {
+                    Capsule().fill(background)
+                }
+            }
+        )
     }
 }

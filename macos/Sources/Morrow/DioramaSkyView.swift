@@ -270,32 +270,27 @@ public struct DioramaSkyView: View {
             let sunrise = sunriseHour
             let sunset = sunsetHour
             let nextSunrise = sunrise + 24.0
-            let isDawnHorizon = h >= 4.4 && h < 6.1
-            let isSunsetHorizon = h >= 17.4 && h < 19.1
-            let isHorizonSun = isDawnHorizon || isSunsetHorizon
-            let isDay = (h >= sunrise && h <= sunset) || isHorizonSun
+            let isDay = h >= (sunrise - 0.15) && h <= (sunset + 0.25)
 
             let p: Double = {
                 if isDay {
-                    return max(0.05, min(0.95, (h - sunrise) / max(0.1, sunset - sunrise)))
+                    return max(0.0, min(1.0, (h - sunrise) / max(0.1, sunset - sunrise)))
                 } else {
                     let hh = h < sunrise ? h + 24.0 : h
-                    return max(0.05, min(0.95, (hh - sunset) / max(0.1, nextSunrise - sunset)))
+                    return max(0.08, min(0.92, (hh - sunset) / max(0.1, nextSunrise - sunset)))
                 }
             }()
 
-            let cx: CGFloat
-            let cy: CGFloat
-            if isDawnHorizon {
-                cx = snap(size.width * 0.40)
-                cy = snap(baseSkylineY)
-            } else if isSunsetHorizon {
-                cx = snap(size.width * 0.60)
-                cy = snap(baseSkylineY)
-            } else {
-                cx = snap(size.width * (0.48 + 0.12 * p))
-                cy = snap(size.height * (0.36 - 0.14 * sin(.pi * p)))
-            }
+            let zenithY = size.height * 0.18
+            let cx = snap(size.width * (0.28 + 0.44 * p))
+            let cy: CGFloat = {
+                if isDay {
+                    return snap(baseSkylineY - (baseSkylineY - zenithY) * sin(.pi * p))
+                } else {
+                    return snap((baseSkylineY - 12) - (baseSkylineY - 12 - zenithY) * sin(.pi * p))
+                }
+            }()
+            let isHorizonSun = isDay && (p <= 0.12 || p >= 0.88)
 
             // Clip celestial body to sky above horizon so horizon suns are cleanly half-submerged
             ctx.drawLayer { skyLayer in
