@@ -323,6 +323,26 @@ because it is the only channel that can replace a signed `.app` in place. Listed
 the difference between "nobody wrote it" and "it does not belong here" survives the next
 audit.
 
+`CodexTmuxRouting` is out of scope **for now**, and the reason is measured rather than
+assumed: it decides where a jump lands *inside* tmux, and the port has no tmux jump to
+decide about. `morrow-platform::terminal::activate` reaches a window through the
+compositor (`swaymsg`, `hyprctl`) or by copying the path; `rg tmux` over
+`morrow-platform/src` and `src-tauri/src` matches one file, and it is not an activator.
+
+Porting it would first need the thing it routes for:
+
+- a `list-panes -a -F` / `list-clients -F` runner with a tmux branch in `activate`;
+- a parent pid per process — `ProcessInfo` carries pid, executable, argv, cwd and start
+  time but no `ppid`, so the walk up to the pane's process needs `/proc/<pid>/stat` on
+  Linux and `th32ParentProcessID` on Windows;
+- the decision itself, which is the part that ports cleanly: process → pane by pid,
+  then by `"<title> | <last path component>"` against the pane title with the braille
+  spinner stripped, and **`ambiguous`** rather than a guess when two panes match.
+
+That last rule is the one worth keeping written down: a shared app-server hook carries
+the daemon's environment, not the TUI's, so the hook's `TMUX_PANE` is often another
+session's, and switching to it lands the user somewhere they did not ask to be.
+
 The same goes for the Apple-only surfaces in the macOS tree: hardware-notch detection,
 Live Activities, the Apple Companion (`CBPeripheralManager` + `MultipeerConnectivity`),
 Apple Mail, `NSHapticFeedbackManager` and the AppleScript media controls — the port
