@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (kesebelas) — dua puluh satu slice remediasi (#249–#283). #244, #246, #247, #248 selesai penuh; **tiga belas reader terdaftar** dan #232 hanya menyisakan observer peristiwa serta `ScanCache`. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (keduabelas) — dua puluh empat slice remediasi (#249–#287). #232 tertutup kecuali gate hardware: **tiga belas reader**, cache scan tersambung, dan observer peristiwa ada (kedua lengan platform belum pernah berjalan). Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -126,6 +126,15 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (keduabelas) — #232 ditutup, kecuali yang tidak bisa dijalankan
+
+- **Sudah:** **#284 → PR #285** cache scan tersambung + gerbang kesegaran. **#286 → PR #287** crate `morrow-watch` (inotify, `ReadDirectoryChangesW`, fallback poll) dan penyambungannya ke tick.
+- **Yang ditemukan saat mengukur:** `ClaudeTranscripts::read` membaca **setiap** transkrip di setiap proyek — 4000 file, empat kali per detik. **1,5 detik per scan.** Gerbang kesegaran sebelum membaca memotongnya jadi 88 ms; cache memotong bacaannya jadi nol pada tick berikutnya. Cache teks memakai `Arc<str>` karena menyerahkan salinan 64 KB × 4000 file berarti 250 MB memcpy per scan.
+- **Kekhawatiran saya sendiri yang tidak berdasar:** "O(9 × proses)" yang saya ulang di tiga PR. Diukur: **2,9 ms** terhadap scan 84 ms — 3,4%. Sekarang ada angkanya, bukan penilaian.
+- **Yang tidak selesai:** E2E-2 penuh (#240 kriteria 4) butuh host dengan `claude` asli. Lengan Linux dan Windows `morrow-watch` di-type-check untuk kedua target tapi **belum pernah berjalan** — dinyatakan di dokumentasi crate.
+- **Bukti:** `cargo test --workspace` 848 lulus (843 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS (kini termasuk `morrow-watch`); `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** menurunkan rantai 26 PR ke `main` dan me-review satu slice dari ujung ke ujung di mesin Linux. Tidak ada PR yang pernah merge.
 
 ### 2026-11-22 (kesebelas) — #244 batch 2: enam agent, tiga PR
 
