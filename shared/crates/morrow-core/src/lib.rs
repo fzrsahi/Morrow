@@ -21,6 +21,8 @@
 //!   hook or transcript row carries (`parsing`), and the list that applies
 //!   them (`list`).
 //! - [`digest`]: SHA-256, for the delivery digest of a hook Cursor ran.
+//! - [`prayer`]: the pure astronomical core of the prayer times feature, from
+//!   the day, coordinates, offset and method handed in.
 #![forbid(unsafe_code)]
 
 pub mod agent_tasks;
@@ -32,6 +34,7 @@ pub mod intake;
 pub mod markdown;
 pub mod model_label;
 pub mod music;
+pub mod prayer;
 pub mod reduce;
 pub mod session_recap;
 pub mod time;
