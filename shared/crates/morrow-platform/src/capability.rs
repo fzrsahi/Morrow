@@ -286,18 +286,9 @@ impl Feature {
                     Capability::Unsupported("secret storage needs the session bus".into())
                 }
             }
-            // #306: "Supported" now means the real reader can parse the file,
-            // not merely that a file with that name exists.
+            // #306: "Supported" now means the real reader can parse the file.
             Self::ClaudeCredentials => {
-                match crate::quota::read_credentials_at(&environment.claude_credentials) {
-                    Ok(Some(_)) => Capability::Supported,
-                    Ok(None) => {
-                        Capability::Degraded("no usable ~/.claude/.credentials.json to read".into())
-                    }
-                    Err(_) => {
-                        Capability::Degraded("Claude credentials file could not be read".into())
-                    }
-                }
+                claude_credentials_capability(&environment.claude_credentials)
             }
             Self::Ble => {
                 if environment.has_bus() {
@@ -333,6 +324,17 @@ pub struct Row {
 /// the Linux arms do not: WinRT for media and toasts, Core Audio for the volume,
 /// WTS for the lock, `SHQueryUserNotificationState` for fullscreen, the registry
 /// for autostart, the Credential Manager for secrets.
+/// #306: "Supported" means the reader in `crate::quota` can actually parse
+/// the file, not just that a file with that name exists. Shared by the macOS
+/// and Windows probes so the two rows can never drift apart.
+fn claude_credentials_capability(path: &Path) -> Capability {
+    match crate::quota::read_credentials_at(path) {
+        Ok(Some(_)) => Capability::Supported,
+        Ok(None) => Capability::Degraded("no usable ~/.claude/.credentials.json to read".into()),
+        Err(_) => Capability::Degraded("Claude credentials file could not be read".into()),
+    }
+}
+
 fn windows(feature: Feature, environment: &Environment) -> Capability {
     match feature {
         // SMTC through WinRT: no tool to find, no bus to have.
@@ -375,13 +377,9 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::Autostart => Capability::Supported,
         // Credential Manager: per user, no prompt beyond the first write.
         Feature::Secrets => Capability::Supported,
-        // Same #306 reader as above: parsed file, real support.
+        // Same #306 probe as above: parsed file, real support.
         Feature::ClaudeCredentials => {
-            match crate::quota::read_credentials_at(&environment.claude_credentials) {
-                Ok(Some(_)) => Capability::Supported,
-                Ok(None) => Capability::Degraded("no usable .claude/.credentials.json".into()),
-                Err(_) => Capability::Degraded("Claude credentials file could not be read".into()),
-            }
+            claude_credentials_capability(&environment.claude_credentials)
         }
         Feature::Ble => Capability::Degraded(
             "WinRT Bluetooth LE, when the radio is on and the app is allowed".into(),
