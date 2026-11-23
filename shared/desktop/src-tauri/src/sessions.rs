@@ -161,6 +161,44 @@ pub struct Sessions {
 }
 
 impl Sessions {
+    /// Put the session list a previous launch wrote back in place (#238 AC 6).
+    ///
+    /// `title` resolves the sessions that did not carry one — the store's own name for
+    /// them — and is asked only for a row that has none. A session a hook already
+    /// reported is left alone: the file is a memory of last time, not the truth.
+    pub fn restore(
+        &mut self,
+        rows: Vec<morrow_core::session_store::PersistedSession>,
+        title: impl Fn(
+            &morrow_core::session_store::PersistedSession,
+        ) -> Option<morrow_core::session_store::ResolvedSessionTitle>,
+    ) -> usize {
+        let mut restored = 0;
+        for row in rows {
+            if self.inner.contains_key(&row.session_id) {
+                continue;
+            }
+            let mut snapshot = morrow_core::session_store::into_snapshot(&row);
+            if snapshot.session_title.is_none() {
+                if let Some(resolved) = title(&row) {
+                    snapshot.session_title = Some(resolved.title);
+                }
+            }
+            self.inner.insert(row.session_id, snapshot);
+            restored += 1;
+        }
+        restored
+    }
+
+    /// The rows a save would write.
+    pub fn persisted(&self) -> Vec<morrow_core::session_store::PersistedSession> {
+        self.inner
+            .iter()
+            .filter(|(id, snap)| morrow_core::session_store::is_persisted(id, snap))
+            .map(|(id, snap)| morrow_core::session_store::to_persisted(id, snap))
+            .collect()
+    }
+
     /// Creates a session store whose reducer ignores `home_directory` as a
     /// bare project `cwd`.
     pub fn with_home(home_directory: impl Into<String>) -> Self {
@@ -773,6 +811,86 @@ mod tests {
 
     /// #238 AC 4: a card row cannot show a table or a fence, only their syntax, so
     /// the shell folds the reply into one line of running text before it is sent.
+    /// #238 AC 6: the list a launch wrote comes back, titles included, and a session a
+    /// hook already reported is not overwritten by the file.
+    #[test]
+    fn a_restart_brings_the_session_list_and_its_titles_back() {
+        use morrow_core::session_store::{
+            self, PersistedSession, ResolvedSessionTitle, SessionTitleSource,
+        };
+
+        let row = |id: &str, source: &str, title: Option<&str>| PersistedSession {
+            session_id: id.into(),
+            source: source.into(),
+            cwd: Some(format!("/work/{id}")),
+            session_title: title.map(str::to_owned),
+            start_time: "2026-01-02T03:04:05Z".into(),
+            last_activity: "2026-01-02T03:09:05Z".into(),
+            last_assistant_message: Some("shipped it".into()),
+            ..PersistedSession::default()
+        };
+
+        let mut sessions = Sessions::with_home("/home/u");
+        // A hook lands before the file is read: that session is the hook's.
+        sessions.apply(
+            &hook(r#"{"session_id":"live","hook_event_name":"SessionStart"}"#),
+            10,
+        );
+        let restored = sessions.restore(
+            vec![
+                row("codex-1", "codex", None),
+                row("claude-1", "claude", Some("Named already")),
+                row("live", "claude", None),
+            ],
+            |row| match row.session_id.as_str() {
+                "codex-1" => Some(ResolvedSessionTitle {
+                    title: "Thread name".into(),
+                    source: SessionTitleSource::CodexThreadName,
+                }),
+                _ => None,
+            },
+        );
+        assert_eq!(restored, 2, "the live session is left alone");
+
+        let rows = sessions.snapshot();
+        let codex = rows
+            .iter()
+            .find(|row| row.session_id == "codex-1")
+            .expect("codex row");
+        assert_eq!(codex.cwd_name, "codex-1");
+        assert_eq!(codex.last_assistant_message, "shipped it");
+        // The title the file did not carry was resolved from the store.
+        assert_eq!(
+            sessions
+                .inner
+                .get("codex-1")
+                .and_then(|s| s.session_title.clone()),
+            Some("Thread name".to_owned())
+        );
+        assert_eq!(
+            sessions
+                .inner
+                .get("claude-1")
+                .and_then(|s| s.session_title.clone()),
+            Some("Named already".to_owned())
+        );
+        assert_eq!(sessions.inner["live"].session_title, None);
+
+        // Saving writes the same three sessions back.
+        let persisted = sessions.persisted();
+        assert_eq!(persisted.len(), 3);
+        let dir = std::env::temp_dir().join(format!(
+            "morrow-restore-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        session_store::save(&dir, &persisted);
+        let back = session_store::load(&dir);
+        assert_eq!(back.len(), 3);
+        assert!(back.iter().any(|row| row.session_id == "codex-1"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn the_reply_preview_is_one_flat_line_whatever_the_reply_is() {
         use morrow_core::transcript::ScanDelta;

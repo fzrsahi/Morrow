@@ -40,6 +40,7 @@ pub mod path_identity;
 pub mod reduce;
 pub mod scan_policy;
 pub mod session_recap;
+pub mod session_store;
 pub mod sqlite;
 pub mod time;
 pub mod transcript;
