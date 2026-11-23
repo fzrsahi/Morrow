@@ -108,7 +108,7 @@ fn civil_from_days(days: i64) -> (i64, i64, i64) {
 }
 
 /// Howard Hinnant's civil-date algorithm: days since 1970-01-01.
-fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
+pub(crate) fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = year.div_euclid(400);
     let year_of_era = year - era * 400;

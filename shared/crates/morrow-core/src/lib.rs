@@ -44,6 +44,7 @@ pub mod music;
 pub mod path_identity;
 pub mod push;
 pub mod push_policy;
+pub mod push_transport;
 pub mod reduce;
 pub mod scan_policy;
 pub mod session_recap;
