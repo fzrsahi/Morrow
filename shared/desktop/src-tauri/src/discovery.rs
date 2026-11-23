@@ -1064,6 +1064,13 @@ impl ProcessReader for KiroSessions {
                     .and_then(morrow_core::discovery::time::parse_iso8601_ms)
                     .or_else(|| transcript_files::mtime_ms(&path.to_string_lossy()))
                     .unwrap_or(0);
+                if let Some(started_ms) = process.start_time_ms {
+                    // A V2 session that last moved long before the process began is
+                    // another session, just as in the V3 loop above.
+                    if modified_ms.saturating_add(KIRO_FRESHNESS_MS) < started_ms {
+                        continue;
+                    }
+                }
                 return vec![DiscoveryHit {
                     session_id,
                     source: "kiro",
@@ -2552,6 +2559,61 @@ mod tests {
                 .iter()
                 .all(|h| h.source != "kiro")
         );
+    }
+
+    /// #282: the V2 `sessions/cli` layout must skip a session that last moved long
+    /// before the process began, the same rule the V3 loop applies.
+    #[test]
+    fn a_kiro_v2_session_older_than_its_process_is_skipped() {
+        let scratch = Scratch::new("kiro-v2-old");
+        let cwd = "/home/dev/project";
+        let cli = scratch.0.join(".kiro/sessions/cli");
+        std::fs::create_dir_all(&cli).expect("a store");
+        std::fs::write(
+            cli.join("kiro-v2-old.json"),
+            format!(
+                r#"{{"cwd":"{cwd}","updated_at":"{}"}}"#,
+                iso8601(now_ms() - 86_400_000)
+            ),
+        )
+        .expect("a session file");
+
+        let mut process = process_with_cwd(104, "/usr/bin/kiro-cli", "kiro-cli", cwd);
+        process.start_time_ms = Some(now_ms());
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &[process], now_ms())
+                .hits
+                .iter()
+                .all(|h| h.source != "kiro")
+        );
+    }
+
+    /// A V2 session that moved after the process began is still a hit, even with a
+    /// real (non-epoch) process start time.
+    #[test]
+    fn a_fresh_kiro_v2_session_after_process_start_is_a_session() {
+        let scratch = Scratch::new("kiro-v2-fresh");
+        let cwd = "/home/dev/project";
+        let cli = scratch.0.join(".kiro/sessions/cli");
+        std::fs::create_dir_all(&cli).expect("a store");
+        let started_ms = now_ms() - 60_000;
+        std::fs::write(
+            cli.join("kiro-v2-fresh.json"),
+            format!(
+                r#"{{"cwd":"{cwd}","updated_at":"{}"}}"#,
+                iso8601(started_ms + 60_000)
+            ),
+        )
+        .expect("a session file");
+
+        let mut process = process_with_cwd(105, "/usr/bin/kiro-cli", "kiro-cli", cwd);
+        process.start_time_ms = Some(started_ms);
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &[process], now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "kiro-v2-fresh");
     }
 
     /// An ISO 8601 stamp for a millisecond instant, so a fresh store can be seeded
