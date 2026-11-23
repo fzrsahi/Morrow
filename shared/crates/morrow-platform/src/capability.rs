@@ -286,6 +286,10 @@ impl Feature {
                     Capability::Unsupported("secret storage needs the session bus".into())
                 }
             }
+            // #306: this row is backed by the real reader in `crate::quota`,
+            // compiled into every platform build, so "Supported" means the
+            // file that reader opens is actually there — not a promise about
+            // a token we never inspected.
             Self::ClaudeCredentials => {
                 if environment.claude_credentials.is_file() {
                     Capability::Supported
@@ -369,6 +373,7 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::Autostart => Capability::Supported,
         // Credential Manager: per user, no prompt beyond the first write.
         Feature::Secrets => Capability::Supported,
+        // Same #306 reader as above: present file, real support.
         Feature::ClaudeCredentials => {
             if environment.claude_credentials.is_file() {
                 Capability::Supported
