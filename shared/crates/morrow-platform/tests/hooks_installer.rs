@@ -295,6 +295,27 @@ fn no_target_claims_to_be_detected_on_a_home_with_no_clis() {
     }
 }
 
+/// #234 batch 2: Grok's target is only "detected" when its root exists, because
+/// there is no fixed directory beside the home to look for. A machine with no
+/// Grok must not get a `~/.grok` created by an install.
+#[test]
+fn grok_is_detected_by_its_root_not_by_a_home_directory() {
+    let home = Home::new("grok-absent");
+    let status = hooks::targets_status(&home.paths());
+    let grok = status
+        .iter()
+        .find(|row| row.source == "grok")
+        .expect("grok");
+    assert!(!grok.detected, "no grok on this machine");
+    // Its path is shown as the default root rather than a home directory.
+    assert!(
+        grok.path.ends_with("hooks/codeisland.json"),
+        "{:?}",
+        grok.path
+    );
+    assert!(!grok.installed);
+}
+
 /// #234 batch 1, end to end through the file system: install, repair, uninstall,
 /// and the user's own keys untouched — for a fork added only as a table row.
 #[test]
