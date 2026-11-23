@@ -13,10 +13,7 @@
 //! the credential read stay in the platform shells; what is here is the value
 //! semantics they interpret.
 
-use std::fmt;
-
 use serde::Serialize;
-use serde::ser::SerializeStruct;
 use serde_json::Value;
 
 use crate::reduce::Timestamp;
@@ -342,10 +339,13 @@ impl Snapshot {
 }
 
 /// Swift `ClaudeQuotaSnapshot.number(_:)`: an `NSNumber` or a numeric string.
+/// A JSON boolean bridges to `NSNumber` too, so `true` reads as 1 and `false`
+/// as 0 — matching Swift's `as? NSNumber` / `doubleValue`.
 fn number(value: Option<&Value>) -> Option<f64> {
     match value? {
         Value::Number(number) => number.as_f64(),
         Value::String(raw) => raw.parse().ok(),
+        Value::Bool(flag) => Some(if *flag { 1.0 } else { 0.0 }),
         _ => None,
     }
 }
@@ -375,8 +375,8 @@ fn legacy(
 }
 
 /// `ClaudeQuotaClientError`, without the transport half (there is no HTTP
-/// here). Swift's `interpret` collapses both parse errors into `.parse`; this
-/// core keeps `NotJson` and `NoLimits` distinct, as `ParseError` does.
+/// here). Like Swift's `interpret`, both [`ParseError`] cases collapse into the
+/// single `.parse` — only [`Snapshot::parse`] itself keeps them distinct.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QuotaError {
     /// Swift `.unauthorized`: 401/403, or a known-expired credential.
@@ -386,16 +386,13 @@ pub enum QuotaError {
     /// Swift `.http(status)`. Redirects are refused by the shell, so a 3xx
     /// surfaces here instead of being followed.
     Http(i32),
-    NotJson,
-    NoLimits,
+    /// Swift `.parse`: the body was not JSON or carried no usable limit.
+    Parse,
 }
 
 impl From<ParseError> for QuotaError {
-    fn from(error: ParseError) -> Self {
-        match error {
-            ParseError::NotJson => Self::NotJson,
-            ParseError::NoLimits => Self::NoLimits,
-        }
+    fn from(_: ParseError) -> Self {
+        Self::Parse
     }
 }
 
@@ -411,106 +408,6 @@ pub fn interpret_response(
         401 | 403 => Err(QuotaError::Unauthorized),
         429 => Err(QuotaError::RateLimited),
         _ => Err(QuotaError::Http(status)),
-    }
-}
-
-/// `ClaudeQuotaChipMode`: what the collapsed island shows when plan limits are
-/// enabled. Raw values are Swift's case names (`weeklyAll`, `weeklyScoped`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-pub enum ChipMode {
-    Off,
-    /// Weekly budget by default; the 5-hour window only when it is blocking.
-    Auto,
-    Session,
-    #[serde(rename = "weeklyAll")]
-    WeeklyAll,
-    #[serde(rename = "weeklyScoped")]
-    WeeklyScoped,
-}
-
-impl ChipMode {
-    pub const ALL: [Self; 5] = [
-        Self::Off,
-        Self::Auto,
-        Self::Session,
-        Self::WeeklyAll,
-        Self::WeeklyScoped,
-    ];
-
-    pub fn raw_value(self) -> &'static str {
-        match self {
-            Self::Off => "off",
-            Self::Auto => "auto",
-            Self::Session => "session",
-            Self::WeeklyAll => "weeklyAll",
-            Self::WeeklyScoped => "weeklyScoped",
-        }
-    }
-
-    pub fn from_raw_value(raw: &str) -> Option<Self> {
-        Self::ALL.into_iter().find(|mode| mode.raw_value() == raw)
-    }
-}
-
-/// `ClaudeOAuthCredential`, as Claude Code stores it. The token is a secret:
-/// [`fmt::Debug`] and `serde::Serialize` deliberately redact/omit it so it can
-/// never reach a log line or a persisted state blob.
-#[derive(Clone, PartialEq)]
-pub struct Credential {
-    /// Bearer token. Never format or serialize this value.
-    pub access_token: String,
-    pub subscription_type: Option<String>,
-    pub expires_at: Option<Timestamp>,
-}
-
-impl fmt::Debug for Credential {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Credential")
-            .field("access_token", &"<redacted>")
-            .field("subscription_type", &self.subscription_type)
-            .field("expires_at", &self.expires_at)
-            .finish()
-    }
-}
-
-impl Serialize for Credential {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut state = serializer.serialize_struct("Credential", 2)?;
-        // No `access_token` field: serialized state contains no secret.
-        state.serialize_field("subscription_type", &self.subscription_type)?;
-        state.serialize_field("expires_at", &self.expires_at.map(|at| at.0))?;
-        state.end()
-    }
-}
-
-impl Credential {
-    /// Swift `ClaudeCredentialStore.parse(_:)`: the
-    /// `{"claudeAiOauth":{…}}` shape in the keychain / `.credentials.json`.
-    pub fn parse(data: &[u8]) -> Option<Self> {
-        let value: Value = serde_json::from_slice(data).ok()?;
-        let oauth = value.get("claudeAiOauth")?.as_object()?;
-        let access_token = oauth
-            .get("accessToken")
-            .and_then(Value::as_str)
-            .filter(|token| !token.is_empty())?;
-        Some(Self {
-            access_token: access_token.to_owned(),
-            subscription_type: oauth
-                .get("subscriptionType")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            expires_at: oauth
-                .get("expiresAt")
-                .and_then(Value::as_f64)
-                .map(|milliseconds| Timestamp(milliseconds / 1000.0)),
-        })
-    }
-
-    /// Swift `fetch(using:)`: a known-expired token is never sent; it is
-    /// reported as `unauthorized` before any request.
-    pub fn is_expired(&self, now: Timestamp) -> bool {
-        self.expires_at.is_some_and(|expires_at| expires_at <= now)
     }
 }
 
@@ -716,6 +613,23 @@ mod tests {
     }
 
     #[test]
+    fn boolean_utilization_reads_as_nsnumber_like_swift() {
+        // Swift `number(_:)` sees a JSON boolean as an `NSNumber`; true is 1,
+        // false is 0. Both the normalised and legacy shapes must agree.
+        let normalised = r#"{"limits":[
+            {"kind":"session","percent":true},
+            {"kind":"weekly_all","percent":false}
+        ]}"#;
+        let snapshot = Snapshot::parse(normalised.as_bytes(), now()).unwrap();
+        assert_eq!(snapshot.limit(Kind::Session).unwrap().percent, 1.0);
+        assert_eq!(snapshot.limit(Kind::WeeklyAll).unwrap().percent, 0.0);
+
+        let legacy = r#"{"five_hour":{"utilization":true}}"#;
+        let snapshot = Snapshot::parse(legacy.as_bytes(), now()).unwrap();
+        assert_eq!(snapshot.limit(Kind::Session).unwrap().percent, 1.0);
+    }
+
+    #[test]
     fn parse_errors_are_distinct() {
         for (name, json, expected) in [
             ("garbage", "nope", ParseError::NotJson),
@@ -751,13 +665,27 @@ mod tests {
             ("server error", "", 503, Some(QuotaError::Http(503))),
             // RedirectRefusal returns nil: a 3xx is surfaced, never followed.
             ("redirect refused", "", 302, Some(QuotaError::Http(302))),
-            ("not JSON", "nope", 200, Some(QuotaError::NotJson)),
-            ("no limits", "{}", 200, Some(QuotaError::NoLimits)),
+            ("not JSON", "nope", 200, Some(QuotaError::Parse)),
+            ("no limits", "{}", 200, Some(QuotaError::Parse)),
         ] {
             assert_eq!(
                 interpret_response(body.as_bytes(), status, now()).err(),
                 expected,
                 "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn interpret_collapses_both_parse_errors_to_parse() {
+        // Swift `ClaudeQuotaClient.interpret` throws `.parse` for both
+        // `ParseError.notJSON` and `ParseError.noLimits`; only the snapshot
+        // parser itself keeps the two apart.
+        for body in ["nope", "{}", r#"{"limits":[{"kind":"new","percent":1}]}"#] {
+            assert_eq!(
+                interpret_response(body.as_bytes(), 200, now()).unwrap_err(),
+                QuotaError::Parse,
+                "{body}"
             );
         }
     }
@@ -868,40 +796,6 @@ mod tests {
                 "{name}"
             );
         }
-    }
-
-    #[test]
-    fn credential_parse_and_token_hygiene() {
-        let json = r#"{"claudeAiOauth":{"accessToken":"sk-ant-oat01-abc","refreshToken":"r","expiresAt":1788472382000,"subscriptionType":"max"}}"#;
-        let credential = Credential::parse(json.as_bytes()).unwrap();
-        assert_eq!(credential.access_token, "sk-ant-oat01-abc");
-        assert_eq!(credential.subscription_type.as_deref(), Some("max"));
-        assert_eq!(credential.expires_at.unwrap().0, 1_788_472_382.0);
-        assert!(credential.is_expired(Timestamp(1_788_472_382.0)));
-        assert!(!credential.is_expired(Timestamp(1_788_472_381.0)));
-        assert!(Credential::parse(br#"{"claudeAiOauth":{"accessToken":""}}"#).is_none());
-
-        let debug = format!("{credential:?}");
-        let serialized = serde_json::to_string(&credential).unwrap();
-        assert!(!debug.contains("sk-ant-oat01-abc"), "{debug}");
-        assert!(!serialized.contains("sk-ant-oat01-abc"), "{serialized}");
-        assert!(debug.contains("<redacted>"));
-        assert!(!serialized.contains("access_token"));
-    }
-
-    #[test]
-    fn chip_mode_raw_values_match_swift() {
-        for (name, mode) in [
-            ("off", ChipMode::Off),
-            ("auto", ChipMode::Auto),
-            ("session", ChipMode::Session),
-            ("weeklyAll", ChipMode::WeeklyAll),
-            ("weeklyScoped", ChipMode::WeeklyScoped),
-        ] {
-            assert_eq!(mode.raw_value(), name);
-            assert_eq!(ChipMode::from_raw_value(name), Some(mode));
-        }
-        assert_eq!(ChipMode::from_raw_value("weekly_all"), None);
     }
 
     // Scheduler fixtures: `ClaudeQuotaSchedulerTests`, t0 = 1_800_000_000.
