@@ -1,6 +1,7 @@
 import AppKit
 import XCTest
 @testable import Morrow
+import MorrowCore
 
 final class ScreenDetectorTests: XCTestCase {
     func testAutoPreferredIndexPrefersBuiltInNotchScreenOverExternalDisplays() {
@@ -69,5 +70,45 @@ final class ScreenDetectorTests: XCTestCase {
         )
 
         XCTAssertEqual(index, 1)
+    }
+
+    func testDescriptorsAndIdentifiersForConnectedScreens() {
+        let screens = NSScreen.screens
+        let descriptors = ScreenDetector.descriptors(from: screens)
+        XCTAssertEqual(descriptors.count, screens.count)
+
+        let ids = descriptors.map(\.id)
+        XCTAssertEqual(Set(ids).count, ids.count, "display identifiers must be unique")
+        for (index, descriptor) in descriptors.enumerated() {
+            XCTAssertFalse(descriptor.id.isEmpty)
+            XCTAssertEqual(descriptor.index, index)
+            XCTAssertEqual(descriptor.isPrimary, index == 0)
+        }
+
+        if let firstScreen = screens.first {
+            let identifier = ScreenDetector.displayIdentifier(for: firstScreen)
+            XCTAssertFalse(identifier.isEmpty)
+            if ScreenDetector.isBuiltinScreen(firstScreen) {
+                XCTAssertEqual(identifier, "builtin")
+            }
+        }
+    }
+
+    @MainActor
+    func testScreenMonitorInitializesWithInjectedDisplays() {
+        let sample = [
+            DisplayDescriptor(
+                id: "builtin",
+                index: 0,
+                name: "Built-in",
+                width: 1512,
+                height: 982,
+                hasNotch: true,
+                isBuiltin: true,
+                isPrimary: true
+            )
+        ]
+        let monitor = ScreenMonitor(displays: sample, observeSystemChanges: false)
+        XCTAssertEqual(monitor.displays, sample)
     }
 }

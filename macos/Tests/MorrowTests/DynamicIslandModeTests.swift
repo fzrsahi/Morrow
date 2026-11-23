@@ -285,6 +285,11 @@ final class DynamicIslandModeTests: XCTestCase {
             "Option 2 Balanced Twin must avoid wide hollow gap between Mascot and Album+EQ"
         )
         XCTAssertTrue(idleMusic.hasBlueArtworkPixel)
+        XCTAssertGreaterThanOrEqual(
+            idleMusic.blueArtworkWidthPt,
+            17.0,
+            "Balanced Twin album artwork must not be clipped by collapsedInnerBudget"
+        )
         XCTAssertTrue(idleMusic.hasAmberVisualizerPixel)
 
         // Native Lyrics inside Dynamic Island Mode: single unified capsule (no detached sub-notch pill below)
@@ -338,6 +343,191 @@ final class DynamicIslandModeTests: XCTestCase {
                 }.frame(width: size.width, height: size.height)
             ))
             try OffscreenRender.writePNG(backed, to: path)
+        }
+    }
+
+    func testMultiDisplayBarsAndSettingsRenderScreenshots() throws {
+        let macBook14 = DisplayDescriptor(
+            id: "builtin",
+            index: 0,
+            name: "Built-in Retina Display",
+            width: 1512,
+            height: 982,
+            hasNotch: true,
+            isBuiltin: true,
+            isPrimary: true
+        )
+        let external27 = DisplayDescriptor(
+            id: "EXT-27",
+            index: 1,
+            name: "Studio Display",
+            width: 2560,
+            height: 1440,
+            hasNotch: false,
+            isBuiltin: false,
+            isPrimary: false
+        )
+
+        let twoDisplayConfigs: [String: DisplayConfiguration] = [
+            "builtin": DisplayConfiguration(enabled: true, displayMode: .notch, dynamicIslandTopOffset: 10),
+            "EXT-27": DisplayConfiguration(enabled: true, displayMode: .dynamicIsland, dynamicIslandTopOffset: 10),
+        ]
+
+        suite.removePersistentDomain(forName: suiteName)
+        suite.set(true, forKey: SettingsKey.islandEnabled)
+        suite.set(DisplayConfigurationCodec.encode(twoDisplayConfigs), forKey: SettingsKey.displayConfigurations)
+        suite.set(IslandDisplayMode.notch.rawValue, forKey: SettingsKey.islandDisplayMode)
+        suite.set(10.0, forKey: SettingsKey.dynamicIslandTopOffset)
+
+        let settingsSize = CGSize(width: 660, height: 540)
+
+        let appearance2Displays = SettingsView(
+            appState: nil,
+            initialPage: .appearance,
+            displaysOverride: [macBook14, external27]
+        ).defaultAppStorage(suite)
+        let app2Img = try OffscreenRender.hosted(
+            appearance2Displays,
+            size: settingsSize,
+            appearance: .darkAqua,
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            passes: 5
+        )
+        XCTAssertGreaterThan(app2Img.width, 0)
+        if let path = screenshotPath(for: "issue68-settings-appearance-2displays") {
+            let backed = try XCTUnwrap(OffscreenRender.rasterize(
+                ZStack {
+                    Rectangle().fill(Color(white: 0.16))
+                    Image(decorative: app2Img, scale: 2)
+                }.frame(width: settingsSize.width, height: settingsSize.height)
+            ))
+            try OffscreenRender.writePNG(backed, to: path)
+        }
+
+        let appearance1Display = SettingsView(
+            appState: nil,
+            initialPage: .appearance,
+            displaysOverride: [macBook14]
+        ).defaultAppStorage(suite)
+        let app1Img = try OffscreenRender.hosted(
+            appearance1Display,
+            size: settingsSize,
+            appearance: .darkAqua,
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            passes: 5
+        )
+        XCTAssertGreaterThan(app1Img.width, 0)
+        if let path = screenshotPath(for: "issue68-settings-appearance-1display") {
+            let backed = try XCTUnwrap(OffscreenRender.rasterize(
+                ZStack {
+                    Rectangle().fill(Color(white: 0.16))
+                    Image(decorative: app1Img, scale: 2)
+                }.frame(width: settingsSize.width, height: settingsSize.height)
+            ))
+            try OffscreenRender.writePNG(backed, to: path)
+        }
+
+        let general2Displays = SettingsView(
+            appState: nil,
+            initialPage: .general,
+            displaysOverride: [macBook14, external27]
+        ).defaultAppStorage(suite)
+        let gen2Img = try OffscreenRender.hosted(
+            general2Displays,
+            size: settingsSize,
+            appearance: .darkAqua,
+            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            passes: 5
+        )
+        XCTAssertGreaterThan(gen2Img.width, 0)
+        if let path = screenshotPath(for: "issue68-settings-general-2displays") {
+            let backed = try XCTUnwrap(OffscreenRender.rasterize(
+                ZStack {
+                    Rectangle().fill(Color(white: 0.16))
+                    Image(decorative: gen2Img, scale: 2)
+                }.frame(width: settingsSize.width, height: settingsSize.height)
+            ))
+            try OffscreenRender.writePNG(backed, to: path)
+        }
+
+        // Verify Display 1 & Display 2 top bars rendered simultaneously via displayModeOverride
+        configureMusic(artworkColor: NSColor(srgbRed: 0.0, green: 0.35, blue: 1.0, alpha: 1.0))
+        let state = makeAgentState(status: .idle)
+
+        let d1Notch = try renderBarImage(
+            displayModeOverride: .notch,
+            hasNotch: true,
+            screenWidth: 1512,
+            notchHeight: 32,
+            notchW: 185,
+            state: state,
+            canvasWidth: 620,
+            canvasHeight: 68
+        )
+        XCTAssertEqual(d1Notch.metrics.topGapPt, 0, accuracy: 1.0)
+        XCTAssertNil(d1Notch.metrics.notchCenterIntrusion)
+
+        let d1Island = try renderBarImage(
+            displayModeOverride: .dynamicIsland,
+            hasNotch: true,
+            screenWidth: 1512,
+            notchHeight: 32,
+            notchW: 185,
+            state: state,
+            canvasWidth: 620,
+            canvasHeight: 68
+        )
+        XCTAssertGreaterThanOrEqual(d1Island.metrics.topGapPt, 9.0)
+        XCTAssertNil(d1Island.metrics.notchCenterIntrusion)
+
+        let d2Island = try renderBarImage(
+            displayModeOverride: .dynamicIsland,
+            hasNotch: false,
+            screenWidth: 2560,
+            notchHeight: 25,
+            notchW: 240,
+            state: state,
+            canvasWidth: 620,
+            canvasHeight: 68
+        )
+        XCTAssertGreaterThanOrEqual(d2Island.metrics.topGapPt, 9.0)
+        XCTAssertLessThan(d2Island.metrics.midRowWidthPt, 180)
+        XCTAssertTrue(d2Island.metrics.hasBlueArtworkPixel)
+        XCTAssertGreaterThanOrEqual(
+            d2Island.metrics.blueArtworkWidthPt,
+            17.0,
+            "Display 2 Dynamic Island album artwork must render unclipped (~18pt wide)"
+        )
+
+        let d2Notch = try renderBarImage(
+            displayModeOverride: .notch,
+            hasNotch: false,
+            screenWidth: 2560,
+            notchHeight: 25,
+            notchW: 240,
+            state: state,
+            canvasWidth: 620,
+            canvasHeight: 68
+        )
+        XCTAssertEqual(d2Notch.metrics.topGapPt, 0, accuracy: 1.0)
+        XCTAssertGreaterThan(d2Notch.metrics.midRowWidthPt, 240)
+
+        if let path = screenshotPath(for: "issue68-2display-bars-verified") {
+            let sheet = VStack(alignment: .leading, spacing: 12) {
+                Text("Issue #68 — Multi-Display Top Bar Verification (displayModeOverride)")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(.white)
+                barRow(title: "Display 1 (Built-in Notch) — Notch Mode", image: d1Notch.image)
+                barRow(title: "Display 1 (Built-in Notch) — Dynamic Island Mode (Cutout Protected)", image: d1Island.image)
+                barRow(title: "Display 2 (External Non-Notch) — Dynamic Island Mode", image: d2Island.image)
+                barRow(title: "Display 2 (External Non-Notch) — Notch Mode", image: d2Notch.image)
+            }
+            .padding(16)
+            .background(Color(white: 0.12))
+            .frame(width: 652)
+
+            let sheetImage = try OffscreenRender.hosted(sheet, size: CGSize(width: 652, height: 420), scale: 2, passes: 3)
+            try OffscreenRender.writePNG(sheetImage, to: path)
         }
     }
 
@@ -399,6 +589,7 @@ final class DynamicIslandModeTests: XCTestCase {
         let bottomRowWidthPt: CGFloat
         let notchCenterIntrusion: CGFloat?
         let hasBlueArtworkPixel: Bool
+        let blueArtworkWidthPt: CGFloat
         let hasAmberVisualizerPixel: Bool
     }
 
@@ -451,6 +642,67 @@ final class DynamicIslandModeTests: XCTestCase {
             try OffscreenRender.writePNG(image, to: path)
         }
         return try inspectSceneBitmap(image: image, scale: 2, canvasWidth: canvasWidth, hasNotch: hasNotch)
+    }
+
+    private func renderBarImage(
+        displayModeOverride: IslandDisplayMode,
+        hasNotch: Bool,
+        screenWidth: CGFloat,
+        notchHeight: CGFloat,
+        notchW: CGFloat,
+        state: AppState,
+        canvasWidth: CGFloat,
+        canvasHeight: CGFloat
+    ) throws -> (image: CGImage, metrics: SceneMetrics) {
+        suite.set(IslandDisplayMode.notch.rawValue, forKey: SettingsKey.islandDisplayMode)
+        suite.set(IslandUITheme.modern.rawValue, forKey: SettingsKey.islandUITheme)
+        suite.set(MusicHUDTheme.modernClean.rawValue, forKey: SettingsKey.musicHUDTheme)
+        suite.set(MusicProgressColor.amber.rawValue, forKey: SettingsKey.musicHUDProgressColor)
+        suite.set(true, forKey: SettingsKey.showAgentDetails)
+        suite.set(true, forKey: SettingsKey.showToolStatus)
+        suite.set(100, forKey: SettingsKey.collapsedWidthScale)
+
+        let topOffset = CGFloat(IslandDisplayMetrics.floatingYOffset(
+            displayMode: displayModeOverride,
+            isFullscreenMode: state.isFullscreenMode
+        ))
+
+        let view = ZStack(alignment: .top) {
+            Color(red: 0.72, green: 0.10, blue: 0.14)
+            NotchPanelView(
+                appState: state,
+                hasNotch: hasNotch,
+                notchHeight: notchHeight,
+                notchW: notchW,
+                screenWidth: screenWidth,
+                displayModeOverride: displayModeOverride,
+                isPrimaryCoordinator: true
+            )
+            .environment(\.mascotStaticTime, 5.2)
+            .defaultAppStorage(suite)
+            .padding(.top, topOffset)
+        }
+        .frame(width: canvasWidth, height: canvasHeight)
+
+        let image = try OffscreenRender.hosted(
+            view,
+            size: CGSize(width: canvasWidth, height: canvasHeight),
+            scale: 2,
+            passes: 5
+        )
+        let metrics = try inspectSceneBitmap(image: image, scale: 2, canvasWidth: canvasWidth, hasNotch: hasNotch)
+        return (image, metrics)
+    }
+
+    @ViewBuilder
+    private func barRow(title: String, image: CGImage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.white.opacity(0.8))
+            Image(decorative: image, scale: 2)
+                .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        }
     }
 
     private func inspectSceneBitmap(
@@ -508,14 +760,24 @@ final class DynamicIslandModeTests: XCTestCase {
             }
         } : nil
 
-        var hasBlue = false
+        var minBlueX: Int?
+        var maxBlueX: Int?
         var hasAmber = false
         for y in panelRows {
             for x in 0..<w {
                 let c = rgb(x, y)
-                if isBlueArtwork(c) { hasBlue = true }
+                if isBlueArtwork(c) {
+                    minBlueX = min(minBlueX ?? x, x)
+                    maxBlueX = max(maxBlueX ?? x, x)
+                }
                 if isAmberViz(c) { hasAmber = true }
             }
+        }
+        let hasBlue = minBlueX != nil
+        let blueWidthPt: CGFloat = if let minX = minBlueX, let maxX = maxBlueX {
+            CGFloat(maxX - minX + 1) / scale
+        } else {
+            0
         }
 
         return SceneMetrics(
@@ -526,6 +788,7 @@ final class DynamicIslandModeTests: XCTestCase {
             bottomRowWidthPt: bottomWidth,
             notchCenterIntrusion: intrusionPx.map { CGFloat($0) / scale },
             hasBlueArtworkPixel: hasBlue,
+            blueArtworkWidthPt: blueWidthPt,
             hasAmberVisualizerPixel: hasAmber
         )
     }

@@ -1,10 +1,61 @@
 import AppKit
+import MorrowCore
 
 struct ScreenDetector {
     struct Candidate {
         let frame: CGRect
         let hasNotch: Bool
         let isMain: Bool
+    }
+
+    static func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
+    /// Stable hardware-backed identifier for persisting per-display settings across
+    /// unplug/replug and arrangement changes.
+    static func displayIdentifier(for screen: NSScreen) -> String {
+        if isBuiltinScreen(screen) {
+            return "builtin"
+        }
+        if let id = displayID(for: screen) {
+            if let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue(),
+               let uuidString = CFUUIDCreateString(nil, uuid) as String? {
+                return uuidString
+            }
+            return "display_\(id)"
+        }
+        let width = Int(screen.frame.width.rounded())
+        let height = Int(screen.frame.height.rounded())
+        return "fallback_\(screen.localizedName)_\(width)x\(height)"
+    }
+
+    static func screenDescriptors(
+        from screens: [NSScreen] = NSScreen.screens
+    ) -> [(descriptor: DisplayDescriptor, screen: NSScreen)] {
+        var idCounts: [String: Int] = [:]
+        return screens.enumerated().map { index, screen in
+            let baseID = displayIdentifier(for: screen)
+            let count = (idCounts[baseID] ?? 0) + 1
+            idCounts[baseID] = count
+            let uniqueID = count == 1 ? baseID : "\(baseID)#\(count)"
+
+            let descriptor = DisplayDescriptor(
+                id: uniqueID,
+                index: index,
+                name: screen.localizedName,
+                width: Int(screen.frame.width.rounded()),
+                height: Int(screen.frame.height.rounded()),
+                hasNotch: screenHasNotch(screen),
+                isBuiltin: isBuiltinScreen(screen),
+                isPrimary: index == 0
+            )
+            return (descriptor, screen)
+        }
+    }
+
+    static func descriptors(from screens: [NSScreen] = NSScreen.screens) -> [DisplayDescriptor] {
+        screenDescriptors(from: screens).map(\.descriptor)
     }
 
     /// Simulated notch width for non-notch screens — scales with screen width.
@@ -35,7 +86,7 @@ struct ScreenDetector {
     /// Check if a display is the built-in screen of the Mac
     static func isBuiltinScreen(_ screen: NSScreen) -> Bool {
         if screenHasNotch(screen) { return true }
-        if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+        if let screenNumber = displayID(for: screen) {
             return CGDisplayIsBuiltin(screenNumber) != 0
         }
         let name = screen.localizedName
@@ -200,5 +251,54 @@ struct ScreenDetector {
         }
 
         return nil
+    }
+}
+
+@MainActor
+final class ScreenMonitor: ObservableObject {
+    static let shared = ScreenMonitor()
+
+    @Published private(set) var displays: [DisplayDescriptor]
+
+    private var observer: NSObjectProtocol?
+    private var resyncTask: Task<Void, Never>?
+
+    init(displays: [DisplayDescriptor]? = nil, observeSystemChanges: Bool = true) {
+        self.displays = displays ?? ScreenDetector.descriptors()
+        if observeSystemChanges {
+            observer = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleScreenParametersChanged()
+                }
+            }
+        }
+    }
+
+    func refreshNow() {
+        let latest = ScreenDetector.descriptors()
+        if latest != displays {
+            displays = latest
+        }
+    }
+
+    private func handleScreenParametersChanged() {
+        refreshNow()
+        resyncTask?.cancel()
+        resyncTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.refreshNow()
+        }
+    }
+
+    deinit {
+        resyncTask?.cancel()
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 }
