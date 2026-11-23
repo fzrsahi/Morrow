@@ -234,8 +234,8 @@ impl PrayerTimeCalculator {
         let t = (jd - 2_451_545.0) / 36_525.0;
 
         // 2. Solar coordinates (Meeus).
-        let l0 = normalize_degrees(280.46646 + 36_000.76983 * t + 0.0003032 * t * t);
-        let m = normalize_degrees(357.52911 + 35_999.05029 * t - 0.0001537 * t * t);
+        let l0 = normalize_degrees(280.46646 + 36_000.769_83 * t + 0.0003032 * t * t);
+        let m = normalize_degrees(357.52911 + 35_999.050_29 * t - 0.0001537 * t * t);
         let m_rad = d2r(m);
         let c = (1.914602 - 0.004817 * t - 0.000014 * t * t) * m_rad.sin()
             + (0.019993 - 0.000101 * t) * (2.0 * m_rad).sin()
@@ -797,12 +797,7 @@ fn calculate_algorithmic(target_jd: f64, _source: HijriCalendarSource) -> HijriD
 
     let approx_month_start_jd = epoch_jd + elapsed_months * synodic_month;
     let mut day_of_month = (target_jd - approx_month_start_jd) as i32 + 1;
-    if day_of_month < 1 {
-        day_of_month = 1;
-    }
-    if day_of_month > 30 {
-        day_of_month = 30;
-    }
+    day_of_month = day_of_month.clamp(1, 30);
 
     HijriDate::new(day_of_month, h_month as i32, h_year as i32)
 }
