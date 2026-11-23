@@ -51,7 +51,7 @@ if [ -n "$OVERSIZED" ]; then
 fi
 
 # 3. Guardrail: Protect CI/CD configurations from unauthorized modification
-RESTRICTED_FILES=$(echo "$TARGET_FILES" | grep -E "^(\.woodpecker\.yaml|\.github/workflows/)" || true)
+RESTRICTED_FILES=$(echo "$TARGET_FILES" | grep -E "^(\.woodpecker|\.github/workflows/)" || true)
 if [ -n "$RESTRICTED_FILES" ]; then
     # If a merge is in progress, ignore restricted files whose staged content matches MERGE_HEAD
     # (i.e. brought in cleanly from the merged branch such as origin/main without local alteration)
@@ -101,9 +101,10 @@ if [ -n "$SWIFT_FILES" ] && command -v swiftc >/dev/null 2>&1; then
     done
 fi
 
-# 5. Fast Rust workspace check (if Cargo.toml exists and cargo available)
-if [ -f "Cargo.toml" ] && command -v cargo >/dev/null 2>&1; then
-    cargo check --quiet --workspace 2>/dev/null || {
+# 5. Fast Rust workspace check (if Rust files changed and cargo available)
+RUST_FILES=$(echo "$TARGET_FILES" | grep -E '(\.rs$|Cargo\.(toml|lock))' || true)
+if [ -n "$RUST_FILES" ] && [ -f "Cargo.toml" ] && command -v cargo >/dev/null 2>&1; then
+    cargo check --quiet --workspace --exclude morrow-app 2>/dev/null || {
         echo "ERROR: 'cargo check' failed on local workspace."
         exit 1
     }

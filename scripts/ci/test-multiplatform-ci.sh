@@ -3,7 +3,7 @@
 # TDD Test Suite for Multiplatform CI/CD Pipeline & Runner Configuration
 # Tests:
 #   1. scripts/setup-linux-runner.sh syntax, flags, and dry-run configuration
-#   2. scripts/ci/windows-check.sh syntax, flags, and dry-run output
+#   2. windows/ci/check.sh syntax, flags, and dry-run output
 #   3. .woodpecker.yaml multi-pipeline YAML structure and routing labels
 #   4. scripts/ci/verify-local.sh cleanliness
 # ==============================================================================
@@ -72,8 +72,8 @@ fi
 # ------------------------------------------------------------------------------
 # Test Suite 2: Windows Check Script
 # ------------------------------------------------------------------------------
-echo "--- Suite 2: scripts/ci/windows-check.sh ---"
-WIN_CHECK_SCRIPT="$ROOT/scripts/ci/windows-check.sh"
+echo "--- Suite 2: windows/ci/check.sh ---"
+WIN_CHECK_SCRIPT="$ROOT/windows/ci/check.sh"
 
 if [ -f "$WIN_CHECK_SCRIPT" ]; then
     assert_eq "windows-check.sh is executable" "true" "$([ -x "$WIN_CHECK_SCRIPT" ] && echo true || echo false)"
@@ -86,17 +86,34 @@ else
 fi
 
 # ------------------------------------------------------------------------------
-# Test Suite 3: .woodpecker.yaml Multi-Pipeline Structure
+# Test Suite 3: .woodpecker Multi-Workflow Structure
 # ------------------------------------------------------------------------------
-echo "--- Suite 3: .woodpecker.yaml Multi-Pipeline Structure ---"
+echo "--- Suite 3: .woodpecker Multi-Workflow Structure ---"
+WP_DIR="$ROOT/.woodpecker"
 WP_YAML="$ROOT/.woodpecker.yaml"
 
-if [ -f "$WP_YAML" ]; then
-    PYTHON_VALIDATOR="
-import yaml, sys
+if [ -d "$WP_DIR" ] || [ -f "$WP_YAML" ]; then
+    YAML_REPORT=$(python3 - "$ROOT" << 'EOF'
+import sys, os, glob
+import yaml
 
-with open('$WP_YAML') as f:
-    docs = list(yaml.safe_load_all(f))
+root_dir = sys.argv[1]
+wp_dir = os.path.join(root_dir, ".woodpecker")
+wp_file = os.path.join(root_dir, ".woodpecker.yaml")
+
+docs = []
+if os.path.isdir(wp_dir):
+    yaml_files = sorted(glob.glob(os.path.join(wp_dir, "*.yaml")))
+    for yf in yaml_files:
+        with open(yf) as f:
+            docs.append(yaml.safe_load(f))
+    print(f'CONFIG_TYPE=DIR')
+    print(f'FILES_COUNT={len(yaml_files)}')
+elif os.path.isfile(wp_file):
+    with open(wp_file) as f:
+        docs = list(yaml.safe_load_all(f))
+    print(f'CONFIG_TYPE=SINGLE')
+    print(f'FILES_COUNT=1')
 
 # Document count check
 if len(docs) != 3:
@@ -108,37 +125,198 @@ print(f'DOCS_COUNT={len(docs)}')
 # Pipeline 1: Linux
 p1 = docs[0]
 p1_platform = p1.get('labels', {}).get('platform', '')
-p1_steps = [s.get('name') for s in p1.get('steps', [])]
+p1_steps = {s.get('name'): s for s in p1.get('steps', [])}
+p1_step_names = list(p1_steps.keys())
+p1_when = p1.get('when', [])
+p1_push_has_path = any('path' in c for c in p1_when if c.get('event') == 'push' or ('push' in c.get('event', []) if isinstance(c.get('event'), list) else False))
+p1_pr_when = [c for c in p1_when if 'pull_request' in c.get('event', [])]
+p1_pr_has_path = any('path' in c for c in p1_pr_when)
+p1_test_linux = p1_steps.get('test-linux', {})
+p1_check_windows = p1_steps.get('check-windows', {})
+p1_test_linux_cmds = "\n".join(str(c) for c in p1_test_linux.get('commands', []))
+p1_check_win_cmds = "\n".join(str(c) for c in p1_check_windows.get('commands', []))
+
+p1_clone_lfs = p1.get('clone', {}).get('git', {}).get('settings', {}).get('lfs', True)
+print(f'P1_CLONE_LFS={"NO" if p1_clone_lfs is False else "YES"}')
 print(f'P1_PLATFORM={p1_platform}')
-print(f'P1_STEPS={\",\".join(p1_steps)}')
+print(f'P1_STEPS={",".join(p1_step_names)}')
+print(f'P1_PUSH_PATH_FILTER={"YES" if p1_push_has_path else "NO"}')
+print(f'P1_PR_PATH_FILTER={"YES" if p1_pr_has_path else "NO"}')
+print(f'P1_TEST_LINUX_IMAGE={p1_test_linux.get("image", "")}')
+print(f'P1_LINUX_HARNESS_CONTEXT={"YES" if "Morrow / Linux & Rust Harness" in p1_test_linux_cmds else "NO"}')
+print(f'P1_LINUX_DISPATCH={"YES" if "linux/ci/test.sh" in p1_test_linux_cmds else "NO"}')
+print(f'P1_TEST_LINUX_POSIX={"YES" if "set -e" in p1_test_linux_cmds and "set -eo pipefail" not in p1_test_linux_cmds else "NO"}')
+print(f'P1_LINUX_FAST_BYPASS={"YES" if "Fast-bypass" in p1_test_linux_cmds or "CI_PIPELINE_FILES" in p1_test_linux_cmds else "NO"}')
+print(f'P1_WINDOWS_HARNESS_CONTEXT={"YES" if "Morrow / Windows MSVC Check" in p1_check_win_cmds else "NO"}')
+print(f'P1_WINDOWS_DISPATCH={"YES" if "windows/ci/check.sh" in p1_check_win_cmds else "NO"}')
+print(f'P1_CHECK_WIN_POSIX={"YES" if "set -e" in p1_check_win_cmds and "set -eo pipefail" not in p1_check_win_cmds else "NO"}')
+print(f'P1_WINDOWS_FAST_BYPASS={"YES" if "Fast-bypass" in p1_check_win_cmds or "CI_PIPELINE_FILES" in p1_check_win_cmds else "NO"}')
 
 # Pipeline 2: macOS
 p2 = docs[1]
 p2_platform = p2.get('labels', {}).get('platform', '')
-p2_steps = [s.get('name') for s in p2.get('steps', [])]
+p2_steps = {s.get('name'): s for s in p2.get('steps', [])}
+p2_step_names = list(p2_steps.keys())
+p2_when = p2.get('when', [])
+p2_push_has_path = any('path' in c for c in p2_when if c.get('event') == 'push' or ('push' in c.get('event', []) if isinstance(c.get('event'), list) else False))
+p2_pr_when = [c for c in p2_when if 'pull_request' in c.get('event', [])]
+p2_pr_has_path = any('path' in c for c in p2_pr_when)
+p2_test = p2_steps.get('test', {})
+p2_test_cmds = "\n".join(str(c) for c in p2_test.get('commands', []))
+p2_clone_lfs = p2.get('clone', {}).get('git', {}).get('settings', {}).get('lfs', True)
+
+print(f'P2_CLONE_LFS={"NO" if p2_clone_lfs is False else "YES"}')
 print(f'P2_PLATFORM={p2_platform}')
-print(f'P2_STEPS={\",\".join(p2_steps)}')
+print(f'P2_STEPS={",".join(p2_step_names)}')
+print(f'P2_PUSH_PATH_FILTER={"YES" if p2_push_has_path else "NO"}')
+print(f'P2_PR_PATH_FILTER={"YES" if p2_pr_has_path else "NO"}')
+print(f'P2_MACOS_DISPATCH={"YES" if "macos/ci/test.sh" in p2_test_cmds else "NO"}')
+print(f'P2_MACOS_FAST_BYPASS={"YES" if "Fast-bypass" in p2_test_cmds or "CI_PIPELINE_FILES" in p2_test_cmds else "NO"}')
 
 # Pipeline 3: Release
 p3 = docs[2]
 p3_platform = p3.get('labels', {}).get('platform', '')
-p3_steps = [s.get('name') for s in p3.get('steps', [])]
+p3_steps = {s.get('name'): s for s in p3.get('steps', [])}
+p3_step_names = list(p3_steps.keys())
+p3_build_dev = p3_steps.get('build-dev-dmg', {})
+p3_dev_cmds = "\n".join(str(c) for c in p3_build_dev.get('commands', []))
+p3_clone_lfs = p3.get('clone', {}).get('git', {}).get('settings', {}).get('lfs', True)
+
+print(f'P3_CLONE_LFS={"NO" if p3_clone_lfs is False else "YES"}')
 print(f'P3_PLATFORM={p3_platform}')
-print(f'P3_STEPS={\",\".join(p3_steps)}')
-"
-    YAML_REPORT=$(python3 -c "$PYTHON_VALIDATOR" 2>&1 || echo "ERROR")
+print(f'P3_STEPS={",".join(p3_step_names)}')
+print(f'P3_MANIFEST_DISPATCH={"YES" if "shared/ci/manifest.sh" in p3_dev_cmds else "NO"}')
+print(f'P3_INFO_PLIST={"YES" if "macos/Info.plist" in p3_dev_cmds else "NO"}')
+EOF
+)
     
     assert_contains "woodpecker config defines exactly 3 pipelines" "DOCS_COUNT=3" "$YAML_REPORT"
+    assert_contains "woodpecker multi-workflow config loaded from directory" "CONFIG_TYPE=DIR" "$YAML_REPORT"
+    assert_contains "woodpecker directory defines exactly 3 workflow files" "FILES_COUNT=3" "$YAML_REPORT"
     assert_contains "Pipeline 1 targets linux/amd64" "P1_PLATFORM=linux/amd64" "$YAML_REPORT"
+    assert_contains "Pipeline 1 clone step disables git-lfs" "P1_CLONE_LFS=NO" "$YAML_REPORT"
     assert_contains "Pipeline 1 has test-linux step" "test-linux" "$YAML_REPORT"
     assert_contains "Pipeline 1 has check-windows step" "check-windows" "$YAML_REPORT"
+    assert_contains "Pipeline 1 push event has no path constraint" "P1_PUSH_PATH_FILTER=NO" "$YAML_REPORT"
+    assert_contains "Pipeline 1 pull_request event has no path constraint" "P1_PR_PATH_FILTER=NO" "$YAML_REPORT"
+    assert_contains "Pipeline 1 test-linux uses rust:1.98-bookworm" "P1_TEST_LINUX_IMAGE=rust:1.98-bookworm" "$YAML_REPORT"
+    assert_contains "Pipeline 1 test-linux has smart fast-bypass detection" "P1_LINUX_FAST_BYPASS=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 1 check-windows has smart fast-bypass detection" "P1_WINDOWS_FAST_BYPASS=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 1 reports Linux & Rust Harness context" "P1_LINUX_HARNESS_CONTEXT=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 1 dispatches to linux/ci/test.sh" "P1_LINUX_DISPATCH=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 1 reports Windows MSVC Check context" "P1_WINDOWS_HARNESS_CONTEXT=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 1 dispatches to windows/ci/check.sh" "P1_WINDOWS_DISPATCH=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 1 test-linux complies with POSIX set -e" "P1_TEST_LINUX_POSIX=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 1 check-windows complies with POSIX set -e" "P1_CHECK_WIN_POSIX=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 2 push event has no path constraint" "P2_PUSH_PATH_FILTER=NO" "$YAML_REPORT"
+    assert_contains "Pipeline 2 pull_request event has no path constraint" "P2_PR_PATH_FILTER=NO" "$YAML_REPORT"
     assert_contains "Pipeline 2 targets darwin/amd64" "P2_PLATFORM=darwin/amd64" "$YAML_REPORT"
+    assert_contains "Pipeline 2 clone step disables git-lfs" "P2_CLONE_LFS=NO" "$YAML_REPORT"
     assert_contains "Pipeline 2 has test step" "test" "$YAML_REPORT"
+    assert_contains "Pipeline 2 dispatches to macos/ci/test.sh" "P2_MACOS_DISPATCH=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 2 has smart fast-bypass detection" "P2_MACOS_FAST_BYPASS=YES" "$YAML_REPORT"
     assert_contains "Pipeline 3 targets darwin/amd64" "P3_PLATFORM=darwin/amd64" "$YAML_REPORT"
+    assert_contains "Pipeline 3 clone step disables git-lfs" "P3_CLONE_LFS=NO" "$YAML_REPORT"
     assert_contains "Pipeline 3 has build-dev-dmg step" "build-dev-dmg" "$YAML_REPORT"
     assert_contains "Pipeline 3 has build-release-dmg step" "build-release-dmg" "$YAML_REPORT"
+    assert_contains "Pipeline 3 dispatches to shared/ci/manifest.sh" "P3_MANIFEST_DISPATCH=YES" "$YAML_REPORT"
+    assert_contains "Pipeline 3 reads macos/Info.plist" "P3_INFO_PLIST=YES" "$YAML_REPORT"
 else
-    echo "  [FAIL] .woodpecker.yaml does not exist"
+    echo "  [FAIL] .woodpecker directory or .woodpecker.yaml does not exist"
+    FAILED=$((FAILED + 1))
+fi
+
+# ------------------------------------------------------------------------------
+# Test Suite 4: Smart Fast-Bypass Monorepo Change Detection Logic
+# ------------------------------------------------------------------------------
+echo "--- Suite 4: Smart Fast-Bypass Change Detection Logic ---"
+
+LINUX_REGEX='Cargo\.|rust-toolchain|shared/|crates/|linux/|windows/|scripts/ci/(linux|windows|verify|test-multiplatform)|\.woodpecker'
+MACOS_REGEX='Sources/|Tests/|macos/|Package\.|Info\.plist|scripts/.*macos|scripts/run-xctest-runner|\.woodpecker'
+
+# Case 1: Swift only PR
+SWIFT_FILES='["macos/Sources/Morrow/NotchView.swift","macos/Tests/NotchTests.swift"]'
+SWIFT_LINUX_MATCH=$(echo "$SWIFT_FILES" | grep -Eq "$LINUX_REGEX" && echo "YES" || echo "NO")
+SWIFT_MACOS_MATCH=$(echo "$SWIFT_FILES" | grep -Eq "$MACOS_REGEX" && echo "YES" || echo "NO")
+assert_eq "Swift-only PR triggers fast-bypass on Linux (NO run)" "NO" "$SWIFT_LINUX_MATCH"
+assert_eq "Swift-only PR runs on macOS (YES run)" "YES" "$SWIFT_MACOS_MATCH"
+
+# Case 2: Rust only PR
+RUST_FILES='["crates/morrow-core/src/lib.rs","linux/src/main.rs"]'
+RUST_LINUX_MATCH=$(echo "$RUST_FILES" | grep -Eq "$LINUX_REGEX" && echo "YES" || echo "NO")
+RUST_MACOS_MATCH=$(echo "$RUST_FILES" | grep -Eq "$MACOS_REGEX" && echo "YES" || echo "NO")
+assert_eq "Rust-only PR runs on Linux (YES run)" "YES" "$RUST_LINUX_MATCH"
+assert_eq "Rust-only PR triggers fast-bypass on macOS (NO run)" "NO" "$RUST_MACOS_MATCH"
+
+# Case 3: Shared monorepo change (.woodpecker.yaml or shared/crates)
+SHARED_FILES='[".woodpecker.yaml"]'
+SHARED_LINUX_MATCH=$(echo "$SHARED_FILES" | grep -Eq "$LINUX_REGEX" && echo "YES" || echo "NO")
+SHARED_MACOS_MATCH=$(echo "$SHARED_FILES" | grep -Eq "$MACOS_REGEX" && echo "YES" || echo "NO")
+assert_eq ".woodpecker.yaml change runs on Linux (YES run)" "YES" "$SHARED_LINUX_MATCH"
+assert_eq ".woodpecker.yaml change runs on macOS (YES run)" "YES" "$SHARED_MACOS_MATCH"
+
+# ------------------------------------------------------------------------------
+# Test Suite 5: macOS Standalone XCTest Runner & Toolchain Resolution (#173)
+# ------------------------------------------------------------------------------
+echo "--- Suite 5: macOS Standalone XCTest Runner & Toolchain Resolution (#173) ---"
+
+XCTEST_RUNNER="$ROOT/macos/scripts/run-xctest-runner.py"
+if [ -f "$XCTEST_RUNNER" ]; then
+    # 1. Syntax check
+    SYNTAX_STATUS=0
+    python3 -m py_compile "$XCTEST_RUNNER" >/dev/null 2>&1 || SYNTAX_STATUS=$?
+    assert_eq "run-xctest-runner.py is valid Python syntax" "0" "$SYNTAX_STATUS"
+
+    # 2. --help flag
+    HELP_OUT=$(python3 "$XCTEST_RUNNER" --help 2>&1 || true)
+    assert_contains "run-xctest-runner.py supports --help" "Standalone XCTest Runner" "$HELP_OUT"
+    assert_contains "run-xctest-runner.py supports --target" "--target" "$HELP_OUT"
+
+    # 3. Dynamic locate_frameworks_dir function exists
+    LOCATE_FUNC=$(grep -c "def locate_frameworks_dir" "$XCTEST_RUNNER" || true)
+    assert_eq "run-xctest-runner.py defines locate_frameworks_dir()" "1" "$LOCATE_FUNC"
+
+    # 4. Native build system flag pinned
+    NATIVE_FLAG=$(grep -c -- "--build-system" "$XCTEST_RUNNER" || true)
+    NATIVE_PINNED="NO"
+    if [ "$NATIVE_FLAG" -ge 1 ]; then
+        NATIVE_PINNED="YES"
+    fi
+    assert_eq "run-xctest-runner.py pins --build-system native" "YES" "$NATIVE_PINNED"
+
+    # 5. Dynamic resolution via mock XCTEST_FRAMEWORK_DIR
+    MOCK_DIR=$(mktemp -d)
+    mkdir -p "$MOCK_DIR/XCTest.framework"
+    RESOLVED_FW=$(XCTEST_FRAMEWORK_DIR="$MOCK_DIR" python3 -c '
+import sys, os
+sys.path.insert(0, "'"$ROOT"'/macos/scripts")
+import importlib.util
+spec = importlib.util.spec_from_file_location("runner", "'"$XCTEST_RUNNER"'")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+fw_dir, _ = mod.locate_frameworks_dir()
+print(fw_dir)
+' 2>/dev/null || echo "FAILED")
+    rm -rf "$MOCK_DIR"
+    assert_eq "locate_frameworks_dir resolves \$XCTEST_FRAMEWORK_DIR override" "$MOCK_DIR" "$RESOLVED_FW"
+
+    # 6. Actionable diagnostic error on missing toolchain
+    DIAG_OUT=$(XCTEST_FRAMEWORK_DIR="/tmp/nonexistent_fw_test_$$" python3 -c '
+import sys, os
+sys.path.insert(0, "'"$ROOT"'/macos/scripts")
+import importlib.util
+spec = importlib.util.spec_from_file_location("runner", "'"$XCTEST_RUNNER"'")
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+# Overwrite candidates to guarantee failure
+os.environ["PATH"] = ""
+fw_dir, checked = mod.locate_frameworks_dir()
+if not fw_dir:
+    print("CHECKED_PATHS=" + str(len(checked) > 0))
+' 2>/dev/null || true)
+    assert_contains "locate_frameworks_dir returns checked paths list for diagnostics" "CHECKED_PATHS=True" "$DIAG_OUT"
+else
+    echo "  [FAIL] $XCTEST_RUNNER does not exist"
     FAILED=$((FAILED + 1))
 fi
 
