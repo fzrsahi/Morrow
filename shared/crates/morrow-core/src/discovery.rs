@@ -115,6 +115,150 @@ pub mod claude {
     }
 }
 
+/// What a Codex rollout says about its session, without a hook (#272).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CodexRolloutSummary {
+    pub session_id: String,
+    pub cwd: String,
+    pub model: Option<String>,
+    pub recent_messages: Vec<ChatMessage>,
+}
+
+/// `CodexDiscovery`'s rollout read, from the tail of one rollout file.
+///
+/// Codex is **store-first**: the rollout itself carries the thread id, the
+/// working directory and the model, so a session can be found with no process at
+/// all — unlike Cursor and Gemini, whose store directory is derived from a
+/// process's cwd (#270).
+///
+/// Three rules that are not obvious and are all in the Swift reader:
+///
+/// - **The model is on `turn_context`, not `session_meta`.** `session_meta` names
+///   the provider (`openai`), which is not a label; `turn_context` names the model
+///   each turn actually ran on, so the last one wins.
+/// - **User text comes from `event_msg.user_message`.** A `response_item` user
+///   entry carries the system and tool context Codex injects, which is not
+///   something the user typed. It is only a fallback when no clean message exists.
+/// - **The session id is `session_meta.payload.id`**, and the file name only when
+///   that is missing — a Desktop thread keeps a uuid the file name does not match.
+pub fn read_codex_rollout_tail(tail: &str, file_name: &str) -> Option<CodexRolloutSummary> {
+    let mut summary = CodexRolloutSummary::default();
+    // Position matters: user and assistant turns are interleaved, and collecting
+    // them in two lists then concatenating loses the order — which turns a
+    // conversation into "the agent said three things".
+    let mut users: Vec<(usize, String)> = Vec::new();
+    let mut assistants: Vec<(usize, String)> = Vec::new();
+    let mut saw_meta = false;
+    let mut index = 0usize;
+
+    for line in tail.split('\n') {
+        index += 1;
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let Some(kind) = json.get("type").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let Some(payload) = json.get("payload") else {
+            continue;
+        };
+
+        match kind {
+            "session_meta" => {
+                saw_meta = true;
+                if summary.session_id.is_empty() {
+                    summary.session_id = payload
+                        .get("id")
+                        .and_then(|value| value.as_str())
+                        .filter(|id| !id.is_empty())
+                        .unwrap_or_default()
+                        .to_owned();
+                }
+                if summary.cwd.is_empty() {
+                    summary.cwd = payload
+                        .get("cwd")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or_default()
+                        .to_owned();
+                }
+            }
+            // The model each turn actually ran on. The last one wins: it is what
+            // the newest turn used.
+            "turn_context" => {
+                if let Some(model) = payload
+                    .get("model")
+                    .and_then(|value| value.as_str())
+                    .filter(|model| !model.is_empty())
+                {
+                    summary.model = Some(model.to_owned());
+                }
+            }
+            "event_msg" => {
+                let text = if payload.get("type").and_then(|value| value.as_str())
+                    == Some("user_message")
+                {
+                    payload
+                        .get("message")
+                        .and_then(|value| value.as_str())
+                        .filter(|text| !text.is_empty())
+                } else {
+                    None
+                };
+                if let Some(text) = text {
+                    users.push((index, text.to_owned()));
+                }
+            }
+            _ => {}
+        }
+
+        // The assistant text rule is shared with the live tailer, so a card and its
+        // backfill cannot disagree about what the agent said.
+        if let Some(text) = json
+            .as_object()
+            .and_then(crate::transcript::codex_public_assistant_text)
+        {
+            // The same assistant text twice in a row is one turn, not two.
+            if assistants.last().map(|(_, last)| last) != Some(&text) {
+                assistants.push((index, text));
+            }
+        }
+    }
+
+    if summary.session_id.is_empty() {
+        // Fall back to the file name, which is `rollout-<timestamp>-<id>.jsonl`.
+        summary.session_id = file_name
+            .strip_suffix(".jsonl")
+            .and_then(|name| name.rsplit('-').next())
+            .unwrap_or_default()
+            .to_owned();
+    }
+    if summary.session_id.is_empty() || (!saw_meta && users.is_empty() && assistants.is_empty()) {
+        return None;
+    }
+
+    // Three of each, then the last three overall, in the order they were written —
+    // the Swift reader's rule, and the only one that keeps "asked, answered" from
+    // becoming "answered, answered".
+    let user_start = users.len().saturating_sub(3);
+    let assistant_start = assistants.len().saturating_sub(3);
+    let mut turns: Vec<(usize, ChatMessage)> = users[user_start..]
+        .iter()
+        .map(|(index, text)| (*index, ChatMessage::new(true, text)))
+        .chain(
+            assistants[assistant_start..]
+                .iter()
+                .map(|(index, text)| (*index, ChatMessage::new(false, text))),
+        )
+        .collect();
+    turns.sort_by_key(|(index, _)| *index);
+    let start = turns.len().saturating_sub(3);
+    summary.recent_messages = turns.split_off(start).into_iter().map(|(_, m)| m).collect();
+    Some(summary)
+}
+
 /// What a [CC] transcript tail says about its session, without a hook.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TranscriptSummary {
@@ -438,6 +582,118 @@ pub mod transcript_files {
                 Some(start) => file.modified_ms + START_SLACK_MS >= start,
             })
             .max_by_key(|file| file.modified_ms)
+    }
+}
+
+#[cfg(test)]
+mod codex_rollout_tests {
+    use super::read_codex_rollout_tail;
+
+    const ROLLOUT: &str = concat!(
+        r#"{"type":"session_meta","payload":{"id":"thread-1","cwd":"/home/dev/project","originator":"codex_cli"}}"#,
+        "\n",
+        r#"{"type":"turn_context","payload":{"model":"gpt-5-codex"}}"#,
+        "\n",
+        r#"{"type":"event_msg","payload":{"type":"user_message","message":"Add a filter bar"}}"#,
+        "\n",
+        r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Added the bar"}]}}"#,
+        "\n",
+    );
+
+    #[test]
+    fn a_rollout_names_its_thread_and_working_directory() {
+        let summary =
+            read_codex_rollout_tail(ROLLOUT, "rollout-2026-11-22T10-00-00-thread-1.jsonl")
+                .expect("a summary");
+        assert_eq!(summary.session_id, "thread-1");
+        assert_eq!(summary.cwd, "/home/dev/project");
+    }
+
+    /// `session_meta` names the provider, not the model. Only `turn_context` is a
+    /// label, and the last one wins because it is what the newest turn ran on.
+    #[test]
+    fn the_model_comes_from_the_last_turn_context() {
+        let rollout = format!(
+            "{ROLLOUT}{}\n",
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#
+        );
+        assert_eq!(
+            read_codex_rollout_tail(&rollout, "r.jsonl")
+                .expect("a summary")
+                .model
+                .as_deref(),
+            Some("gpt-5")
+        );
+
+        // A session_meta with no turn_context has no label, not "openai".
+        let meta_only =
+            r#"{"type":"session_meta","payload":{"id":"t","cwd":"/w","model":"openai"}}"#;
+        assert_eq!(
+            read_codex_rollout_tail(meta_only, "r.jsonl")
+                .expect("a summary")
+                .model,
+            None
+        );
+    }
+
+    #[test]
+    fn a_user_turn_comes_from_the_event_message() {
+        let summary = read_codex_rollout_tail(ROLLOUT, "r.jsonl").expect("a summary");
+        let rendered: Vec<(bool, &str)> = summary
+            .recent_messages
+            .iter()
+            .map(|message| (message.is_user, message.text.as_str()))
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![(true, "Add a filter bar"), (false, "Added the bar")]
+        );
+    }
+
+    #[test]
+    fn at_most_three_turns_are_kept() {
+        let mut rollout =
+            String::from(r#"{"type":"session_meta","payload":{"id":"t","cwd":"/w"}}"#);
+        for index in 0..5 {
+            rollout.push('\n');
+            rollout.push_str(&format!(
+                r#"{{"type":"event_msg","payload":{{"type":"user_message","message":"ask {index}"}}}}"#
+            ));
+            rollout.push('\n');
+            rollout.push_str(&format!(
+                r#"{{"type":"event_msg","payload":{{"type":"agent_message","message":"answer {index}"}}}}"#
+            ));
+        }
+        let summary = read_codex_rollout_tail(&rollout, "r.jsonl").expect("a summary");
+        let texts: Vec<&str> = summary
+            .recent_messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect();
+        assert_eq!(texts.len(), 3);
+        assert_eq!(texts, vec!["answer 3", "ask 4", "answer 4"]);
+    }
+
+    #[test]
+    fn the_session_id_falls_back_to_the_file_name() {
+        let rollout = r#"{"type":"event_msg","payload":{"type":"user_message","message":"hi"}}"#;
+        let summary = read_codex_rollout_tail(rollout, "rollout-2026-11-22T10-00-00-abc123.jsonl")
+            .expect("a summary");
+        assert_eq!(summary.session_id, "abc123");
+    }
+
+    #[test]
+    fn an_unusable_rollout_is_none_rather_than_an_empty_session() {
+        assert_eq!(read_codex_rollout_tail("", "r.jsonl"), None);
+        assert_eq!(read_codex_rollout_tail("not json\n", "r.jsonl"), None);
+        // A cut first line is normal for a tail; the rest still reads.
+        let cut = format!("{{\"type\":\"session_meta\",\"payl\n{ROLLOUT}");
+        assert_eq!(
+            read_codex_rollout_tail(&cut, "r.jsonl")
+                .expect("a summary")
+                .session_id,
+            "thread-1"
+        );
     }
 }
 

@@ -177,6 +177,106 @@ impl StoreReader for OpenCodeStore {
     }
 }
 
+/// Codex's rollouts: `~/.codex/sessions/<YYYY>/<MM>/<DD>/*.jsonl` (#272).
+///
+/// Store-first like OpenCode — the rollout carries its thread id, cwd and model —
+/// so a Codex session appears without a hook and without a process.
+///
+/// Only the **last seven days** of directories are listed, which is the window the
+/// Swift reader uses. A `sessions/` tree grows forever, and a backfill that walked
+/// all of it would read years of rollouts on every attach; the panel shows current
+/// work, and anything older arrives through a hook or not at all.
+pub struct CodexRollouts {
+    /// The Codex config root: `$CODEX_HOME`, else `~/.codex`.
+    pub root: String,
+}
+
+/// How many days back a backfill looks.
+pub const CODEX_DAYS: u64 = 7;
+
+impl CodexRollouts {
+    /// `<root>/sessions/<yyyy>/<mm>/<dd>`, newest first, for the days that exist.
+    fn day_directories(&self) -> Vec<PathBuf> {
+        let sessions = Path::new(&self.root).join("sessions");
+        let Ok(years) = std::fs::read_dir(&sessions) else {
+            return Vec::new();
+        };
+        let mut days: Vec<PathBuf> = Vec::new();
+        // Depth is bounded by construction — year, month, day, file — and nothing
+        // recurses, so a symlinked loop cannot be entered.
+        for year in years.flatten() {
+            let Ok(months) = std::fs::read_dir(year.path()) else {
+                continue;
+            };
+            for month in months.flatten() {
+                let Ok(entries) = std::fs::read_dir(month.path()) else {
+                    continue;
+                };
+                for day in entries.flatten() {
+                    if day.path().is_dir() {
+                        days.push(day.path());
+                    }
+                }
+            }
+        }
+        // Newest last, then keep the tail: the directories sort lexicographically
+        // because the names are zero-padded.
+        days.sort();
+        let keep = CODEX_DAYS as usize;
+        if days.len() > keep {
+            days.split_off(days.len() - keep)
+        } else {
+            days
+        }
+    }
+}
+
+impl StoreReader for CodexRollouts {
+    fn source(&self) -> &'static str {
+        "codex"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Path::new(&self.root)
+            .join("sessions")
+            .is_dir()
+            .then(|| self.root.clone())
+            .into_iter()
+            .collect()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        let mut hits = Vec::new();
+        for day in self.day_directories() {
+            let Some(files) = transcript_files::list(&day.to_string_lossy()) else {
+                continue;
+            };
+            for file in files {
+                let Some(tail) = read_tail(Path::new(&file.path)) else {
+                    continue;
+                };
+                let Some(summary) =
+                    morrow_core::discovery::read_codex_rollout_tail(&tail, &file.name)
+                else {
+                    continue;
+                };
+                hits.push(DiscoveryHit {
+                    session_id: summary.session_id,
+                    source: "codex",
+                    cwd: summary.cwd,
+                    tty: None,
+                    model: summary.model,
+                    pid: None,
+                    modified_at: Some(file.modified_ms),
+                    recent_messages: summary.recent_messages,
+                    transcript_path: Some(file.path),
+                });
+            }
+        }
+        hits
+    }
+}
+
 /// Give every hit that has no pid the process that is running it (#267).
 ///
 /// Reads the process table **once**, for the whole scan: a table read per session
@@ -233,14 +333,25 @@ pub fn correlate_with(
 }
 
 /// One scan with every reader this port has, each over its own roots.
-pub fn scan_once(config_dir: &Path, data_dir: &Path) -> ScanResult {
+///
+/// `home` is the user's, so each reader derives what it needs: Codex's root is
+/// `$CODEX_HOME` or `~/.codex`, OpenCode's database is under `~/.local/share`.
+pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
     let transcripts = ClaudeTranscripts {
         config_dir: config_dir.to_string_lossy().into_owned(),
     };
     let opencode = OpenCodeStore {
-        data_dir: data_dir.to_string_lossy().into_owned(),
+        data_dir: home.join(".local/share").to_string_lossy().into_owned(),
     };
-    let readers: Vec<&dyn StoreReader> = vec![&transcripts, &opencode];
+    let codex = CodexRollouts {
+        root: std::env::var("CODEX_HOME")
+            .ok()
+            .filter(|root| !root.trim().is_empty())
+            .unwrap_or_else(|| home.join(".codex").to_string_lossy().into_owned()),
+    };
+    // Order is precedence: Claude first, then Codex, then OpenCode. A session id
+    // two readers both report keeps the earlier one's source.
+    let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode];
     scan::run(&readers, scan::DEFAULT_BUDGET_MS, now_ms)
 }
 
@@ -362,7 +473,7 @@ mod tests {
             &transcript("/home/dev/project", "model-x"),
         );
 
-        let result = scan_once(&scratch.0.join(".claude"), &scratch.0.join("data"));
+        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -383,7 +494,7 @@ mod tests {
     fn a_store_that_is_not_there_is_no_sessions() {
         let scratch = Scratch::new("missing");
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0.join("data"))
+            scan_once(&scratch.0.join(".claude"), &scratch.0)
                 .hits
                 .is_empty()
         );
@@ -494,7 +605,7 @@ mod tests {
     #[test]
     fn an_opencode_database_becomes_a_session() {
         let scratch = Scratch::new("opencode");
-        let data = scratch.0.join("data");
+        let data = scratch.0.join(".local/share");
         std::fs::create_dir_all(data.join("opencode")).expect("a data directory");
         {
             let connection =
@@ -516,7 +627,7 @@ mod tests {
                 .expect("a schema");
         }
 
-        let result = scan_once(&scratch.0.join(".claude"), &data);
+        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -541,7 +652,7 @@ mod tests {
             &projects.join("claude-1.jsonl"),
             &transcript("/home/dev/p", "model-x"),
         );
-        let data = scratch.0.join("data");
+        let data = scratch.0.join(".local/share");
         std::fs::create_dir_all(data.join("opencode")).expect("a data directory");
         {
             let connection =
@@ -555,7 +666,7 @@ mod tests {
                 .expect("a schema");
         }
 
-        let mut hits = scan_once(&scratch.0.join(".claude"), &data).hits;
+        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
         hits.sort_by(|a, b| a.session_id.cmp(&b.session_id));
 
         let ids: Vec<&str> = hits.iter().map(|hit| hit.session_id.as_str()).collect();
@@ -576,7 +687,7 @@ mod tests {
         );
 
         // A file where the database should be, holding junk.
-        let data = scratch.0.join("data");
+        let data = scratch.0.join(".local/share");
         std::fs::create_dir_all(data.join("opencode")).expect("a data directory");
         std::fs::write(data.join("opencode/opencode.db"), b"not a database").expect("a file");
         let projects = scratch.project_dir(".claude", "-home-dev-project");
@@ -585,9 +696,125 @@ mod tests {
             &transcript("/home/dev/p", "model-x"),
         );
 
-        let hits = scan_once(&scratch.0.join(".claude"), &data).hits;
+        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
         assert_eq!(hits.len(), 1, "the transcripts still arrive");
         assert_eq!(hits[0].source, "claude");
+    }
+
+    /// #272: a real Codex rollout becomes a card, with the thread id, cwd and model
+    /// the rollout itself records — no hook, no process.
+    #[test]
+    fn a_codex_rollout_becomes_a_session() {
+        let scratch = Scratch::new("codex");
+        // Today's directory, which is one of the seven the reader looks at.
+        let today = today_rollout_directory(&scratch.0.join(".codex"));
+        std::fs::create_dir_all(&today).expect("a rollout directory");
+        write(
+            &today.join("rollout-2026-11-22T10-00-00-abc123.jsonl"),
+            &codex_rollout("thread-9", "/home/dev/project", "gpt-5-codex"),
+        );
+
+        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
+
+        assert_eq!(result.hits.len(), 1);
+        let hit = &result.hits[0];
+        assert_eq!(hit.session_id, "thread-9");
+        assert_eq!(hit.source, "codex");
+        assert_eq!(hit.cwd, "/home/dev/project");
+        assert_eq!(hit.model.as_deref(), Some("gpt-5-codex"));
+        assert_eq!(hit.recent_messages.len(), 2);
+    }
+
+    /// The store grows forever; a backfill that read all of it would walk years of
+    /// rollouts on every attach. Only the newest seven day-directories count.
+    #[test]
+    fn only_the_newest_seven_rollout_days_are_read() {
+        let scratch = Scratch::new("codex-days");
+        let sessions = scratch.0.join(".codex/sessions");
+        // Ten days, oldest to newest, each with one rollout.
+        for day in 1..=10 {
+            let directory = sessions.join(format!("2026/01/{day:02}"));
+            std::fs::create_dir_all(&directory).expect("a rollout directory");
+            write(
+                &directory.join(format!("rollout-2026-01-{day:02}-s{day}.jsonl")),
+                &codex_rollout(&format!("s{day}"), "/w", "model-x"),
+            );
+        }
+
+        let mut ids: Vec<String> = scan_once(&scratch.0.join(".claude"), &scratch.0)
+            .hits
+            .into_iter()
+            .map(|hit| hit.session_id)
+            .collect();
+        ids.sort();
+
+        // The oldest three fall outside the window.
+        assert_eq!(
+            ids,
+            vec!["s10", "s4", "s5", "s6", "s7", "s8", "s9"],
+            "seven of the ten days, the newest"
+        );
+    }
+
+    /// A rollout that is not a rollout does not become a card, and does not lose
+    /// the other readers' hits.
+    #[test]
+    fn an_unusable_rollout_is_skipped() {
+        let scratch = Scratch::new("codex-junk");
+        let today = today_rollout_directory(&scratch.0.join(".codex"));
+        std::fs::create_dir_all(&today).expect("a rollout directory");
+        write(&today.join("empty.jsonl"), "");
+        write(&today.join("junk.jsonl"), "not json\n");
+        let projects = scratch.project_dir(".claude", "-home-dev-project");
+        write(
+            &projects.join("claude-1.jsonl"),
+            &transcript("/home/dev/p", "model-x"),
+        );
+
+        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].source, "claude");
+    }
+
+    /// `~/.codex/sessions/<yyyy>/<mm>/<dd>` for today, which the reader's window
+    /// always includes.
+    fn today_rollout_directory(root: &Path) -> PathBuf {
+        let seconds = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("a clock")
+            .as_secs();
+        let (year, month, day) = civil_date(seconds);
+        root.join("sessions")
+            .join(format!("{year:04}"))
+            .join(format!("{month:02}"))
+            .join(format!("{day:02}"))
+    }
+
+    /// A UTC civil date from a Unix timestamp: enough for a test directory name,
+    /// and no dependency for it.
+    fn civil_date(seconds: u64) -> (i64, u32, u32) {
+        let days = (seconds / 86_400) as i64;
+        // Howard Hinnant's `civil_from_days`.
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
+    }
+
+    fn codex_rollout(id: &str, cwd: &str, model: &str) -> String {
+        format!(
+            "{}\n{}\n{}\n{}\n",
+            format_args!(r#"{{"type":"session_meta","payload":{{"id":"{id}","cwd":"{cwd}"}}}}"#),
+            format_args!(r#"{{"type":"turn_context","payload":{{"model":"{model}"}}}}"#),
+            r#"{"type":"event_msg","payload":{"type":"user_message","message":"Add a filter bar"}}"#,
+            r#"{"type":"event_msg","payload":{"type":"agent_message","message":"Added the bar"}}"#,
+        )
     }
 
     /// A half-written or foreign file is skipped, not turned into a card with an
@@ -601,7 +828,7 @@ mod tests {
         write(&projects.join("notes.txt"), "hello\n");
 
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0.join("data"))
+            scan_once(&scratch.0.join(".claude"), &scratch.0)
                 .hits
                 .is_empty()
         );
@@ -624,7 +851,7 @@ mod tests {
             &transcript("/home/dev/project", "model-y"),
         );
 
-        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0.join("data")).hits;
+        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
         hits.sort_by_key(|hit| hit.modified_at);
         assert_eq!(
             hits.last().map(|hit| hit.session_id.as_str()),
@@ -651,7 +878,7 @@ mod tests {
         let roots = claude_roots(&scratch.0.join(".claude"));
         assert_eq!(roots.len(), 2, "roots: {roots:?}");
 
-        let mut ids: Vec<String> = scan_once(Path::new(&roots[0]), &scratch.0.join("data"))
+        let mut ids: Vec<String> = scan_once(Path::new(&roots[0]), &scratch.0)
             .hits
             .into_iter()
             .map(|hit| hit.session_id)
@@ -679,7 +906,7 @@ mod tests {
         }
         write(&path, &transcript("/home/dev/project", "model-x"));
 
-        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0.join("data")).hits;
+        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("model-x"));
         assert_eq!(hits[0].cwd, "/home/dev/project");
