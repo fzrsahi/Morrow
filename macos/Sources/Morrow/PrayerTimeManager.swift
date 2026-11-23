@@ -470,18 +470,16 @@ public final class PrayerTimeManager: ObservableObject {
 
     // MARK: - Mini Peek Toast Banner & Agent Suppression
     private var bannerDismissWorkItem: DispatchWorkItem?
-    private var isMiniPeekBannerHovered: Bool = false
 
     @Published public var previewPrayerType: PrayerType? = nil
-    private var miniPeekBannerDeadline: Date?
+    private let bannerTimer = BannerHoverHoldTimer(defaultDuration: 3.0)
 
     public func dismissMiniPeekBanner() {
         bannerDismissWorkItem?.cancel()
         bannerDismissWorkItem = nil
         bannerDismissTask?.cancel()
         bannerDismissTask = nil
-        isMiniPeekBannerHovered = false
-        miniPeekBannerDeadline = nil
+        bannerTimer.cancel()
         previewPrayerType = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             self.showMiniPeekBanner = false
@@ -489,40 +487,17 @@ public final class PrayerTimeManager: ObservableObject {
     }
 
     public func setMiniPeekBannerHovered(_ hovering: Bool) {
-        guard showMiniPeekBanner else {
-            isMiniPeekBannerHovered = false
-            return
-        }
-        if hovering {
-            isMiniPeekBannerHovered = true
-            bannerDismissWorkItem?.cancel()
-            bannerDismissWorkItem = nil
-            bannerDismissTask?.cancel()
-            bannerDismissTask = nil
-        } else if isMiniPeekBannerHovered {
-            isMiniPeekBannerHovered = false
-            let remaining = miniPeekBannerDeadline?.timeIntervalSinceNow ?? 0
-            if remaining > 0 {
-                scheduleBannerAutoDismiss(after: remaining)
-            } else {
-                dismissMiniPeekBanner()
-            }
+        bannerTimer.setHovered(hovering, isVisible: showMiniPeekBanner) { [weak self] in
+            self?.dismissMiniPeekBanner()
         }
     }
 
-    private func scheduleBannerAutoDismiss(after delay: TimeInterval = 3.0) {
+    private func scheduleBannerAutoDismiss() {
         bannerDismissWorkItem?.cancel()
         bannerDismissTask?.cancel()
-        guard !isMiniPeekBannerHovered else { return }
-        let item = DispatchWorkItem { [weak self] in
-            guard let self, !self.isMiniPeekBannerHovered else { return }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                self.showMiniPeekBanner = false
-            }
-            self.miniPeekBannerDeadline = nil
+        bannerTimer.start { [weak self] in
+            self?.dismissMiniPeekBanner()
         }
-        bannerDismissWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// Evaluates if banner should pop up, deferring if an agent approval or question dialog is currently visible.
@@ -623,8 +598,6 @@ public final class PrayerTimeManager: ObservableObject {
 
     private func presentBanner(title: String, subtitle: String, previewPrayer: PrayerType? = nil) {
         SystemMonitorManager.shared.dismissChargingBanner()
-        isMiniPeekBannerHovered = false
-        miniPeekBannerDeadline = Date().addingTimeInterval(3.0)
         previewPrayerType = previewPrayer
         if let appState, appState.surface.isExpanded {
             appState.surface = .collapsed

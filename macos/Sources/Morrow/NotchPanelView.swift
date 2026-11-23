@@ -1331,14 +1331,7 @@ struct NotchPanelView: View {
     }
 
     private var chargingAmbientColor: Color {
-        switch sys.activeBannerState {
-        case .charging, .fullyCharged:
-            return Color(red: 0.19, green: 0.82, blue: 0.35)
-        case .onHold:
-            return Color(red: 1.0, green: 0.72, blue: 0.12)
-        case .lowBattery:
-            return Color(red: 1.0, green: 0.27, blue: 0.23)
-        }
+        sys.activeBannerState.accentColor
     }
 
     private var chargingAmbientBaseOpacity: Double {
@@ -1382,59 +1375,46 @@ struct NotchPanelView: View {
         }()
 
         if isStaticFull {
-            bayerDitherCanvas(time: 0)
+            chargingBayerDitherCanvas(time: 0)
                 .padding(.horizontal, -16)
                 .clipShape(shape)
         } else {
             TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-                bayerDitherCanvas(time: context.date.timeIntervalSinceReferenceDate)
+                chargingBayerDitherCanvas(time: context.date.timeIntervalSinceReferenceDate)
             }
             .padding(.horizontal, -16)
             .clipShape(shape)
         }
     }
 
-    private func bayerDitherCanvas(time t: TimeInterval) -> some View {
-        let state = sys.activeBannerState
-        let color = chargingAmbientColor
-        let sweep = ((t.truncatingRemainder(dividingBy: 1.8)) / 1.8) * 1.4 - 0.2
-        let freq: Double = {
-            if case .lowBattery = state { return 6.5 }
-            return 2.4
-        }()
-        let pulse = 0.5 + 0.5 * sin(t * freq)
-
-        return Canvas { ctx, size in
+    private func bayerDitherCanvas(
+        maxHeight: Double,
+        color: Color,
+        opacity: Double,
+        wingCenter: Double,
+        wingFloor: Double,
+        intensityTransform: @escaping (Double, Double, Double) -> Double
+    ) -> some View {
+        Canvas { ctx, size in
             let w = Double(size.width)
-            let maxY = min(44.0, Double(size.height))
+            let maxY = min(maxHeight, Double(size.height))
             let cell = 3.0
-            let dotColor = color.opacity(0.28)
+            let dotColor = color.opacity(opacity)
 
             var y = 0.0
             var rowIdx = 0
             while y < maxY {
-                let ny = y / 44.0
+                let ny = y / maxHeight
                 let bayerRow = Self.bayer4Matrix[rowIdx & 3]
                 var x = 0.0
                 var colIdx = 0
                 while x < w {
                     let nx = x / max(1.0, w)
-                    let leftBoost = exp(-pow((nx - 0.12) / 0.18, 2.0))
-                    let rightBoost = exp(-pow((nx - 0.88) / 0.18, 2.0))
-                    let wingBoost = max(leftBoost, rightBoost, 0.45)
-                    var intensity = (1.0 - ny) * 0.72 * wingBoost
-
-                    switch state {
-                    case .charging:
-                        let wave = exp(-pow((nx - sweep) / 0.14, 2.0)) * (1.0 - ny * 0.7)
-                        intensity = min(1.0, intensity * 0.75 + wave * 0.85)
-                    case .onHold:
-                        intensity *= (0.55 + 0.30 * pulse)
-                    case .fullyCharged:
-                        break
-                    case .lowBattery:
-                        intensity *= (0.20 + 0.80 * pulse)
-                    }
+                    let leftBoost = exp(-pow((nx - wingCenter) / 0.18, 2.0))
+                    let rightBoost = exp(-pow((nx - (1.0 - wingCenter)) / 0.18, 2.0))
+                    let wingBoost = max(leftBoost, rightBoost, wingFloor)
+                    let baseIntensity = (1.0 - ny) * 0.72 * wingBoost
+                    let intensity = intensityTransform(nx, ny, baseIntensity)
 
                     let threshold = bayerRow[colIdx & 3] / 16.0
                     if intensity > threshold + 0.08 {
@@ -1448,6 +1428,36 @@ struct NotchPanelView: View {
                 }
                 y += cell
                 rowIdx += 1
+            }
+        }
+    }
+
+    private func chargingBayerDitherCanvas(time t: TimeInterval) -> some View {
+        let state = sys.activeBannerState
+        let sweep = ((t.truncatingRemainder(dividingBy: 1.8)) / 1.8) * 1.4 - 0.2
+        let freq: Double = {
+            if case .lowBattery = state { return 6.5 }
+            return 2.4
+        }()
+        let pulse = 0.5 + 0.5 * sin(t * freq)
+
+        return bayerDitherCanvas(
+            maxHeight: 44.0,
+            color: chargingAmbientColor,
+            opacity: 0.28,
+            wingCenter: 0.12,
+            wingFloor: 0.45
+        ) { nx, ny, base in
+            switch state {
+            case .charging:
+                let wave = exp(-pow((nx - sweep) / 0.14, 2.0)) * (1.0 - ny * 0.7)
+                return min(1.0, base * 0.75 + wave * 0.85)
+            case .onHold:
+                return base * (0.55 + 0.30 * pulse)
+            case .fullyCharged:
+                return base
+            case .lowBattery:
+                return base * (0.20 + 0.80 * pulse)
             }
         }
     }
@@ -1470,38 +1480,14 @@ struct NotchPanelView: View {
                 let t = context.date.timeIntervalSinceReferenceDate
                 let breath = 0.72 + 0.28 * (0.5 + 0.5 * sin(t * 2.1))
                 if islandUITheme == IslandUITheme.pixel.rawValue {
-                    Canvas { ctx, size in
-                        let w = Double(size.width)
-                        let maxY = min(90.0, Double(size.height))
-                        let cell = 3.0
-                        let dotColor = prayerAccent.opacity(0.20 * breath)
-
-                        var y = 0.0
-                        var rowIdx = 0
-                        while y < maxY {
-                            let ny = y / 90.0
-                            let bayerRow = Self.bayer4Matrix[rowIdx & 3]
-                            var x = 0.0
-                            var colIdx = 0
-                            while x < w {
-                                let nx = x / max(1.0, w)
-                                let leftBoost = exp(-pow((nx - 0.10) / 0.18, 2.0))
-                                let rightBoost = exp(-pow((nx - 0.90) / 0.18, 2.0))
-                                let wingBoost = max(leftBoost, rightBoost, 0.52)
-                                let intensity = (1.0 - ny) * 0.68 * wingBoost * breath
-                                let threshold = bayerRow[colIdx & 3] / 16.0
-                                if intensity > threshold + 0.08 {
-                                    ctx.fill(
-                                        Path(CGRect(x: x, y: y, width: cell - 1.0, height: cell - 1.0)),
-                                        with: .color(dotColor)
-                                    )
-                                }
-                                x += cell
-                                colIdx += 1
-                            }
-                            y += cell
-                            rowIdx += 1
-                        }
+                    bayerDitherCanvas(
+                        maxHeight: 90.0,
+                        color: prayerAccent,
+                        opacity: 0.20 * breath,
+                        wingCenter: 0.10,
+                        wingFloor: 0.52
+                    ) { _, _, base in
+                        base * 0.94 * breath
                     }
                     .padding(.horizontal, -16)
                     .clipShape(shape)

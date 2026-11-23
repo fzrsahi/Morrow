@@ -50,6 +50,34 @@ public enum PowerBannerState: Sendable, Equatable {
             return "Connect power adapter"
         }
     }
+
+    public var accentColor: Color {
+        switch self {
+        case .charging, .fullyCharged:
+            return Color(red: 0.19, green: 0.82, blue: 0.35)
+        case .onHold:
+            return Color(red: 1.0, green: 0.72, blue: 0.12)
+        case .lowBattery:
+            return Color(red: 1.0, green: 0.27, blue: 0.23)
+        }
+    }
+
+    public var modernIconName: String {
+        switch self {
+        case .charging: return "bolt.fill"
+        case .onHold: return "pause.fill"
+        case .fullyCharged: return "checkmark"
+        case .lowBattery: return "battery.25"
+        }
+    }
+
+    public var pixelGlyph: PixelIconGlyph {
+        switch self {
+        case .charging: return .bolt
+        case .onHold, .lowBattery: return .power
+        case .fullyCharged: return .checkmark
+        }
+    }
 }
 
 public struct SystemMetrics: Sendable, Equatable {
@@ -73,64 +101,32 @@ public final class SystemMonitorManager: ObservableObject {
     @Published public var showChargingBanner: Bool = false
     @Published public private(set) var activeBannerState: PowerBannerState = .charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil)
     @Published public private(set) var activeBannerBatteryLevel: Int = 100
-    private var chargingDismissWorkItem: DispatchWorkItem?
-    private var isChargingBannerHovered: Bool = false
-    private var chargingBannerDeadline: Date?
+    private let bannerTimer = BannerHoverHoldTimer(defaultDuration: 3.0)
 
     public func dismissChargingBanner() {
-        chargingDismissWorkItem?.cancel()
-        chargingDismissWorkItem = nil
-        isChargingBannerHovered = false
-        chargingBannerDeadline = nil
+        bannerTimer.cancel()
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             self.showChargingBanner = false
         }
     }
 
     public func setChargingBannerHovered(_ hovering: Bool) {
-        guard showChargingBanner else {
-            isChargingBannerHovered = false
-            return
+        bannerTimer.setHovered(hovering, isVisible: showChargingBanner) { [weak self] in
+            self?.dismissChargingBanner()
         }
-        if hovering {
-            isChargingBannerHovered = true
-            chargingDismissWorkItem?.cancel()
-            chargingDismissWorkItem = nil
-        } else if isChargingBannerHovered {
-            isChargingBannerHovered = false
-            let remaining = chargingBannerDeadline?.timeIntervalSinceNow ?? 0
-            if remaining > 0 {
-                scheduleChargingAutoDismiss(after: remaining)
-            } else {
-                dismissChargingBanner()
-            }
-        }
-    }
-
-    private func scheduleChargingAutoDismiss(after delay: TimeInterval) {
-        chargingDismissWorkItem?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            guard let self, !self.isChargingBannerHovered else { return }
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                self.showChargingBanner = false
-            }
-            self.chargingBannerDeadline = nil
-        }
-        chargingDismissWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     public func triggerChargingBanner(previewState: PowerBannerState? = nil, previewBatteryLevel: Int? = nil) {
         PrayerTimeManager.shared.dismissMiniPeekBanner()
-        isChargingBannerHovered = false
-        chargingBannerDeadline = Date().addingTimeInterval(3.0)
         activeBannerState = previewState ?? metrics.powerBannerState
         activeBannerBatteryLevel = previewBatteryLevel ?? metrics.batteryLevel
         withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
             showChargingBanner = true
         }
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-        scheduleChargingAutoDismiss(after: 3.0)
+        bannerTimer.start { [weak self] in
+            self?.dismissChargingBanner()
+        }
     }
 
     private var monitorTimer: Timer?

@@ -39,36 +39,20 @@ public struct MagSafeChargingBanner: View {
     }
 
     private var stateColor: Color {
-        switch effectiveState {
-        case .charging:
-            if (syncThemeWithAlbumArt || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
-                return nowPlaying.albumPalette.primary
-            }
-            return Color(red: 0.19, green: 0.82, blue: 0.35)
-        case .onHold:
-            return Color(red: 1.0, green: 0.72, blue: 0.12)
-        case .fullyCharged:
-            return Color(red: 0.19, green: 0.82, blue: 0.35)
-        case .lowBattery:
-            return Color(red: 1.0, green: 0.27, blue: 0.23)
+        if case .charging = effectiveState,
+           (syncThemeWithAlbumArt || musicHUDProgressColor == "album"),
+           nowPlaying.isPlaying, nowPlaying.artworkImage != nil {
+            return nowPlaying.albumPalette.primary
         }
+        return effectiveState.accentColor
     }
 
     private var modernIconName: String {
-        switch effectiveState {
-        case .charging: return "bolt.fill"
-        case .onHold: return "pause.fill"
-        case .fullyCharged: return "checkmark"
-        case .lowBattery: return "battery.25"
-        }
+        effectiveState.modernIconName
     }
 
     private var pixelGlyph: PixelIconGlyph {
-        switch effectiveState {
-        case .charging: return .bolt
-        case .onHold, .lowBattery: return .power
-        case .fullyCharged: return .checkmark
-        }
+        effectiveState.pixelGlyph
     }
 
     public var body: some View {
