@@ -548,3 +548,50 @@ fn zcode_keeps_its_wrapper_and_the_users_switch() {
     assert!(back.contains("\"enabled\": false"), "{back}");
 }
 
+/// MiniMax loads hooks only from a plugin pack: two files, not one key.
+#[test]
+fn minimax_writes_a_plugin_pack_and_refuses_a_foreign_one() {
+    let home = Home::new("minimax");
+    let paths = home.paths();
+    cli_dir(&home, ".minimax");
+    let plugin = home.root.join(".minimax/plugins/morrow");
+
+    hooks::install_target(&paths, "minimax", STAMP)
+        .expect("install")
+        .expect("a report");
+    let manifest = home.read(&plugin.join(".claude-plugin/plugin.json"));
+    let hooks_json = home.read(&plugin.join("hooks/hooks.json"));
+    assert!(
+        manifest.contains("Morrow MiniMax Code plugin"),
+        "{manifest}"
+    );
+    assert!(manifest.contains("\"hooks\""), "{manifest}");
+    assert!(hooks_json.contains("--source minimax"), "{hooks_json}");
+    // mcode's ceiling is ten seconds; a day-long timeout voids the handler.
+    assert!(hooks_json.contains("\"timeout\": 10"), "{hooks_json}");
+    assert!(!hooks_json.contains("86400"), "{hooks_json}");
+
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "minimax")
+            .expect("a minimax row")
+            .installed
+    );
+
+    // The pack is entirely ours, so uninstall removes the directory.
+    hooks::uninstall_target(&paths, "minimax").expect("uninstall");
+    assert!(!plugin.exists(), "the pack should be gone");
+
+    // A plugin somebody else put at the same path is not ours to overwrite.
+    home.write(
+        &plugin.join(".claude-plugin/plugin.json"),
+        "{\"name\":\"morrow\",\"description\":\"someone else\"}",
+    );
+    let refused = hooks::install_target(&paths, "minimax", STAMP);
+    assert!(refused.is_err(), "a foreign manifest must be refused");
+    assert!(
+        home.read(&plugin.join(".claude-plugin/plugin.json"))
+            .contains("someone else")
+    );
+}
