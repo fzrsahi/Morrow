@@ -124,7 +124,7 @@ struct SettingsView: View {
             Group {
                 switch selectedPage {
                 case .general: GeneralPage(selectedPage: $selectedPage, displaysOverride: displaysOverride)
-                case .appearance: AppearancePage(displaysOverride: displaysOverride)
+                case .appearance: AppearancePage(appState: appState, displaysOverride: displaysOverride)
                 case .mascots: MascotsPage()
                 case .sound: SoundPage()
                 case .shortcuts: ShortcutsPage()
@@ -1766,6 +1766,7 @@ private struct DisplayConfigRow: View {
 }
 
 private struct AppearancePage: View {
+    var appState: AppState? = nil
     @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var screenMonitor = ScreenMonitor.shared
     var displaysOverride: [DisplayDescriptor]? = nil
@@ -1859,6 +1860,49 @@ private struct AppearancePage: View {
             get: { NotchAnimationSpeed.clamped(notchAnimationSpeed) },
             set: { notchAnimationSpeed = NotchAnimationSpeed.clamped($0) }
         )
+    }
+
+    @MainActor
+    private func triggerApprovalPreview(on state: AppState) {
+        let sid = "preview-approval"
+        var s = SessionSnapshot()
+        s.status = .waitingApproval
+        s.cwd = "/Users/dev/api-server"
+        s.model = "claude-opus-4-20250514"
+        s.source = "claude"
+        s.currentTool = "Bash"
+        s.toolDescription = "npm run test -- --coverage"
+        s.lastUserPrompt = "Run the test suite"
+        s.addRecentMessage(ChatMessage(isUser: true, text: "Run the test suite"))
+        s.termApp = "iTerm.app"
+
+        let applySurface = {
+            state.sessions[sid] = s
+            state.activeSessionId = sid
+            state.surface = .approvalCard(sessionId: sid)
+        }
+
+        if state.pendingPermission(forSession: sid) == nil,
+           let event = HookEvent(json: [
+               "hook_event_name": "PermissionRequest",
+               "session_id": sid,
+               "tool_name": "Bash",
+               "tool_input": [
+                   "command": "npm run test -- --coverage",
+                   "description": "Run the test suite with a coverage report"
+               ],
+               "cwd": "/Users/dev/api-server",
+               "_source": "claude"
+           ]) {
+            Task { @MainActor in
+                _ = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+                    state.permissionQueue.append(PermissionRequest(event: event, continuation: continuation))
+                    applySurface()
+                }
+            }
+        } else {
+            applySurface()
+        }
     }
 
     var body: some View {
@@ -2045,67 +2089,146 @@ private struct AppearancePage: View {
 
                     Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                         GridRow {
-                            Button(action: {
-                                SystemMonitorManager.shared.triggerChargingBanner()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "battery.100.bolt")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 0.19, green: 0.82, blue: 0.35))
-                                    Text("Test MagSafe Charging")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "battery.100.bolt",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test MagSafe Charging"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .charging(kind: .magSafe, watts: 140, timeToFullMinutes: 28),
+                                    previewBatteryLevel: 54
+                                )
                             }
-                            .buttonStyle(.bordered)
 
-                            Button(action: {
-                                PrayerTimeManager.shared.triggerTestBanner()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "moon.stars.fill")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83))
-                                    Text("Test Prayer Reminder")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "moon.stars.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Prayer (Maghrib)"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .maghrib)
                             }
-                            .buttonStyle(.bordered)
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sunrise.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Subuh"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .subuh)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "sun.max.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Dzuhur"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .dzuhur)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sun.haze.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Ashar"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .ashar)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "moon.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Isya"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .isya)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "cable.connector",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test USB-C Charging"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .charging(kind: .usbC, watts: 65, timeToFullMinutes: 42),
+                                    previewBatteryLevel: 48
+                                )
+                            }
+
+                            notificationPreviewButton(
+                                icon: "pause.circle.fill",
+                                color: Color(red: 1.0, green: 0.72, blue: 0.12),
+                                title: "Test Charging On Hold"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .onHold(kind: .magSafe),
+                                    previewBatteryLevel: 80
+                                )
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "checkmark.circle.fill",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test Fully Charged"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .fullyCharged(kind: .magSafe),
+                                    previewBatteryLevel: 100
+                                )
+                            }
+
+                            notificationPreviewButton(
+                                icon: "battery.25",
+                                color: Color(red: 1.0, green: 0.36, blue: 0.25),
+                                title: "Test Low Battery"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .lowBattery(percent: 15),
+                                    previewBatteryLevel: 15
+                                )
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "speaker.wave.2.fill",
+                                color: Color(red: 1.0, green: 0.8, blue: 0.15),
+                                title: "Test Volume HUD"
+                            ) {
+                                SystemVolumeManager.shared.presentHUD()
+                            }
+
+                            notificationPreviewButton(
+                                icon: "music.note",
+                                color: Color(red: 1.0, green: 0.16, blue: 0.53),
+                                title: "Test Track Auto-Expand"
+                            ) {
+                                NowPlayingManager.shared.triggerTestTrackChange()
+                            }
                         }
 
                         GridRow {
                             Button(action: {
-                                SystemVolumeManager.shared.presentHUD()
+                                if let appState {
+                                    triggerApprovalPreview(on: appState)
+                                }
                             }) {
                                 HStack(spacing: 6) {
-                                    Image(systemName: "speaker.wave.2.fill")
+                                    Image(systemName: "checkmark.shield.fill")
                                         .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 1.0, green: 0.8, blue: 0.15))
-                                    Text("Test Volume HUD")
+                                        .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.20))
+                                    Text("Test Approval Modal")
                                         .font(.system(size: 11, weight: .medium))
                                 }
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3.5)
                             }
                             .buttonStyle(.bordered)
-
-                            Button(action: {
-                                NowPlayingManager.shared.triggerTestTrackChange()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "music.note")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 1.0, green: 0.16, blue: 0.53))
-                                    Text("Test Track Auto-Expand")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
-                            }
-                            .buttonStyle(.bordered)
+                            .disabled(appState == nil)
                         }
                     }
                     .padding(.top, 4)
@@ -2129,6 +2252,26 @@ private struct AppearancePage: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func notificationPreviewButton(
+        icon: String,
+        color: Color,
+        title: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+        }
+        .buttonStyle(.bordered)
     }
 }
 

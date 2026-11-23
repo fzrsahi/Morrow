@@ -554,11 +554,7 @@ struct CyberMusicWingView: View {
     }
 
     private var isCompactNarrow: Bool {
-        guard !isEnlarged, !isBilateralWingsLyricActive else { return false }
-        if isDynamicIslandCompact && maxContentWidth == nil {
-            return false
-        }
-        return (maxContentWidth ?? 999) < 32 || (wingWidth > 0 && wingWidth < 42)
+        !isEnlarged && !isBilateralWingsLyricActive && ((maxContentWidth ?? 999) < 32 || (wingWidth > 0 && wingWidth < 42))
     }
 
     /// Maximum title width permitted inside the right wing without pushing adjacent content into the notch.

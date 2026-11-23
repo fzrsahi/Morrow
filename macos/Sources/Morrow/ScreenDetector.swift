@@ -12,22 +12,70 @@ struct ScreenDetector {
         (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 
+    /// Pure, deterministic hardware-backed display identifier.
+    /// Never falls back to volatile runtime `CGDirectDisplayID` values.
+    static func stableIdentifier(
+        isBuiltin: Bool,
+        uuidString: String?,
+        vendor: UInt32,
+        model: UInt32,
+        serial: UInt32,
+        unit: UInt32,
+        localizedName: String,
+        width: Int,
+        height: Int
+    ) -> String {
+        if isBuiltin {
+            return "builtin"
+        }
+        if let uuidString, !uuidString.isEmpty {
+            return uuidString
+        }
+        if serial != 0 {
+            return "hw_\(vendor)_\(model)_\(serial)"
+        }
+        if vendor != 0 || model != 0 {
+            return "hw_\(vendor)_\(model)_u\(unit)_\(localizedName)_\(width)x\(height)"
+        }
+        return "fallback_\(localizedName)_\(width)x\(height)"
+    }
+
     /// Stable hardware-backed identifier for persisting per-display settings across
     /// unplug/replug and arrangement changes.
     static func displayIdentifier(for screen: NSScreen) -> String {
-        if isBuiltinScreen(screen) {
-            return "builtin"
-        }
-        if let id = displayID(for: screen) {
-            if let uuid = CGDisplayCreateUUIDFromDisplayID(id)?.takeRetainedValue(),
-               let uuidString = CFUUIDCreateString(nil, uuid) as String? {
-                return uuidString
-            }
-            return "display_\(id)"
-        }
+        let builtin = isBuiltinScreen(screen)
         let width = Int(screen.frame.width.rounded())
         let height = Int(screen.frame.height.rounded())
-        return "fallback_\(screen.localizedName)_\(width)x\(height)"
+
+        guard let id = displayID(for: screen) else {
+            return stableIdentifier(
+                isBuiltin: builtin,
+                uuidString: nil,
+                vendor: 0,
+                model: 0,
+                serial: 0,
+                unit: 0,
+                localizedName: screen.localizedName,
+                width: width,
+                height: height
+            )
+        }
+
+        let uuidString: String? = CGDisplayCreateUUIDFromDisplayID(id).flatMap {
+            CFUUIDCreateString(nil, $0.takeRetainedValue()) as String?
+        }
+
+        return stableIdentifier(
+            isBuiltin: builtin,
+            uuidString: uuidString,
+            vendor: CGDisplayVendorNumber(id),
+            model: CGDisplayModelNumber(id),
+            serial: CGDisplaySerialNumber(id),
+            unit: CGDisplayUnitNumber(id),
+            localizedName: screen.localizedName,
+            width: width,
+            height: height
+        )
     }
 
     static func screenDescriptors(
@@ -85,12 +133,14 @@ struct ScreenDetector {
 
     /// Check if a display is the built-in screen of the Mac
     static func isBuiltinScreen(_ screen: NSScreen) -> Bool {
-        if screenHasNotch(screen) { return true }
         if let screenNumber = displayID(for: screen) {
             return CGDisplayIsBuiltin(screenNumber) != 0
         }
         let name = screen.localizedName
-        return name.localizedCaseInsensitiveContains("built-in") || name.contains("内置")
+        return name.localizedCaseInsensitiveContains("built-in")
+            || name.contains("内置")
+            || name.localizedCaseInsensitiveContains("liquid retina")
+            || name.localizedCaseInsensitiveContains("color lcd")
     }
 
     /// Preferred screen: built-in display (with hardware notch) first, then primary Mac display (origin (0, 0))

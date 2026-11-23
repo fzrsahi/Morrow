@@ -39,12 +39,14 @@ enum PanelFullscreenGeometry {
 
     static func candidateWindowBounds(
         from windowInfoList: [[String: Any]],
-        excludingPID: pid_t
+        frontmostPID: pid_t,
+        excludingPID: pid_t = ProcessInfo.processInfo.processIdentifier
     ) -> [CGRect] {
+        guard frontmostPID != excludingPID else { return [] }
         var result: [CGRect] = []
         for window in windowInfoList {
             guard let pid = window[kCGWindowOwnerPID as String] as? pid_t,
-                  pid != excludingPID,
+                  pid == frontmostPID,
                   let layer = window[kCGWindowLayer as String] as? Int, layer == 0,
                   let bounds = window[kCGWindowBounds as String] as? [String: Any],
                   let rect = CGRect(dictionaryRepresentation: bounds as CFDictionary),
@@ -309,6 +311,37 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    struct ScreenEntry {
+        let descriptor: DisplayDescriptor
+        let screen: NSScreen
+        var frameOverride: CGRect? = nil
+        var frame: CGRect { frameOverride ?? screen.frame }
+    }
+
+    var screenEntriesProvider: () -> [ScreenEntry] = {
+        ScreenDetector.screenDescriptors().map {
+            ScreenEntry(descriptor: $0.descriptor, screen: $0.screen)
+        }
+    }
+
+    var activeSlotFramesForTesting: [String: NSRect] {
+        slots.mapValues { $0.panel.frame }
+    }
+
+    var activeSlotModesForTesting: [String: IslandDisplayMode] {
+        slots.mapValues { $0.configuration.displayMode }
+    }
+
+    func syncPanelsForTesting() {
+        syncPanels(forceRebuild: false)
+    }
+
+    func tearDownAllSlotsForTesting() {
+        for id in Array(slots.keys) {
+            tearDownSlot(displayID: id)
+        }
+    }
+
     private var slots: [String: PanelSlot] = [:]
     private var hoveredDisplayIDs: Set<String> = []
     private let appState: AppState
@@ -324,7 +357,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    private func panelSize(for screen: NSScreen) -> NSSize {
+    private func panelSize(for entry: ScreenEntry) -> NSSize {
         let desiredH = PanelHeightMetrics.desiredHeight(
             maxVisibleSessions: UserDefaults.standard.integer(forKey: SettingsKey.maxVisibleSessions)
         )
@@ -335,8 +368,9 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         // a redraw, which looked like "invisible after ~2s, reappears on hover" (#304).
         // The content is top-anchored and the session list scrolls internally, so the
         // window never needs to be taller than the visible screen.
-        let maxH = min(desiredH, screen.visibleFrame.height)
-        let screenW = screen.frame.width
+        let visibleHeight = entry.frameOverride?.height ?? entry.screen.visibleFrame.height
+        let maxH = min(desiredH, visibleHeight)
+        let screenW = entry.frame.width
         let width = min(760, screenW - 40)
         return NSSize(width: width, height: maxH)
     }
@@ -484,22 +518,22 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeNotchPanelView(
-        for screen: NSScreen,
+        for entry: ScreenEntry,
         displayID: String,
         configuration: DisplayConfiguration,
         isFullscreen: Bool,
         isPrimaryCoordinator: Bool
     ) -> NotchPanelView {
-        let hasNotch = ScreenDetector.screenHasNotch(screen)
-        let notchHeight = ScreenDetector.topBarHeight(for: screen)
-        let notchW = ScreenDetector.notchWidth(for: screen)
+        let hasNotch = entry.frameOverride != nil ? entry.descriptor.hasNotch : ScreenDetector.screenHasNotch(entry.screen)
+        let notchHeight = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 32 : 25) : ScreenDetector.topBarHeight(for: entry.screen)
+        let notchW = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 185 : min(max(entry.frame.width * 0.14, 160), 240)) : ScreenDetector.notchWidth(for: entry.screen)
 
         return NotchPanelView(
             appState: appState,
             hasNotch: hasNotch,
             notchHeight: notchHeight,
             notchW: notchW,
-            screenWidth: screen.frame.width,
+            screenWidth: entry.frame.width,
             displayModeOverride: configuration.displayMode,
             isFullscreenOverride: isFullscreen,
             isPrimaryCoordinator: isPrimaryCoordinator,
@@ -510,14 +544,14 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     private func makeHostingView(
-        for screen: NSScreen,
+        for entry: ScreenEntry,
         displayID: String,
         configuration: DisplayConfiguration,
         isFullscreen: Bool,
         isPrimaryCoordinator: Bool
     ) -> NotchHostingView<NotchPanelView> {
         let rootView = makeNotchPanelView(
-            for: screen,
+            for: entry,
             displayID: displayID,
             configuration: configuration,
             isFullscreen: isFullscreen,
@@ -533,8 +567,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         return contentView
     }
 
-    private func makePanel(for screen: NSScreen, contentView: NotchHostingView<NotchPanelView>) -> KeyablePanel {
-        let size = panelSize(for: screen)
+    private func makePanel(for entry: ScreenEntry, contentView: NotchHostingView<NotchPanelView>) -> KeyablePanel {
+        let size = panelSize(for: entry)
         let panel = KeyablePanel(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.borderless, .nonactivatingPanel],
@@ -592,9 +626,9 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     private func syncPanels(forceRebuild: Bool = false) {
-        let mapped = ScreenDetector.screenDescriptors()
-        let displays = mapped.map(\.descriptor)
-        let screensByID = Dictionary(uniqueKeysWithValues: mapped.map { ($0.descriptor.id, $0.screen) })
+        let entries = screenEntriesProvider()
+        let displays = entries.map(\.descriptor)
+        let entriesByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.descriptor.id, $0) })
 
         let islandEnabled = SettingsManager.shared.islandEnabled
         let configs = SettingsManager.shared.displayConfigurations(for: displays)
@@ -610,11 +644,13 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
 
         for displayID in plan.activeDisplayIDs {
-            guard let screen = screensByID[displayID],
+            guard let entry = entriesByID[displayID],
                   let config = configs[displayID] else { continue }
 
             let isCoordinator = (displayID == plan.primaryCoordinatorID)
-            let signature = slotSignature(for: screen)
+            let signature = entry.frameOverride != nil
+                ? "\(entry.descriptor.id):\(Int(entry.frame.minX))x\(Int(entry.frame.minY)):\(Int(entry.frame.width))x\(Int(entry.frame.height))"
+                : slotSignature(for: entry.screen)
 
             if let slot = slots[displayID] {
                 let needsViewRefresh = forceRebuild
@@ -628,7 +664,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
 
                 if needsViewRefresh {
                     slot.hostingView.rootView = makeNotchPanelView(
-                        for: screen,
+                        for: entry,
                         displayID: displayID,
                         configuration: config,
                         isFullscreen: slot.isFullscreen,
@@ -637,13 +673,13 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 }
             } else {
                 let hostingView = makeHostingView(
-                    for: screen,
+                    for: entry,
                     displayID: displayID,
                     configuration: config,
                     isFullscreen: false,
                     isPrimaryCoordinator: isCoordinator
                 )
-                let panel = makePanel(for: screen, contentView: hostingView)
+                let panel = makePanel(for: entry, contentView: hostingView)
                 slots[displayID] = PanelSlot(
                     displayID: displayID,
                     panel: panel,
@@ -655,8 +691,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             }
         }
 
-        refreshFullscreenStates(updateViews: true, screensByID: screensByID)
-        updateAllPositions(screensByID: screensByID)
+        refreshFullscreenStates(updateViews: true, entriesByID: entriesByID)
+        updateAllPositions(entriesByID: entriesByID)
         updateVisibility()
         syncFullscreenPoller()
     }
@@ -709,28 +745,28 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         settingsObservers.append(observer)
     }
 
-    private func currentScreensByID() -> [String: NSScreen] {
-        Dictionary(uniqueKeysWithValues: ScreenDetector.screenDescriptors().map { ($0.descriptor.id, $0.screen) })
+    private func currentScreenEntriesByID() -> [String: ScreenEntry] {
+        Dictionary(uniqueKeysWithValues: screenEntriesProvider().map { ($0.descriptor.id, $0) })
     }
 
-    private func updateAllPositions(screensByID: [String: NSScreen]? = nil) {
-        let lookup = screensByID ?? currentScreensByID()
+    private func updateAllPositions(entriesByID: [String: ScreenEntry]? = nil) {
+        let lookup = entriesByID ?? currentScreenEntriesByID()
         for (displayID, slot) in slots {
-            guard let screen = lookup[displayID] else { continue }
-            let target = panelFrame(for: screen, configuration: slot.configuration, isFullscreen: slot.isFullscreen)
+            guard let entry = lookup[displayID] else { continue }
+            let target = panelFrame(for: entry, configuration: slot.configuration, isFullscreen: slot.isFullscreen)
             guard slot.panel.frame != target else { continue }
             slot.panel.setFrame(target, display: true)
         }
     }
 
     private func panelFrame(
-        for screen: NSScreen,
+        for entry: ScreenEntry,
         configuration: DisplayConfiguration,
         isFullscreen: Bool
     ) -> NSRect {
-        let size = panelSize(for: screen)
-        let screenFrame = screen.frame
-        let centeredX = centeredX(for: size, screen: screen)
+        let size = panelSize(for: entry)
+        let screenFrame = entry.frame
+        let centeredX = centeredX(for: size, frame: screenFrame)
         let dragOffset = SettingsManager.shared.allowHorizontalDrag
             ? CGFloat(SettingsManager.shared.panelHorizontalOffset)
             : 0
@@ -741,8 +777,9 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         // A user-dragged offset is an explicit choice and always wins.
         if SettingsManager.shared.avoidMenuBarIcons,
            dragOffset == 0,
-           !ScreenDetector.screenHasNotch(screen) {
-            let occupied = MenuBarIconAvoidance.occupiedMenuBarRanges(on: screen)
+           entry.frameOverride == nil,
+           !ScreenDetector.screenHasNotch(entry.screen) {
+            let occupied = MenuBarIconAvoidance.occupiedMenuBarRanges(on: entry.screen)
             desiredX = MenuBarIconAvoidance.resolvedX(
                 preferredX: desiredX,
                 panelWidth: size.width,
@@ -753,19 +790,19 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             )
         }
 
-        let x = clampedX(desiredX, panelWidth: size.width, on: screen)
-        let y = anchoredY(for: size.height, on: screen, configuration: configuration, isFullscreen: isFullscreen)
+        let x = clampedX(desiredX, panelWidth: size.width, frame: screenFrame)
+        let y = anchoredY(for: size.height, screenMaxY: screenFrame.maxY, configuration: configuration, isFullscreen: isFullscreen)
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
     private func anchoredY(
         for panelHeight: CGFloat,
-        on screen: NSScreen,
+        screenMaxY: CGFloat,
         configuration: DisplayConfiguration,
         isFullscreen: Bool
     ) -> CGFloat {
         PanelWindowLayout.anchoredY(
-            screenMaxY: screen.frame.maxY,
+            screenMaxY: screenMaxY,
             panelHeight: panelHeight,
             displayMode: configuration.displayMode,
             isFullscreenMode: isFullscreen,
@@ -773,12 +810,12 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         )
     }
 
-    private func centeredX(for size: NSSize, screen: NSScreen) -> CGFloat {
-        screen.frame.midX - size.width / 2
+    private func centeredX(for size: NSSize, frame: CGRect) -> CGFloat {
+        frame.midX - size.width / 2
     }
 
-    private func clampedX(_ desiredX: CGFloat, panelWidth: CGFloat, on screen: NSScreen) -> CGFloat {
-        min(max(desiredX, screen.frame.minX), screen.frame.maxX - panelWidth)
+    private func clampedX(_ desiredX: CGFloat, panelWidth: CGFloat, frame: CGRect) -> CGFloat {
+        min(max(desiredX, frame.minX), frame.maxX - panelWidth)
     }
 
     private func setupHorizontalDragMonitor() {
@@ -801,7 +838,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             case .leftMouseDragged:
                 if let targetID = self.dragTargetDisplayID,
                    let slot = self.slots[targetID],
-                   let screen = self.currentScreensByID()[targetID],
+                   let entry = self.currentScreenEntriesByID()[targetID],
                    let startMouseX = self.dragStartMouseX,
                    let startPanelX = self.dragStartPanelX {
                     let deltaX = NSEvent.mouseLocation.x - startMouseX
@@ -811,10 +848,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                         self.isDraggingPanel = true
                     }
                     let size = slot.panel.frame.size
-                    let newX = self.clampedX(startPanelX + deltaX, panelWidth: size.width, on: screen)
+                    let newX = self.clampedX(startPanelX + deltaX, panelWidth: size.width, frame: entry.frame)
                     let fixedY = self.anchoredY(
                         for: size.height,
-                        on: screen,
+                        screenMaxY: entry.frame.maxY,
                         configuration: slot.configuration,
                         isFullscreen: slot.isFullscreen
                     )
@@ -824,9 +861,9 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 if self.isDraggingPanel,
                    let targetID = self.dragTargetDisplayID,
                    let slot = self.slots[targetID],
-                   let screen = self.currentScreensByID()[targetID] {
+                   let entry = self.currentScreenEntriesByID()[targetID] {
                     let size = slot.panel.frame.size
-                    let offset = slot.panel.frame.origin.x - self.centeredX(for: size, screen: screen)
+                    let offset = slot.panel.frame.origin.x - self.centeredX(for: size, frame: entry.frame)
                     SettingsManager.shared.panelHorizontalOffset = Double(offset)
                 }
                 self.dragTargetDisplayID = nil
@@ -843,20 +880,20 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     @discardableResult
     private func refreshFullscreenStates(
         updateViews: Bool,
-        screensByID: [String: NSScreen]? = nil
+        entriesByID: [String: ScreenEntry]? = nil
     ) -> Bool {
-        let lookup = screensByID ?? currentScreensByID()
+        let lookup = entriesByID ?? currentScreenEntriesByID()
         let windowList = fullscreenCandidateWindowBounds()
         let primaryMaxY = (NSScreen.screens.first(where: { $0.frame.origin == .zero }) ?? NSScreen.screens.first)?.frame.maxY ?? 0
 
         var anyChanged = false
         for (displayID, slot) in slots {
-            guard let screen = lookup[displayID] else { continue }
+            guard let entry = lookup[displayID] else { continue }
             let nextFullscreen = windowList.contains { cgBounds in
                 PanelFullscreenGeometry.isWindowFullscreen(
                     cgBounds: cgBounds,
                     primaryScreenMaxY: primaryMaxY,
-                    targetScreenFrame: screen.frame
+                    targetScreenFrame: entry.frame
                 )
             }
             if slot.isFullscreen != nextFullscreen {
@@ -864,7 +901,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 anyChanged = true
                 if updateViews {
                     slot.hostingView.rootView = makeNotchPanelView(
-                        for: screen,
+                        for: entry,
                         displayID: displayID,
                         configuration: slot.configuration,
                         isFullscreen: nextFullscreen,
@@ -913,7 +950,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     /// Update panel visibility across all active display slots based on settings
     private func updateVisibility() {
         let settings = SettingsManager.shared
-        if !settings.islandEnabled || (settings.hideWhenNoSession && appState.activeSessionCount == 0) {
+        let hasActiveBanner = SystemMonitorManager.shared.showChargingBanner || PrayerTimeManager.shared.showMiniPeekBanner
+        if !settings.islandEnabled || (settings.hideWhenNoSession && appState.activeSessionCount == 0 && !hasActiveBanner) {
             for slot in slots.values {
                 slot.panel.orderOut(nil)
             }
@@ -961,14 +999,17 @@ class PanelWindowController: NSObject, NSWindowDelegate {
     }
 
     private func fullscreenCandidateWindowBounds() -> [CGRect] {
-        guard let windowList = CGWindowListCopyWindowInfo(
-            [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
-        ) as? [[String: Any]] else {
+        guard let frontApp = NSWorkspace.shared.frontmostApplication,
+              frontApp.processIdentifier != ProcessInfo.processInfo.processIdentifier,
+              let windowList = CGWindowListCopyWindowInfo(
+                  [.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID
+              ) as? [[String: Any]] else {
             return []
         }
 
         return PanelFullscreenGeometry.candidateWindowBounds(
             from: windowList,
+            frontmostPID: frontApp.processIdentifier,
             excludingPID: ProcessInfo.processInfo.processIdentifier
         )
     }
@@ -995,10 +1036,10 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         guard !isDraggingPanel,
               let movedWindow = notification.object as? NSWindow,
               let slot = slots.values.first(where: { $0.panel === movedWindow }),
-              let screen = currentScreensByID()[slot.displayID] else { return }
+              let entry = currentScreenEntriesByID()[slot.displayID] else { return }
         let expectedY = anchoredY(
             for: slot.panel.frame.height,
-            on: screen,
+            screenMaxY: entry.frame.maxY,
             configuration: slot.configuration,
             isFullscreen: slot.isFullscreen
         )

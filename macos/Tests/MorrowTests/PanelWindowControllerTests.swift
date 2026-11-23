@@ -105,10 +105,10 @@ final class PanelWindowControllerTests: XCTestCase {
         )
     }
 
-    func testCandidateWindowBoundsDetectsNonFrontmostCrossDisplayFullscreenWindows() {
+    func testCandidateWindowBoundsOnlyIncludesFrontmostAppWindows() {
         let ownPID: pid_t = 100
-        let display1FocusedAppPID: pid_t = 200
-        let display2FullscreenAppPID: pid_t = 300
+        let frontmostAppPID: pid_t = 200
+        let backgroundAppPID: pid_t = 300
 
         let primaryFrame = CGRect(x: 0, y: 0, width: 1512, height: 982)
         let secondaryFrame = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
@@ -123,30 +123,30 @@ final class PanelWindowControllerTests: XCTestCase {
                 kCGWindowAlpha as String: 1.0,
                 kCGWindowBounds as String: CGRect(x: 1512, y: -458, width: 2560, height: 1440).dictionaryRepresentation as Any,
             ],
-            // Focused app on Display 1 (not fullscreen)
+            // Frontmost app fullscreen window on Display 2 (must be included)
             [
-                kCGWindowOwnerPID as String: display1FocusedAppPID,
-                kCGWindowLayer as String: 0,
-                kCGWindowAlpha as String: 1.0,
-                kCGWindowBounds as String: CGRect(x: 40, y: 40, width: 1000, height: 700).dictionaryRepresentation as Any,
-            ],
-            // Non-frontmost fullscreen app on Display 2 (must still be included)
-            [
-                kCGWindowOwnerPID as String: display2FullscreenAppPID,
+                kCGWindowOwnerPID as String: frontmostAppPID,
                 kCGWindowLayer as String: 0,
                 kCGWindowAlpha as String: 1.0,
                 kCGWindowBounds as String: secondaryFullscreenCG.dictionaryRepresentation as Any,
             ],
+            // Non-frontmost background app fullscreen window on Display 1 (must be excluded)
+            [
+                kCGWindowOwnerPID as String: backgroundAppPID,
+                kCGWindowLayer as String: 0,
+                kCGWindowAlpha as String: 1.0,
+                kCGWindowBounds as String: CGRect(x: 0, y: 0, width: 1512, height: 982).dictionaryRepresentation as Any,
+            ],
             // Non-zero layer overlay (must be excluded)
             [
-                kCGWindowOwnerPID as String: display2FullscreenAppPID,
+                kCGWindowOwnerPID as String: frontmostAppPID,
                 kCGWindowLayer as String: 25,
                 kCGWindowAlpha as String: 1.0,
                 kCGWindowBounds as String: CGRect(x: 0, y: 0, width: 1512, height: 982).dictionaryRepresentation as Any,
             ],
             // Zero-alpha hidden window (must be excluded)
             [
-                kCGWindowOwnerPID as String: display2FullscreenAppPID,
+                kCGWindowOwnerPID as String: frontmostAppPID,
                 kCGWindowLayer as String: 0,
                 kCGWindowAlpha as String: 0.0,
                 kCGWindowBounds as String: CGRect(x: 0, y: 0, width: 1512, height: 982).dictionaryRepresentation as Any,
@@ -155,9 +155,10 @@ final class PanelWindowControllerTests: XCTestCase {
 
         let candidates = PanelFullscreenGeometry.candidateWindowBounds(
             from: windowList,
+            frontmostPID: frontmostAppPID,
             excludingPID: ownPID
         )
-        XCTAssertEqual(candidates.count, 2)
+        XCTAssertEqual(candidates.count, 1)
 
         let primaryFullscreen = candidates.contains {
             PanelFullscreenGeometry.isWindowFullscreen(
@@ -176,5 +177,95 @@ final class PanelWindowControllerTests: XCTestCase {
 
         XCTAssertFalse(primaryFullscreen)
         XCTAssertTrue(secondaryFullscreen)
+    }
+
+    @MainActor
+    func testTwoDisplaysSwitchBetweenNotchAndDynamicIslandUpdatesPanelFramesEndToEnd() throws {
+        _ = NSApplication.shared
+        let sandbox = DefaultsSandbox(keys: DefaultsSandbox.allSettingsKeys)
+        defer { sandbox.restore() }
+
+        let d1 = DisplayDescriptor(
+            id: "builtin",
+            index: 0,
+            name: "Built-in",
+            width: 1512,
+            height: 982,
+            hasNotch: true,
+            isBuiltin: true,
+            isPrimary: true
+        )
+        let d2 = DisplayDescriptor(
+            id: "EXT-27",
+            index: 1,
+            name: "External 27",
+            width: 2560,
+            height: 1440,
+            hasNotch: false,
+            isBuiltin: false,
+            isPrimary: false
+        )
+        let f1 = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let f2 = CGRect(x: 1512, y: 0, width: 2560, height: 1440)
+        let backingScreen = NSScreen.screens.first ?? NSScreen()
+
+        let appState = AppState()
+        let controller = PanelWindowController(appState: appState)
+        defer { controller.tearDownAllSlotsForTesting() }
+
+        controller.screenEntriesProvider = {
+            [
+                PanelWindowController.ScreenEntry(descriptor: d1, screen: backingScreen, frameOverride: f1),
+                PanelWindowController.ScreenEntry(descriptor: d2, screen: backingScreen, frameOverride: f2),
+            ]
+        }
+
+        SettingsManager.shared.islandEnabled = true
+        SettingsManager.shared.hideWhenNoSession = false
+        SettingsManager.shared.hideInFullscreen = false
+        SettingsManager.shared.setDisplayConfigurations([
+            "builtin": DisplayConfiguration(enabled: true, displayMode: .notch, dynamicIslandTopOffset: 10),
+            "EXT-27": DisplayConfiguration(enabled: true, displayMode: .dynamicIsland, dynamicIslandTopOffset: 14),
+        ], displays: [d1, d2])
+
+        controller.syncPanelsForTesting()
+
+        let initialFrames = controller.activeSlotFramesForTesting
+        XCTAssertEqual(Set(initialFrames.keys), ["builtin", "EXT-27"])
+        let d1Initial = try XCTUnwrap(initialFrames["builtin"])
+        let d2Initial = try XCTUnwrap(initialFrames["EXT-27"])
+        XCTAssertEqual(d1Initial.maxY, f1.maxY, accuracy: 0.5)
+        XCTAssertEqual(d2Initial.maxY, f2.maxY - 14, accuracy: 0.5)
+        XCTAssertGreaterThanOrEqual(d2Initial.minX, f2.minX)
+
+        // Flip both displays' modes and verify real panel frames follow.
+        SettingsManager.shared.setDisplayConfiguration(
+            DisplayConfiguration(enabled: true, displayMode: .dynamicIsland, dynamicIslandTopOffset: 20),
+            for: "builtin",
+            displays: [d1, d2]
+        )
+        SettingsManager.shared.setDisplayConfiguration(
+            DisplayConfiguration(enabled: true, displayMode: .notch, dynamicIslandTopOffset: 14),
+            for: "EXT-27",
+            displays: [d1, d2]
+        )
+        controller.syncPanelsForTesting()
+
+        let flippedFrames = controller.activeSlotFramesForTesting
+        let d1Flipped = try XCTUnwrap(flippedFrames["builtin"])
+        let d2Flipped = try XCTUnwrap(flippedFrames["EXT-27"])
+        XCTAssertEqual(d1Flipped.maxY, f1.maxY - 20, accuracy: 0.5)
+        XCTAssertEqual(d2Flipped.maxY, f2.maxY, accuracy: 0.5)
+        XCTAssertEqual(controller.activeSlotModesForTesting["builtin"], .dynamicIsland)
+        XCTAssertEqual(controller.activeSlotModesForTesting["EXT-27"], .notch)
+
+        // Disable Display 1 and verify only Display 2 slot remains.
+        SettingsManager.shared.setDisplayConfiguration(
+            DisplayConfiguration(enabled: false, displayMode: .dynamicIsland, dynamicIslandTopOffset: 20),
+            for: "builtin",
+            displays: [d1, d2]
+        )
+        controller.syncPanelsForTesting()
+        XCTAssertEqual(Set(controller.activeSlotFramesForTesting.keys), ["EXT-27"])
     }
 }
