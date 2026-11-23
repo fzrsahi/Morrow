@@ -548,6 +548,16 @@ pub mod transcript_files {
         pub modified_ms: u64,
     }
 
+    /// One file's modification time, in milliseconds, without listing its
+    /// directory. `None` when it is not there.
+    pub fn mtime_ms(path: &str) -> Option<u64> {
+        let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|since| since.as_millis() as u64)
+    }
+
     /// The same listing with any extension, for a store that is not JSONL
     /// (Gemini's chats are `*.json`).
     pub fn list_any(directory: &str, extension: &str) -> Option<Vec<TranscriptFile>> {
@@ -624,6 +634,275 @@ pub mod transcript_files {
                 Some(start) => file.modified_ms + START_SLACK_MS >= start,
             })
             .max_by_key(|file| file.modified_ms)
+    }
+}
+
+/// Cline sessions (#278): the VS Code extension `saoudrizwan.claude-dev`.
+///
+/// No process: Cline is an extension inside VS Code, so macOS gives it no pid
+/// either — and that makes it the one reader of this batch that can be backfilled
+/// with nothing running.
+pub mod cline {
+    use super::ChatMessage;
+    use super::extract_text_content;
+
+    /// One row of `state/taskHistory.json`, newest last.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Task {
+        pub id: String,
+        pub cwd: Option<String>,
+        pub model: Option<String>,
+        /// Milliseconds since the epoch, as Cline writes it.
+        pub ts_ms: Option<f64>,
+    }
+
+    /// The most recent task, by `ts`.
+    ///
+    /// The list is not reliably ordered — it is whatever order the extension last
+    /// wrote — so the newest is chosen by timestamp rather than by position.
+    pub fn latest_task(history_json: &str) -> Option<Task> {
+        let history: Vec<serde_json::Value> = serde_json::from_str(history_json).ok()?;
+        history
+            .iter()
+            .filter_map(|entry| {
+                Some(Task {
+                    id: entry.get("id")?.as_str()?.to_owned(),
+                    cwd: entry
+                        .get("cwdOnTaskInitialization")
+                        .and_then(|cwd| cwd.as_str())
+                        .filter(|cwd| !cwd.is_empty())
+                        .map(str::to_owned),
+                    model: entry
+                        .get("modelId")
+                        .and_then(|model| model.as_str())
+                        .filter(|model| !model.is_empty())
+                        .map(str::to_owned),
+                    ts_ms: entry.get("ts").and_then(|ts| ts.as_f64()),
+                })
+            })
+            .filter(|task| !task.id.is_empty())
+            .max_by(|a, b| {
+                a.ts_ms
+                    .unwrap_or(f64::MIN)
+                    .total_cmp(&b.ts_ms.unwrap_or(f64::MIN))
+            })
+    }
+
+    /// The last three turns of `tasks/<id>/api_conversation_history.json`.
+    pub fn recent_messages(conversation_json: &str) -> Vec<ChatMessage> {
+        let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(conversation_json) else {
+            return Vec::new();
+        };
+        let mut turns: Vec<(usize, ChatMessage)> = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let Some(role) = entry.get("role").and_then(|role| role.as_str()) else {
+                continue;
+            };
+            let Some(text) = extract_text_content(entry.get("content")) else {
+                continue;
+            };
+            match role {
+                "user" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: true,
+                        text,
+                    },
+                )),
+                "assistant" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: false,
+                        text,
+                    },
+                )),
+                _ => {}
+            }
+        }
+        let start = turns.len().saturating_sub(3);
+        turns.split_off(start).into_iter().map(|(_, t)| t).collect()
+    }
+}
+
+/// Flat stores (#278): Qoder, CodeBuddy and Factory (droid) each keep JSONL
+/// transcripts one directory per project, and each spells the store slightly
+/// differently. What differs is only the encoding and the file's flavour.
+pub mod flat_store {
+    use super::ChatMessage;
+
+    /// CodeBuddy's own transcript flavour: `{type:"message", role, content,
+    /// providerData:{model}}`. Qoder and Factory write Claude's format, so they
+    /// borrow `read_transcript_tail` instead.
+    pub fn codebuddy_recent(tail: &str) -> (Option<String>, Vec<ChatMessage>) {
+        let mut model: Option<String> = None;
+        let mut turns: Vec<(usize, ChatMessage)> = Vec::new();
+        for (index, line) in tail.lines().filter(|line| !line.is_empty()).enumerate() {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if json.get("type").and_then(|kind| kind.as_str()) != Some("message") {
+                continue;
+            }
+            let Some(role) = json.get("role").and_then(|role| role.as_str()) else {
+                continue;
+            };
+            let Some(text) = super::extract_text_content(json.get("content")) else {
+                continue;
+            };
+            if model.is_none() {
+                model = json
+                    .get("providerData")
+                    .and_then(|data| data.get("model"))
+                    .and_then(|model| model.as_str())
+                    .filter(|model| !model.is_empty())
+                    .map(str::to_owned);
+            }
+            match role {
+                "user" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: true,
+                        text,
+                    },
+                )),
+                "assistant" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: false,
+                        text,
+                    },
+                )),
+                _ => {}
+            }
+        }
+        let start = turns.len().saturating_sub(3);
+        (
+            model,
+            turns.split_off(start).into_iter().map(|(_, t)| t).collect(),
+        )
+    }
+
+    /// Factory keeps the model beside the transcript rather than in it:
+    /// `x.jsonl` has a sibling `x.settings.json` holding `{"model": …}`.
+    pub fn factory_model_from_settings(settings_json: &str) -> Option<String> {
+        serde_json::from_str::<serde_json::Value>(settings_json)
+            .ok()?
+            .get("model")
+            .and_then(|model| model.as_str())
+            .filter(|model| !model.is_empty())
+            .map(str::to_owned)
+    }
+}
+
+#[cfg(test)]
+mod cline_tests {
+    use super::cline;
+
+    fn history(entries: &str) -> String {
+        format!("[{entries}]")
+    }
+
+    #[test]
+    fn the_newest_task_is_chosen_by_timestamp_not_by_position() {
+        // Cline rewrites the list in whatever order the extension last saved, so
+        // the newest row is not reliably last.
+        let json = history(
+            r#"{"id":"new","ts":2000,"cwdOnTaskInitialization":"/a"},
+               {"id":"old","ts":1000,"cwdOnTaskInitialization":"/b"}"#,
+        );
+        let task = cline::latest_task(&json).expect("a task");
+        assert_eq!(task.id, "new");
+        assert_eq!(task.cwd.as_deref(), Some("/a"));
+    }
+
+    #[test]
+    fn a_row_without_an_id_is_not_a_task() {
+        let json = history(r#"{"ts":1,"cwdOnTaskInitialization":"/a"}"#);
+        assert_eq!(cline::latest_task(&json), None);
+        assert_eq!(cline::latest_task("not json"), None);
+        assert_eq!(cline::latest_task("{}"), None);
+    }
+
+    #[test]
+    fn an_empty_cwd_or_model_is_absent_rather_than_empty() {
+        let json = history(r#"{"id":"t","cwdOnTaskInitialization":"","modelId":""}"#);
+        let task = cline::latest_task(&json).expect("a task");
+        assert_eq!(task.cwd, None);
+        assert_eq!(task.model, None);
+    }
+
+    #[test]
+    fn the_last_three_turns_keep_their_order() {
+        let conversation = r#"[
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"two"},
+            {"role":"user","content":"three"},
+            {"role":"assistant","content":"four"},
+            {"role":"user","content":"five"}
+        ]"#;
+        let messages = cline::recent_messages(conversation);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "three");
+        assert_eq!(messages[1].text, "four");
+        assert_eq!(messages[2].text, "five");
+        assert!(messages[2].is_user);
+    }
+
+    #[test]
+    fn a_role_that_is_neither_user_nor_assistant_is_skipped() {
+        let conversation = r#"[
+            {"role":"system","content":"ignore me"},
+            {"role":"user","content":"hello"}
+        ]"#;
+        let messages = cline::recent_messages(conversation);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "hello");
+        assert!(cline::recent_messages("not json").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod flat_store_tests {
+    use super::flat_store;
+
+    #[test]
+    fn codebuddy_keeps_the_model_from_its_first_message() {
+        let tail = concat!(
+            r#"{"type":"message","role":"user","content":"add a test","providerData":{"model":"claude-sonnet"}}"#,
+            "\n",
+            r#"{"type":"message","role":"assistant","content":"added","providerData":{"model":"other"}}"#
+        );
+        let (model, messages) = flat_store::codebuddy_recent(tail);
+        assert_eq!(model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].is_user);
+    }
+
+    #[test]
+    fn codebuddy_rows_that_are_not_messages_are_skipped() {
+        let tail = concat!(
+            r#"{"type":"summary","role":"user","content":"no"}"#,
+            "\n",
+            r#"{"type":"message","role":"user","content":"yes"}"#
+        );
+        let (model, messages) = flat_store::codebuddy_recent(tail);
+        assert_eq!(model, None);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "yes");
+    }
+
+    #[test]
+    fn factory_keeps_its_model_beside_the_transcript() {
+        assert_eq!(
+            flat_store::factory_model_from_settings(r#"{"model":"gpt-5.1-codex"}"#).as_deref(),
+            Some("gpt-5.1-codex")
+        );
+        assert_eq!(
+            flat_store::factory_model_from_settings(r#"{"model":""}"#),
+            None
+        );
+        assert_eq!(flat_store::factory_model_from_settings("not json"), None);
+        assert_eq!(flat_store::factory_model_from_settings("{}"), None);
     }
 }
 
