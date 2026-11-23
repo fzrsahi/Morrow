@@ -18,6 +18,8 @@
 //! the CLI and a user with one running session gets a handful of phantom cards
 //! that never die.
 
+use std::collections::{HashMap, HashSet};
+
 /// One process, as a platform's table reports it.
 ///
 /// `arguments` and `cwd` are optional because not every platform can answer them
@@ -137,6 +139,65 @@ pub fn is_session_process(source: &str, info: &ProcessInfo) -> bool {
     }
 }
 
+/// Sources this port recognises. Everything else answers `false` in
+/// `is_session_process`, so a request for one can never have a candidate.
+const SUPPORTED_SOURCES: &[&str] = &[
+    "claude",
+    "codex",
+    "gemini",
+    "opencode",
+    "grok",
+    "kimi",
+    "qwen",
+    "cursor-agent",
+    "cursor-cli",
+];
+
+fn by_start_then_pid(a: &&ProcessInfo, b: &&ProcessInfo) -> std::cmp::Ordering {
+    a.start_time_ms
+        .unwrap_or(u64::MAX)
+        .cmp(&b.start_time_ms.unwrap_or(u64::MAX))
+        .then_with(|| a.pid.cmp(&b.pid))
+}
+
+/// Walk `table` once and group session processes by `(source, cwd)`, oldest first.
+///
+/// `wanted` keeps the work to the keys the caller actually needs: a process no
+/// session asks about is never probed. `alive` is probed at most once per process
+/// even when one executable is a session of two sources (`cursor-agent` and
+/// `cursor-cli` share one), so a dead process is never a candidate for either.
+fn index_sessions<'a>(
+    table: &'a [ProcessInfo],
+    wanted: &HashSet<(&str, &str)>,
+    alive: &impl Fn(i32) -> bool,
+) -> HashMap<(String, String), Vec<&'a ProcessInfo>> {
+    let mut index: HashMap<(String, String), Vec<&'a ProcessInfo>> = HashMap::new();
+    for info in table {
+        let Some(cwd) = info.cwd.as_deref() else {
+            continue;
+        };
+        let mut probed: Option<bool> = None;
+        for source in SUPPORTED_SOURCES {
+            if !wanted.contains(&(*source, cwd)) || !is_session_process(source, info) {
+                continue;
+            }
+            if *probed.get_or_insert_with(|| alive(info.pid)) {
+                index
+                    .entry(((*source).to_owned(), cwd.to_owned()))
+                    .or_default()
+                    .push(info);
+            } else {
+                // Dead for every source: stop probing this process entirely.
+                break;
+            }
+        }
+    }
+    for bucket in index.values_mut() {
+        bucket.sort_by(by_start_then_pid);
+    }
+    index
+}
+
 /// Every live process of `source` whose working directory is `cwd`, oldest first.
 ///
 /// `alive` is injected: a table read a moment ago can name a process that has
@@ -149,19 +210,11 @@ pub fn pids_for_cwd<'a>(
     cwd: &str,
     alive: impl Fn(i32) -> bool,
 ) -> Vec<&'a ProcessInfo> {
-    let mut found: Vec<&ProcessInfo> = table
-        .iter()
-        .filter(|info| info.cwd.as_deref() == Some(cwd))
-        .filter(|info| is_session_process(source, info))
-        .filter(|info| alive(info.pid))
-        .collect();
-    found.sort_by(|a, b| {
-        a.start_time_ms
-            .unwrap_or(u64::MAX)
-            .cmp(&b.start_time_ms.unwrap_or(u64::MAX))
-            .then_with(|| a.pid.cmp(&b.pid))
-    });
-    found
+    let wanted = HashSet::from([(source, cwd)]);
+    let mut index = index_sessions(table, &wanted, &alive);
+    index
+        .remove(&(source.to_owned(), cwd.to_owned()))
+        .unwrap_or_default()
 }
 
 /// One session that needs a pid.
@@ -202,24 +255,33 @@ pub const START_SLACK_MS: u64 = 10_000;
 pub fn assign(
     table: &[ProcessInfo],
     requests: &[PidRequest],
-    claimed: &mut std::collections::HashSet<i32>,
+    claimed: &mut HashSet<i32>,
     alive: impl Fn(i32) -> bool,
 ) -> Vec<Assignment> {
+    let wanted: HashSet<(&str, &str)> = requests
+        .iter()
+        .map(|request| (request.source.as_str(), request.cwd.as_str()))
+        .collect();
+    // The table is walked once for the whole tick. Requests only read this index:
+    // adding sessions adds bucket lookups, never another table traversal.
+    let index = index_sessions(table, &wanted, &alive);
+
     let mut assignments: Vec<Assignment> = Vec::new();
-    // One table, reused: the candidates per (source, cwd) are computed on demand
-    // but never by walking the table a second time per request.
     for request in requests {
-        let candidates: Vec<&ProcessInfo> =
-            pids_for_cwd(table, &request.source, &request.cwd, &alive)
-                .into_iter()
-                .filter(|info| !claimed.contains(&info.pid))
-                .filter(|info| match (request.modified_at_ms, info.start_time_ms) {
-                    (Some(modified), Some(started)) => started <= modified + START_SLACK_MS,
-                    // A process whose start time is unknown is still a candidate:
-                    // silence is not evidence against it.
-                    _ => true,
-                })
-                .collect();
+        let Some(bucket) = index.get(&(request.source.clone(), request.cwd.clone())) else {
+            continue;
+        };
+        let candidates: Vec<&ProcessInfo> = bucket
+            .iter()
+            .copied()
+            .filter(|info| !claimed.contains(&info.pid))
+            .filter(|info| match (request.modified_at_ms, info.start_time_ms) {
+                (Some(modified), Some(started)) => started <= modified + START_SLACK_MS,
+                // A process whose start time is unknown is still a candidate:
+                // silence is not evidence against it.
+                _ => true,
+            })
+            .collect();
         // The process that best explains the store: the latest one that started
         // **at or before** the store was last written. A process that started
         // after that write did not make it — with two sessions in one directory
@@ -254,7 +316,6 @@ pub fn assign(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     fn process(
         pid: i32,
@@ -471,11 +532,12 @@ mod tests {
         assert_eq!(assign(&table, &requests, &mut claimed, |_| true).len(), 1);
     }
 
-    /// "Measured, not assumed": one pass over the table per assignment, not one
-    /// per session. The counter is the measurement — a timing test would be a
-    /// flake, and the cost being guarded is the *number* of walks.
+    /// "Measured, not assumed": the table is walked once per `assign`, not once
+    /// per session. Fifty requests over the same 500 processes must probe the same
+    /// number of processes as one request. The probe count is the measurement —
+    /// a timing test would be a flake.
     #[test]
-    fn the_table_is_walked_once_per_session_not_once_per_process() {
+    fn fifty_sessions_cost_one_table_walk_not_fifty() {
         use std::cell::Cell;
 
         let table: Vec<ProcessInfo> = (0..500)
@@ -489,22 +551,59 @@ mod tests {
                 )
             })
             .collect();
-        let requests = vec![PidRequest {
-            session_id: "a".into(),
-            source: "claude".into(),
-            cwd: "/a".into(),
-            modified_at_ms: Some(10_000),
-        }];
+        let run = |count: usize| {
+            let requests: Vec<PidRequest> = (0..count)
+                .map(|index| PidRequest {
+                    session_id: format!("s{index}"),
+                    source: "claude".into(),
+                    cwd: "/a".into(),
+                    modified_at_ms: Some(10_000),
+                })
+                .collect();
 
-        let alive_calls = Cell::new(0usize);
-        let assignments = assign(&table, &requests, &mut HashSet::new(), |_| {
-            alive_calls.set(alive_calls.get() + 1);
-            true
-        });
+            let alive_calls = Cell::new(0usize);
+            let assignments = assign(&table, &requests, &mut HashSet::new(), |_| {
+                alive_calls.set(alive_calls.get() + 1);
+                true
+            });
+            (assignments.len(), alive_calls.get())
+        };
 
-        assert_eq!(assignments.len(), 1);
-        // The liveness probe ran for the 250 entries in `/a`, once each, and not
-        // for `/b` — a per-process-per-session walk would be 500 × sessions.
-        assert_eq!(alive_calls.get(), 250);
+        // Only the 250 processes in `/a` are probed, each exactly once. One
+        // session and fifty sessions cost the same: a per-session walk would
+        // probe 250 × 50 = 12_500 times in the second case.
+        assert_eq!(run(1), (1, 250));
+        assert_eq!(run(50), (50, 250));
+    }
+
+    /// Keeps `SUPPORTED_SOURCES` and the `is_session_process` match from drifting:
+    /// a source listed but never matched would silently lose its sessions.
+    #[test]
+    fn every_recognised_source_has_a_candidate() {
+        for source in SUPPORTED_SOURCES {
+            let executable = if *source == "cursor-cli" {
+                "cursor-agent"
+            } else {
+                source
+            };
+            let table = vec![process(
+                1,
+                &format!("/usr/bin/{executable}"),
+                &[source],
+                Some("/w"),
+                1_000,
+            )];
+            let requests = vec![PidRequest {
+                session_id: "s".into(),
+                source: (*source).to_owned(),
+                cwd: "/w".into(),
+                modified_at_ms: None,
+            }];
+            assert_eq!(
+                assign(&table, &requests, &mut HashSet::new(), |_| true).len(),
+                1,
+                "{source} is listed as supported but has no candidate"
+            );
+        }
     }
 }
