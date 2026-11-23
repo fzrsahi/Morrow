@@ -290,6 +290,27 @@ mod tests {
         items.iter().map(|item| (*item).to_owned()).collect()
     }
 
+    /// #330: Copilot and Kiro are matched on the source/executable pair, not
+    /// on either side alone. A wrong pair must not light up a session card.
+    #[test]
+    fn copilot_and_kiro_need_the_matching_executable() {
+        for (source, executable, expected) in [
+            ("copilot", "/usr/bin/copilot", true),
+            ("copilot", "/usr/bin/kiro-cli", false),
+            ("kiro", "/usr/bin/kiro-cli", true),
+            ("kiro", "/usr/local/bin/kiro", true),
+            ("kiro", "/usr/bin/copilot", false),
+            ("codex", "/usr/bin/kiro-cli", false),
+        ] {
+            let info = process(10, executable, &[], Some("/w"), 1_000);
+            assert_eq!(
+                is_session_process(source, &info),
+                expected,
+                "{source} + {executable}"
+            );
+        }
+    }
+
     /// The four roles the multicall binary takes. Counting any of the three
     /// non-session ones as a session is a phantom card that never dies.
     #[test]
