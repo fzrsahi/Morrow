@@ -121,10 +121,42 @@ export type Completion = {
   blocks: MarkdownBlock[];
 };
 
+/** #308 — the five states the shell can report for plan limits. */
+export type QuotaStatus =
+  | 'unavailable'
+  | 'not_connected'
+  | 'unauthorized'
+  | 'rate_limited'
+  | 'ok';
+
+export type QuotaKind = 'session' | 'weekly_all' | 'weekly_scoped';
+export type QuotaLevel = 'normal' | 'warning' | 'critical';
+export type QuotaPaceTone = 'neutral' | 'ahead' | 'behind';
+
+/** One window. `percent` is the server's number, never a placeholder. */
+export type QuotaLimit = {
+  kind: QuotaKind;
+  percent: number;
+  level: QuotaLevel;
+  /** Null when the window is too young to have a pace reading. */
+  pace_tone: QuotaPaceTone | null;
+  /** Seconds since 1970. */
+  resets_at: number | null;
+  label: string;
+};
+
+/** `limits` is null unless `status` is ok — a missing reading is not 0%. */
+export type QuotaSnapshot = {
+  status: QuotaStatus;
+  reason: string;
+  limits: QuotaLimit[] | null;
+};
+
 export type Snapshot = {
   sessions: Session[];
   permissions: Card[];
   completion: Completion | null;
+  quota?: QuotaSnapshot | null;
 };
 export type Decision = 'allow' | 'deny';
 

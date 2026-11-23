@@ -8,12 +8,15 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
+  import QuotaPage from './lib/components/QuotaPage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
   import {
     DEFAULT_APPEARANCE,
     SETTINGS_NAV,
     appearanceFromSettings,
+    parseQuotaMode,
     type AppearanceSettings,
+    type QuotaMode,
     type SettingsPageId,
   } from './lib/settings';
   import { cssVariables } from './lib/tokens';
@@ -39,6 +42,7 @@
   let capabilities = $state<CapabilityRow[]>([]);
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
+  let quotaMode = $state<QuotaMode>('auto');
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -50,15 +54,17 @@
 
   async function load() {
     try {
-      const [h, c, a, stored] = await Promise.all([
+      const [h, c, a, stored, mode] = await Promise.all([
         invoke<HooksSnapshot>('hooks_status'),
         invoke<CapabilityRow[]>('capabilities'),
         invoke<AutostartStatus>('autostart_status'),
         invoke<unknown>('settings_load'),
+        invoke<unknown>('quota_settings_load'),
       ]);
       hooks = h;
       capabilities = c;
       autostart = a;
+      quotaMode = parseQuotaMode(mode);
       appearance = appearanceFromSettings(stored);
       applyAppearance();
       error = null;
@@ -84,6 +90,11 @@
     appearance = next;
     applyAppearance();
     void run(() => invoke('settings_set', { key, value }), false);
+  }
+
+  function saveQuotaMode(mode: QuotaMode) {
+    quotaMode = mode;
+    void run(() => invoke('quota_settings_set', { mode }), false);
   }
 
   onMount(() => {
@@ -140,6 +151,8 @@
         />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} />
+      {:else if page === 'quota'}
+        <QuotaPage mode={quotaMode} onChange={saveQuotaMode} />
       {:else if page === 'about'}
         <AboutPage />
       {/if}

@@ -21,6 +21,7 @@
   import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
+  import QuotaCard from './lib/components/QuotaCard.svelte';
   import QuestionCard from './lib/components/QuestionCard.svelte';
   import VolumeHud from './lib/components/VolumeHud.svelte';
   import {
@@ -87,7 +88,15 @@
   } from './lib/music';
   import { MOTION, PALETTE, cssVariables, type Theme } from './lib/tokens';
   import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
-  import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
+  import type {
+    CapabilityRow,
+    Card,
+    Completion,
+    Decision,
+    QuotaSnapshot,
+    Session,
+    Snapshot,
+  } from './lib/types';
 
   // The display mode mirrors Swift's IslandDisplayMode: `.dynamicIsland` is
   // canvas B (floating pill, default — no hardware notch on Windows/Linux),
@@ -129,6 +138,8 @@
   // attention policy) whether it is a card, a glance or nothing at all.
   let completion = $state<Completion | null>(null);
   let seenCompletion = $state<string | null>(null);
+  // #308: the shell decides the status; this view only holds its answer.
+  let quota = $state<QuotaSnapshot | null>(null);
   let expanded = $state(false);
   let closing = $state(false);
   let prehover = $state(false);
@@ -729,6 +740,16 @@
     };
   });
 
+  // #308: one shell read. No local timer — the shell owns the scheduler and
+  // the throttle, and the view never guesses a number when the read fails.
+  async function readQuota() {
+    try {
+      quota = await invoke<QuotaSnapshot | null>('quota_snapshot');
+    } catch {
+      quota = null;
+    }
+  }
+
   async function loadCapabilities() {
     try {
       // #199: the table itself lives in the Settings window; the island only
@@ -795,6 +816,8 @@
   function acceptSnapshot(snapshot: Snapshot) {
     sessions = snapshot.sessions;
     cards = snapshot.permissions;
+    // The feed may carry a quota answer; until it does, onMount's read owns it.
+    if (snapshot.quota !== undefined) quota = snapshot.quota;
     // #189: a field whose card was answered or dropped elsewhere must not
     // leave the island holding keys meant for the app underneath.
     if (questionFocus.ownerId !== null && !cards.some((c) => c.id === questionFocus.ownerId)) {
@@ -889,6 +912,7 @@
       .then((off) => (unlisten = off))
       .catch(() => {});
     loadCapabilities();
+    void readQuota();
     // One seed read so the collapsed wing can show a track; the tab effect
     // owns every read after this, so a closed tab never polls.
     void readTrack();
@@ -1061,6 +1085,9 @@
             onDelete={deleteSession}
             onOpenSettings={openSettings}
           />
+        {/if}
+        {#if quota}
+          <QuotaCard {quota} />
         {/if}
       </div>
     {:else}

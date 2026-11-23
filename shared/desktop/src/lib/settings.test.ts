@@ -3,6 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import {
   appearanceFromSettings,
   describeCapability,
+  parseQuotaMode,
+  quotaModeFromSettings,
   sessionDensityFromSettings,
   sessionFilterFromSettings,
   SETTINGS_KEYS,
@@ -132,6 +134,15 @@ describe('appearance settings', () => {
     expect(sessionDensityFromSettings({ sessionDensity: 42 })).toBe('compact');
   });
 
+  test('the quota chip mode uses Swift raw values and defaults to auto', () => {
+    expect(SETTINGS_KEYS.quotaChip).toBe('claudeQuotaChip');
+    expect(quotaModeFromSettings(null)).toBe('auto');
+    expect(quotaModeFromSettings({ claudeQuotaChip: 'weeklyAll' })).toBe('weeklyAll');
+    expect(quotaModeFromSettings({ claudeQuotaChip: 'bogus' })).toBe('auto');
+    expect(parseQuotaMode('weeklyScoped')).toBe('weeklyScoped');
+    expect(parseQuotaMode(42)).toBe('auto');
+  });
+
   test('the port-only pages are reachable from the sidebar', () => {
     expect(SETTINGS_NAV.flatMap((group) => group.items.map((item) => item.id))).toEqual([
       'general',
@@ -141,12 +152,13 @@ describe('appearance settings', () => {
       'shortcuts',
       'agents',
       'music',
+      'quota',
       'behavior',
       'hooks',
       'capabilities',
       'about',
     ]);
-    for (const id of ['hooks', 'capabilities', 'appearance', 'about']) {
+    for (const id of ['hooks', 'capabilities', 'appearance', 'quota', 'about']) {
       expect(SETTINGS_NAV.flatMap((group) => group.items).find((item) => item.id === id)?.available).toBe(
         true,
       );
