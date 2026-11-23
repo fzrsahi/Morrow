@@ -57,6 +57,11 @@ pub struct Feed {
     /// condvar so a single hook cannot wake only the wrong waiter.
     prune_changed: Condvar,
     sound: Option<SoundOutlet>,
+    /// What the last scan read, kept **across** ticks: a cache built inside one
+    /// scan would read everything and forget it (#284). On the `Feed` rather than
+    /// in `State` because a scan runs outside the state lock and this is
+    /// internally synchronised on its own.
+    scan_cache: morrow_core::scan_policy::TextCache,
 }
 
 impl Default for Feed {
@@ -66,6 +71,9 @@ impl Default for Feed {
             changed: Condvar::new(),
             prune_changed: Condvar::new(),
             sound: None,
+            scan_cache: morrow_core::scan_policy::TextCache::new(
+                morrow_core::scan_policy::SCAN_CACHE_CAPACITY,
+            ),
         }
     }
 }
@@ -425,7 +433,7 @@ impl Feed {
             std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
         )
         .unwrap_or_else(|| home.join(".claude"));
-        crate::discovery::scan_once(&config_dir, home)
+        crate::discovery::scan_once(&config_dir, home, &self.scan_cache)
     }
 
     /// One discovery scan, integrated as ordinary sessions.

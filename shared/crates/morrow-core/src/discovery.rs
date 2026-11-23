@@ -2890,7 +2890,7 @@ pub mod scan {
         /// Every session this root holds. A root the reader does not understand
         /// answers an empty list, not an error: one unknown store must not lose
         /// the others.
-        fn read(&self, root: &str) -> Vec<DiscoveryHit>;
+        fn read(&self, root: &str, cache: &crate::scan_policy::TextCache) -> Vec<DiscoveryHit>;
     }
 
     /// A decoder that needs a **process** before it can find anything (#276).
@@ -2907,7 +2907,11 @@ pub mod scan {
 
         /// The sessions this process is running. A process whose store is not
         /// there, or is stale, answers nothing.
-        fn read_process(&self, process: &crate::agent_process::ProcessInfo) -> Vec<DiscoveryHit>;
+        fn read_process(
+            &self,
+            process: &crate::agent_process::ProcessInfo,
+            cache: &crate::scan_policy::TextCache,
+        ) -> Vec<DiscoveryHit>;
     }
 
     /// What one scan produced.
@@ -2950,10 +2954,11 @@ pub mod scan {
     /// thinner projection must not replace a fuller one.
     pub fn run(
         readers: &[&dyn StoreReader],
+        cache: &crate::scan_policy::TextCache,
         budget_ms: u64,
         now_ms: impl Fn() -> u64,
     ) -> ScanResult {
-        run_all(readers, &[], &[], budget_ms, now_ms)
+        run_all(readers, &[], &[], cache, budget_ms, now_ms)
     }
 
     /// Every reader this port has: the store-first ones over their own roots, then
@@ -2967,6 +2972,7 @@ pub mod scan {
         readers: &[&dyn StoreReader],
         process_readers: &[&dyn ProcessReader],
         table: &[crate::agent_process::ProcessInfo],
+        cache: &crate::scan_policy::TextCache,
         budget_ms: u64,
         now_ms: impl Fn() -> u64,
     ) -> ScanResult {
@@ -2989,7 +2995,7 @@ pub mod scan {
                     result.unfinished.push((reader.source(), root.clone()));
                     continue;
                 }
-                for hit in reader.read(&root) {
+                for hit in reader.read(&root, cache) {
                     if claimed.insert(hit.session_id.clone()) {
                         result.hits.push(hit);
                     }
@@ -3016,7 +3022,7 @@ pub mod scan {
                 {
                     continue;
                 }
-                for hit in reader.read_process(process) {
+                for hit in reader.read_process(process, cache) {
                     if claimed.insert(hit.session_id.clone()) {
                         result.hits.push(hit);
                     }
@@ -3084,7 +3090,7 @@ mod scan_tests {
             })
         }
 
-        fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+        fn read(&self, root: &str, _cache: &crate::scan_policy::TextCache) -> Vec<DiscoveryHit> {
             self.calls.borrow_mut().push(root.to_owned());
             self.table
                 .iter()
@@ -3117,7 +3123,12 @@ mod scan_tests {
         let store = Fake::new("codex", vec![(r"/data", vec![hit("c", "codex", "/w")])]);
 
         let readers: Vec<&dyn StoreReader> = vec![&claude, &store];
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
 
         assert_eq!(ids(&result), vec!["a", "b", "c"]);
         assert_eq!(*claude.calls.borrow(), vec![r"/r1", r"/r2"]);
@@ -3138,7 +3149,12 @@ mod scan_tests {
         let index = Fake::new("codex", vec![(r"/r", vec![hit("same", "codex", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&authoritative, &index];
 
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
 
         assert_eq!(ids(&result), vec!["same"]);
         assert_eq!(result.hits[0].source, "claude");
@@ -3152,7 +3168,12 @@ mod scan_tests {
         let second = Fake::new("claude", vec![(r"/r", vec![hit("same", "claude", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&first, &second];
 
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
         assert_eq!(result.hits[0].source, "codex");
     }
 
@@ -3167,11 +3188,16 @@ mod scan_tests {
         let second = Fake::new("codex", vec![(r"/r2", vec![hit("b", "codex", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&first, &second];
 
-        let result = scan::run(&readers, 100, || {
-            let call = clock.get();
-            clock.set(call + 1);
-            if call < 2 { 0 } else { 10_000 }
-        });
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            100,
+            || {
+                let call = clock.get();
+                clock.set(call + 1);
+                if call < 2 { 0 } else { 10_000 }
+            },
+        );
 
         assert_eq!(ids(&result), vec!["a"]);
         // Readers are walked reader-major, so the second reader's one root is
@@ -3199,11 +3225,16 @@ mod scan_tests {
         );
         let readers: Vec<&dyn StoreReader> = vec![&slow];
 
-        let result = scan::run(&readers, 50, || {
-            let now = clock.get();
-            clock.set(now + 40);
-            now
-        });
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            50,
+            || {
+                let now = clock.get();
+                clock.set(now + 40);
+                now
+            },
+        );
 
         assert_eq!(ids(&result), vec!["a", "b"]);
         assert!(result.unfinished.is_empty());
@@ -3213,7 +3244,12 @@ mod scan_tests {
     fn a_reader_that_answers_nothing_is_not_an_error() {
         let empty = Fake::new("claude", vec![]);
         let readers: Vec<&dyn StoreReader> = vec![&empty];
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
         assert!(result.hits.is_empty());
         assert!(result.unfinished.is_empty());
     }
@@ -3223,7 +3259,12 @@ mod scan_tests {
         // A reader that looks nowhere reads nothing.
         let idle = Fake::looking_at("claude", &[]);
         let readers: Vec<&dyn StoreReader> = vec![&idle];
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
         assert!(result.hits.is_empty());
         assert!(idle.calls.borrow().is_empty());
     }

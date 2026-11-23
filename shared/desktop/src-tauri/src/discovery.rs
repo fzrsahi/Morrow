@@ -17,6 +17,7 @@ use morrow_core::agent_process::ProcessInfo;
 use morrow_core::discovery::scan::{self, ProcessReader, ScanResult, StoreReader};
 use morrow_core::discovery::{DiscoveryHit, read_transcript_tail, transcript_files};
 use morrow_core::reduce::ChatMessage;
+use morrow_core::scan_policy::TextCache;
 
 /// How much of a transcript the backfill reads. The same slice the live tailer
 /// reads on attach, so backfill costs one read of bytes that are already going to
@@ -32,7 +33,16 @@ pub struct ClaudeTranscripts {
     /// Claude Code's config directory, resolved by the installer's own ladder
     /// (#258) so discovery reads the folder the hooks were written into.
     pub config_dir: String,
+    pub now_ms: u64,
 }
+
+/// How old a transcript may be and still count as a session (#284).
+///
+/// A live session writes as it works, so a file left alone for a day belongs to a
+/// session that ended. The gate exists before the read rather than after, because a
+/// year of Claude Code is thousands of transcripts and reading them all took 1.5
+/// seconds — four times a second was never the problem, one scan was.
+pub const CLAUDE_FRESHNESS_MS: u64 = 24 * 60 * 60 * 1000;
 
 impl ClaudeTranscripts {
     fn config_dir(&self) -> &Path {
@@ -51,7 +61,7 @@ impl StoreReader for ClaudeTranscripts {
         claude_roots(self.config_dir())
     }
 
-    fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, root: &str, cache: &TextCache) -> Vec<DiscoveryHit> {
         let projects = Path::new(root).join("projects");
         let Ok(entries) = std::fs::read_dir(&projects) else {
             return Vec::new();
@@ -65,7 +75,14 @@ impl StoreReader for ClaudeTranscripts {
                 continue;
             };
             for file in files {
-                let Some(tail) = read_tail(Path::new(&file.path)) else {
+                // The freshness gate comes **before** the read, not after: a
+                // transcript nobody has written to in a day is history, and reading
+                // every one of them is what made a scan over a year of use take
+                // 1.5 seconds (#284).
+                if self.now_ms.saturating_sub(file.modified_ms) > CLAUDE_FRESHNESS_MS {
+                    continue;
+                }
+                let Some(tail) = read_tail(Path::new(&file.path), cache) else {
                     continue;
                 };
                 let Some(summary) = read_transcript_tail(&tail, &file.name) else {
@@ -90,23 +107,8 @@ impl StoreReader for ClaudeTranscripts {
 
 /// The last `TAIL_BYTES` of a file as text. A partial UTF-8 sequence at the cut
 /// is dropped rather than failing the whole read.
-fn read_tail(path: &Path) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
-    let start = size.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
-    if start > 0 {
-        // Skip to the first newline: the row at the cut is half a line, and the
-        // reader tolerates it, but dropping it keeps a cut multi-byte char from
-        // making the whole tail lossy.
-        if let Some(index) = bytes.iter().position(|byte| *byte == b'\n') {
-            bytes.drain(..=index);
-        }
-    }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+fn read_tail(path: &Path, cache: &TextCache) -> Option<std::sync::Arc<str>> {
+    cache.text(path, Some(TAIL_BYTES), true)
 }
 
 /// OpenCode's (and MiMo Code's) session database (#270).
@@ -151,7 +153,7 @@ impl StoreReader for OpenCodeStore {
         vec![self.data_dir.clone()]
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         let mut hits = Vec::new();
         for database in self.databases() {
             let Ok(connection) = morrow_core::sqlite::open_read_only(&database) else {
@@ -247,14 +249,14 @@ impl StoreReader for CodexRollouts {
             .collect()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, cache: &TextCache) -> Vec<DiscoveryHit> {
         let mut hits = Vec::new();
         for day in self.day_directories() {
             let Some(files) = transcript_files::list(&day.to_string_lossy()) else {
                 continue;
             };
             for file in files {
-                let Some(tail) = read_tail(Path::new(&file.path)) else {
+                let Some(tail) = read_tail(Path::new(&file.path), cache) else {
                     continue;
                 };
                 let Some(summary) =
@@ -323,7 +325,7 @@ impl StoreReader for ClineStore {
         vec![self.root.clone()]
     }
 
-    fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(history) = std::fs::read_to_string(Path::new(root).join("state/taskHistory.json"))
             .ok()
             .and_then(|json| morrow_core::discovery::cline::latest_task(&json))
@@ -407,8 +409,8 @@ impl FlatStore {
     }
 
     /// `(model, messages)` from this agent's flavour of a `.jsonl` transcript.
-    fn recent(&self, path: &Path) -> (Option<String>, Vec<ChatMessage>) {
-        let Some(tail) = read_tail(path) else {
+    fn recent(&self, path: &Path, cache: &TextCache) -> (Option<String>, Vec<ChatMessage>) {
+        let Some(tail) = read_tail(path, cache) else {
             return (None, Vec::new());
         };
         match self.source {
@@ -452,7 +454,7 @@ impl StoreReader for FlatStore {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -462,7 +464,7 @@ impl ProcessReader for FlatStore {
         self.source
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -488,7 +490,7 @@ impl ProcessReader for FlatStore {
         let Some(file) = best else {
             return Vec::new();
         };
-        let (model, recent_messages) = self.recent(Path::new(&file.path));
+        let (model, recent_messages) = self.recent(Path::new(&file.path), cache);
         vec![DiscoveryHit {
             session_id: file.name.trim_end_matches(".jsonl").to_owned(),
             source: self.source,
@@ -530,7 +532,7 @@ impl StoreReader for CopilotSessions {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -542,7 +544,12 @@ impl CopilotSessions {
 
     /// The newest event stream that names `cwd`, and started no earlier than the
     /// process did.
-    fn session_for(&self, cwd: &str, started_ms: Option<u64>) -> Option<(String, String, u64)> {
+    fn session_for(
+        &self,
+        cwd: &str,
+        started_ms: Option<u64>,
+        cache: &TextCache,
+    ) -> Option<(String, String, u64)> {
         // One directory per session, each holding its own `events.jsonl` — the
         // store is named by session, not by cwd.
         let base = self.base();
@@ -564,7 +571,7 @@ impl CopilotSessions {
                     continue;
                 }
             }
-            let Some(head) = read_head(Path::new(&path), 32_768) else {
+            let Some(head) = read_head(Path::new(&path), 32_768, cache) else {
                 continue;
             };
             if !morrow_core::discovery::copilot::matches_cwd(&head, cwd) {
@@ -588,21 +595,22 @@ impl ProcessReader for CopilotSessions {
         "copilot"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
         if is_subagent_worktree(cwd) {
             return Vec::new();
         }
-        let Some((session_id, path, modified_ms)) = self.session_for(cwd, process.start_time_ms)
+        let Some((session_id, path, modified_ms)) =
+            self.session_for(cwd, process.start_time_ms, cache)
         else {
             return Vec::new();
         };
         if self.now_ms.saturating_sub(modified_ms) > COPILOT_FRESHNESS_MS {
             return Vec::new();
         }
-        let (model, recent_messages) = read_tail(Path::new(&path))
+        let (model, recent_messages) = read_tail(Path::new(&path), cache)
             .map(|tail| morrow_core::discovery::copilot::recent_messages(&tail))
             .unwrap_or_default();
         vec![DiscoveryHit {
@@ -643,7 +651,7 @@ impl StoreReader for GrokSessions {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -664,7 +672,7 @@ impl ProcessReader for GrokSessions {
         "grok"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -742,7 +750,7 @@ impl ProcessReader for GrokSessions {
         let Some(chat_path) = Some(chat_path).filter(|path| !path.is_empty()) else {
             return Vec::new();
         };
-        let recent_messages = read_tail(Path::new(&chat_path))
+        let recent_messages = read_tail(Path::new(&chat_path), cache)
             .and_then(|tail| {
                 let name = Path::new(&chat_path)
                     .file_name()
@@ -789,14 +797,14 @@ impl StoreReader for KimiSessions {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
 
 impl KimiSessions {
     /// The indexed session for `cwd`, newest activity first.
-    fn indexed_session(&self, cwd: &str) -> Option<DiscoveryHit> {
+    fn indexed_session(&self, cwd: &str, cache: &TextCache) -> Option<DiscoveryHit> {
         let index =
             std::fs::read_to_string(Path::new(&self.home).join(".kimi-code/session_index.jsonl"))
                 .ok()?;
@@ -816,7 +824,7 @@ impl KimiSessions {
         }
         let (modified_ms, session_id, session_dir) = best?;
         let wire = Path::new(&session_dir).join("agents/main/wire.jsonl");
-        let recent_messages = read_tail(&wire)
+        let recent_messages = read_tail(&wire, cache)
             .map(|tail| morrow_core::discovery::kimi::recent_messages(&tail))
             .unwrap_or_default();
         Some(DiscoveryHit {
@@ -834,7 +842,7 @@ impl KimiSessions {
     }
 
     /// Legacy kimi-cli: `~/.kimi-code/sessions/<md5(cwd)>/<id>/wire.jsonl`.
-    fn hashed_session(&self, cwd: &str) -> Option<DiscoveryHit> {
+    fn hashed_session(&self, cwd: &str, cache: &TextCache) -> Option<DiscoveryHit> {
         let hash = morrow_core::discovery::kimi::workdir_hash(cwd);
         let mut best: Option<(u64, String, String)> = None;
         for base in [".kimi-code/sessions", ".kimi/sessions"] {
@@ -856,7 +864,7 @@ impl KimiSessions {
             }
         }
         let (modified_ms, session_id, wire) = best?;
-        let recent_messages = read_tail(Path::new(&wire))
+        let recent_messages = read_tail(Path::new(&wire), cache)
             .map(|tail| morrow_core::discovery::kimi::recent_messages(&tail))
             .unwrap_or_default();
         Some(DiscoveryHit {
@@ -878,7 +886,7 @@ impl ProcessReader for KimiSessions {
         "kimi"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -887,8 +895,8 @@ impl ProcessReader for KimiSessions {
         }
         // The index first; the hashed layout only when it has nothing.
         let hit = self
-            .indexed_session(cwd)
-            .or_else(|| self.hashed_session(cwd));
+            .indexed_session(cwd, cache)
+            .or_else(|| self.hashed_session(cwd, cache));
         let Some(mut hit) = hit else {
             return Vec::new();
         };
@@ -926,7 +934,7 @@ impl StoreReader for KiroSessions {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -942,7 +950,7 @@ impl ProcessReader for KiroSessions {
         "kiro"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -988,7 +996,7 @@ impl ProcessReader for KiroSessions {
                         }
                     }
                     let messages = child.path().join("messages.jsonl");
-                    let (model, recent_messages) = read_kiro_messages(&messages);
+                    let (model, recent_messages) = read_kiro_messages(&messages, cache);
                     let session_id = metadata
                         .session_id
                         .or_else(|| child.file_name().to_str().map(str::to_owned))
@@ -1039,7 +1047,7 @@ impl ProcessReader for KiroSessions {
                     continue;
                 }
                 let messages = path.with_extension("jsonl");
-                let (model, recent_messages) = read_kiro_messages(&messages);
+                let (model, recent_messages) = read_kiro_messages(&messages, cache);
                 let Some(session_id) = path
                     .file_stem()
                     .map(|stem| stem.to_string_lossy().into_owned())
@@ -1072,20 +1080,16 @@ impl ProcessReader for KiroSessions {
 }
 
 /// `(model, messages)` from a Kiro transcript, whichever layout wrote it.
-fn read_kiro_messages(path: &Path) -> (Option<String>, Vec<ChatMessage>) {
-    read_tail(path)
+fn read_kiro_messages(path: &Path, cache: &TextCache) -> (Option<String>, Vec<ChatMessage>) {
+    read_tail(path, cache)
         .map(|tail| morrow_core::discovery::kiro::recent_messages(&tail))
         .unwrap_or((None, Vec::new()))
 }
 
 /// The first `limit` bytes of a file, for a store that names the session rather
 /// than the cwd.
-fn read_head(path: &Path, limit: u64) -> Option<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut buffer = Vec::new();
-    file.by_ref().take(limit).read_to_end(&mut buffer).ok()?;
-    Some(String::from_utf8_lossy(&buffer).into_owned())
+fn read_head(path: &Path, limit: u64, cache: &TextCache) -> Option<std::sync::Arc<str>> {
+    cache.text(path, Some(limit), false)
 }
 
 /// A `.worktrees/` or `-worktree` checkout a subagent was given: it is not a
@@ -1123,7 +1127,7 @@ impl StoreReader for CursorTranscripts {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -1133,7 +1137,7 @@ impl ProcessReader for CursorTranscripts {
         "cursor"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -1150,7 +1154,7 @@ impl ProcessReader for CursorTranscripts {
         ) else {
             return Vec::new();
         };
-        let Some(tail) = read_tail(Path::new(&file.path)) else {
+        let Some(tail) = read_tail(Path::new(&file.path), cache) else {
             return Vec::new();
         };
         let messages = morrow_core::discovery::cursor::recent_messages(&tail);
@@ -1194,7 +1198,7 @@ impl StoreReader for GeminiChats {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -1231,7 +1235,7 @@ impl ProcessReader for GeminiChats {
         "gemini"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -1251,12 +1255,12 @@ impl ProcessReader for GeminiChats {
         ) else {
             return Vec::new();
         };
-        let Some(tail) = read_tail(Path::new(&file.path)) else {
+        let Some(tail) = read_tail(Path::new(&file.path), cache) else {
             return Vec::new();
         };
         // A Gemini session file is one JSON document, not JSONL: the whole file is
         // what the reader wants, and the tail may have cut it in half.
-        let whole = std::fs::read_to_string(&file.path).unwrap_or(tail);
+        let whole = std::fs::read_to_string(&file.path).unwrap_or_else(|_| tail.to_string());
         let session_id = morrow_core::discovery::gemini::session_id(&whole)
             .unwrap_or_else(|| file.name.trim_end_matches(".json").to_owned());
         let messages = morrow_core::discovery::gemini::recent_messages(&whole);
@@ -1336,9 +1340,14 @@ pub fn correlate_with(
 ///
 /// `home` is the user's, so each reader derives what it needs: Codex's root is
 /// `$CODEX_HOME` or `~/.codex`, OpenCode's database is under `~/.local/share`.
-pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
+pub fn scan_once(
+    config_dir: &Path,
+    home: &Path,
+    cache: &morrow_core::scan_policy::TextCache,
+) -> ScanResult {
     let transcripts = ClaudeTranscripts {
         config_dir: config_dir.to_string_lossy().into_owned(),
+        now_ms: now_ms(),
     };
     let opencode = OpenCodeStore {
         data_dir: home.join(".local/share").to_string_lossy().into_owned(),
@@ -1365,6 +1374,7 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
         &readers,
         home,
         &morrow_platform::agent_process::table(),
+        cache,
         now_ms(),
     )
 }
@@ -1375,6 +1385,7 @@ pub fn scan_with(
     readers: &[&dyn StoreReader],
     home: &Path,
     table: &[ProcessInfo],
+    cache: &TextCache,
     now_ms: u64,
 ) -> ScanResult {
     // Process-first readers: their store directory is derived from a process's
@@ -1426,6 +1437,7 @@ pub fn scan_with(
         readers,
         &process_readers,
         table,
+        cache,
         scan::DEFAULT_BUDGET_MS,
         || now_ms,
     )
@@ -1549,7 +1561,11 @@ mod tests {
             &transcript("/home/dev/project", "model-x"),
         );
 
-        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
+        let result = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1570,9 +1586,13 @@ mod tests {
     fn a_store_that_is_not_there_is_no_sessions() {
         let scratch = Scratch::new("missing");
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0)
-                .hits
-                .is_empty()
+            scan_once(
+                &scratch.0.join(".claude"),
+                &scratch.0,
+                &TextCache::default()
+            )
+            .hits
+            .is_empty()
         );
     }
 
@@ -1703,7 +1723,11 @@ mod tests {
                 .expect("a schema");
         }
 
-        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
+        let result = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1742,7 +1766,12 @@ mod tests {
                 .expect("a schema");
         }
 
-        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let mut hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         hits.sort_by(|a, b| a.session_id.cmp(&b.session_id));
 
         let ids: Vec<&str> = hits.iter().map(|hit| hit.session_id.as_str()).collect();
@@ -1757,9 +1786,13 @@ mod tests {
     fn a_missing_or_unreadable_database_is_not_an_error() {
         let scratch = Scratch::new("opencode-missing");
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0.join("nowhere"))
-                .hits
-                .is_empty()
+            scan_once(
+                &scratch.0.join(".claude"),
+                &scratch.0.join("nowhere"),
+                &TextCache::default()
+            )
+            .hits
+            .is_empty()
         );
 
         // A file where the database should be, holding junk.
@@ -1772,7 +1805,12 @@ mod tests {
             &transcript("/home/dev/p", "model-x"),
         );
 
-        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         assert_eq!(hits.len(), 1, "the transcripts still arrive");
         assert_eq!(hits[0].source, "claude");
     }
@@ -1790,7 +1828,11 @@ mod tests {
             &codex_rollout("thread-9", "/home/dev/project", "gpt-5-codex"),
         );
 
-        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
+        let result = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1817,11 +1859,15 @@ mod tests {
             );
         }
 
-        let mut ids: Vec<String> = scan_once(&scratch.0.join(".claude"), &scratch.0)
-            .hits
-            .into_iter()
-            .map(|hit| hit.session_id)
-            .collect();
+        let mut ids: Vec<String> = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits
+        .into_iter()
+        .map(|hit| hit.session_id)
+        .collect();
         ids.sort();
 
         // The oldest three fall outside the window.
@@ -1847,7 +1893,12 @@ mod tests {
             &transcript("/home/dev/p", "model-x"),
         );
 
-        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].source, "claude");
     }
@@ -1922,7 +1973,7 @@ mod tests {
         )];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         let now = now_ms();
-        let result = scan_with(&readers, &scratch.0, &table, now);
+        let result = scan_with(&readers, &scratch.0, &table, &TextCache::default(), now);
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1961,7 +2012,13 @@ mod tests {
         )];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         // Ten minutes later: past the five-minute freshness window.
-        let result = scan_with(&readers, &scratch.0, &table, now_ms() + 600_000);
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms() + 600_000,
+        );
         assert!(result.hits.is_empty());
     }
 
@@ -1987,7 +2044,13 @@ mod tests {
 
         let table = vec![process_with_cwd(555, "/usr/bin/gemini", "gemini", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -2016,7 +2079,13 @@ mod tests {
 
         let table = vec![process_with_cwd(7, "/usr/bin/gemini", "gemini", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].session_id, "gem-2");
     }
@@ -2035,9 +2104,15 @@ mod tests {
         }];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         assert!(
-            scan_with(&readers, &scratch.0, &table, now_ms())
-                .hits
-                .is_empty()
+            scan_with(
+                &readers,
+                &scratch.0,
+                &table,
+                &TextCache::default(),
+                now_ms()
+            )
+            .hits
+            .is_empty()
         );
     }
 
@@ -2069,7 +2144,7 @@ mod tests {
             now_ms: now,
         };
         let readers: Vec<&dyn StoreReader> = vec![&cline_store];
-        let result = scan_with(&readers, &scratch.0, &[], now);
+        let result = scan_with(&readers, &scratch.0, &[], &TextCache::default(), now);
         let cline: Vec<_> = result.hits.iter().filter(|h| h.source == "cline").collect();
         assert_eq!(cline.len(), 1);
         assert_eq!(cline[0].session_id, "task-1");
@@ -2108,7 +2183,7 @@ mod tests {
             now_ms: now,
         };
         let readers: Vec<&dyn StoreReader> = vec![&cline_store];
-        let result = scan_with(&readers, &scratch.0, &[], now);
+        let result = scan_with(&readers, &scratch.0, &[], &TextCache::default(), now);
         assert!(result.hits.iter().all(|h| h.source != "cline"));
     }
 
@@ -2135,7 +2210,13 @@ mod tests {
 
         let table = vec![process_with_cwd(88, "/usr/bin/codebuddy", "codebuddy", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result
             .hits
             .iter()
@@ -2170,7 +2251,13 @@ mod tests {
 
         let table = vec![process_with_cwd(33, "/usr/bin/droid", "droid", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "droid").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("gpt-5.1-codex"));
@@ -2208,7 +2295,13 @@ mod tests {
             "/home/dev/project",
         )];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result
             .hits
             .iter()
@@ -2242,10 +2335,16 @@ mod tests {
         )];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         assert!(
-            scan_with(&readers, &scratch.0, &table, now_ms())
-                .hits
-                .iter()
-                .all(|h| h.source != "copilot")
+            scan_with(
+                &readers,
+                &scratch.0,
+                &table,
+                &TextCache::default(),
+                now_ms()
+            )
+            .hits
+            .iter()
+            .all(|h| h.source != "copilot")
         );
     }
 
@@ -2284,7 +2383,7 @@ mod tests {
 
         let table = vec![process_with_cwd(81, "/usr/bin/grok", "grok", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now);
+        let result = scan_with(&readers, &scratch.0, &table, &TextCache::default(), now);
         let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "grok").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "0192f0aa-7cbb-7000-8000-000000000000");
@@ -2318,7 +2417,7 @@ mod tests {
         let table = vec![process_with_cwd(82, "/usr/bin/grok", "grok", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         assert!(
-            scan_with(&readers, &scratch.0, &table, now)
+            scan_with(&readers, &scratch.0, &table, &TextCache::default(), now)
                 .hits
                 .iter()
                 .all(|h| h.source != "grok")
@@ -2349,11 +2448,85 @@ mod tests {
         let table = vec![process_with_cwd(83, "/usr/bin/grok", "grok", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         assert!(
-            scan_with(&readers, &scratch.0, &table, now)
+            scan_with(&readers, &scratch.0, &table, &TextCache::default(), now)
                 .hits
                 .iter()
                 .all(|h| h.source != "grok")
         );
+    }
+
+    /// #284: a second scan reads nothing, and that is asserted as a **count**
+    /// rather than as a duration — "it was fast" is not a fact.
+    #[test]
+    fn a_second_scan_reads_no_transcript_twice() {
+        let scratch = Scratch::new("cache");
+        let directory = scratch.0.join(".claude/projects/-home-dev-project");
+        std::fs::create_dir_all(&directory).expect("a store");
+        write(
+            &directory.join("cache-session.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"One"}]},"cwd":"/home/dev/project"}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Two"}]},"cwd":"/home/dev/project"}"#
+            ),
+        );
+        let transcripts = ClaudeTranscripts {
+            config_dir: scratch.0.join(".claude").to_string_lossy().into_owned(),
+            now_ms: now_ms(),
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&transcripts];
+        // One cache across both scans, as the feed holds it.
+        let cache = TextCache::default();
+
+        let first = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert_eq!(first.hits.len(), 1, "the session is found at all");
+        assert_eq!(cache.reads(), 1, "the first scan reads the transcript");
+
+        let second = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert_eq!(
+            second.hits.len(),
+            1,
+            "an unchanged store still yields the hit"
+        );
+        assert_eq!(cache.reads(), 1, "and is not read a second time");
+
+        // A write with the same size in the same millisecond still counts: the
+        // fingerprint is nanoseconds, which is the bug #259 was written for.
+        write(
+            &directory.join("cache-session.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"One"}]},"cwd":"/home/dev/project"}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Two"}]},"cwd":"/home/dev/project"}"#,
+                "\n"
+            ),
+        );
+        let third = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert_eq!(third.hits.len(), 1);
+        assert_eq!(cache.reads(), 2, "a store that moved is read again");
+    }
+
+    /// #284: the freshness gate runs **before** the read, so a year of history is
+    /// never opened. Counted, not timed.
+    #[test]
+    fn a_transcript_nobody_touched_in_a_day_is_never_read() {
+        let scratch = Scratch::new("stale-transcript");
+        let directory = scratch.0.join(".claude/projects/-home-dev-project");
+        std::fs::create_dir_all(&directory).expect("a store");
+        write(
+            &directory.join("old-session.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hi"}]},"cwd":"/home/dev/project"}"#,
+        );
+        let transcripts = ClaudeTranscripts {
+            config_dir: scratch.0.join(".claude").to_string_lossy().into_owned(),
+            // Two days later, with the same store untouched.
+            now_ms: now_ms() + 2 * CLAUDE_FRESHNESS_MS,
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&transcripts];
+        let cache = TextCache::default();
+        let result = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert!(result.hits.is_empty(), "history is not a session");
+        assert_eq!(cache.reads(), 0, "and it was never even opened");
     }
 
     /// #282: kimi-code's index names the session directory, so no hash is needed.
@@ -2384,7 +2557,13 @@ mod tests {
 
         let table = vec![process_with_cwd(91, "/usr/bin/kimi", "kimi", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kimi").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "s1");
@@ -2415,7 +2594,13 @@ mod tests {
 
         let table = vec![process_with_cwd(92, "/usr/bin/kimi", "kimi", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kimi").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "legacy-1");
@@ -2447,7 +2632,13 @@ mod tests {
 
         let table = vec![process_with_cwd(101, "/usr/bin/kiro-cli", "kiro-cli", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "kiro-1");
@@ -2476,7 +2667,13 @@ mod tests {
 
         let table = vec![process_with_cwd(102, "/usr/bin/kiro-cli", "kiro-cli", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].session_id, "kiro-legacy");
@@ -2505,10 +2702,16 @@ mod tests {
         process.start_time_ms = Some(now_ms());
         let readers: Vec<&dyn StoreReader> = Vec::new();
         assert!(
-            scan_with(&readers, &scratch.0, &[process], now_ms())
-                .hits
-                .iter()
-                .all(|h| h.source != "kiro")
+            scan_with(
+                &readers,
+                &scratch.0,
+                &[process],
+                &TextCache::default(),
+                now_ms()
+            )
+            .hits
+            .iter()
+            .all(|h| h.source != "kiro")
         );
     }
 
@@ -2556,7 +2759,13 @@ mod tests {
 
         let table = vec![process_with_cwd(12, "/usr/bin/qoder", "qoder", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         assert!(result.hits.iter().all(|h| h.source != "qoder"));
     }
 
@@ -2581,9 +2790,13 @@ mod tests {
         write(&projects.join("notes.txt"), "hello\n");
 
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0)
-                .hits
-                .is_empty()
+            scan_once(
+                &scratch.0.join(".claude"),
+                &scratch.0,
+                &TextCache::default()
+            )
+            .hits
+            .is_empty()
         );
     }
 
@@ -2604,7 +2817,12 @@ mod tests {
             &transcript("/home/dev/project", "model-y"),
         );
 
-        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let mut hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         hits.sort_by_key(|hit| hit.modified_at);
         assert_eq!(
             hits.last().map(|hit| hit.session_id.as_str()),
@@ -2631,11 +2849,12 @@ mod tests {
         let roots = claude_roots(&scratch.0.join(".claude"));
         assert_eq!(roots.len(), 2, "roots: {roots:?}");
 
-        let mut ids: Vec<String> = scan_once(Path::new(&roots[0]), &scratch.0)
-            .hits
-            .into_iter()
-            .map(|hit| hit.session_id)
-            .collect();
+        let mut ids: Vec<String> =
+            scan_once(Path::new(&roots[0]), &scratch.0, &TextCache::default())
+                .hits
+                .into_iter()
+                .map(|hit| hit.session_id)
+                .collect();
         ids.sort();
         assert_eq!(ids, vec!["personal", "work"]);
     }
@@ -2659,9 +2878,93 @@ mod tests {
         }
         write(&path, &transcript("/home/dev/project", "model-x"));
 
-        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("model-x"));
         assert_eq!(hits[0].cwd, "/home/dev/project");
+    }
+}
+
+#[cfg(test)]
+mod cost_probe {
+    use super::*;
+    use std::io::Write;
+
+    /// Not an assertion: a measurement. Run with
+    /// `cargo test -p morrow-app cost_probe -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn a_scan_over_a_realistic_store_costs_what() {
+        let root = std::env::temp_dir().join(format!("morrow-cost-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("a home");
+        let home = &root;
+        // 200 projects, 20 transcripts each: a heavy but ordinary year of use.
+        for project in 0..200 {
+            let directory = home
+                .join(".claude/projects")
+                .join(format!("-home-dev-project-{project}"));
+            std::fs::create_dir_all(&directory).expect("a project");
+            for turn in 0..20 {
+                let path = directory.join(format!("session-{project}-{turn}.jsonl"));
+                let mut file = std::fs::File::create(&path).expect("a transcript");
+                for line in 0..40 {
+                    writeln!(
+                        file,
+                        r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"text","text":"line {line}"}}]}},"cwd":"/home/dev/project-{project}"}}"#
+                    )
+                    .expect("a line");
+                }
+                // Only the newest is fresh; the rest are history, as on a real
+                // machine where one project holds a year of sessions.
+                file.set_modified(
+                    std::time::SystemTime::now()
+                        - std::time::Duration::from_secs(if turn == 0 {
+                            0
+                        } else {
+                            172_800 * turn
+                        }),
+                )
+                .expect("a modification time");
+            }
+        }
+        let transcripts = ClaudeTranscripts {
+            config_dir: home.join(".claude").to_string_lossy().into_owned(),
+            now_ms: now_ms(),
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&transcripts];
+        let mut timings = Vec::new();
+        let mut hits = 0;
+        // One cache across the five scans, as the feed does: a cache rebuilt per
+        // scan reads everything and remembers nothing.
+        let cache = TextCache::default();
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let result = scan_with(&readers, home, &[], &cache, now_ms());
+            hits = result.hits.len();
+            timings.push(started.elapsed());
+        }
+        let projects = home.join(".claude/projects");
+        let started = std::time::Instant::now();
+        let mut files = 0;
+        for project in std::fs::read_dir(&projects).expect("projects").flatten() {
+            if let Some(list) = transcript_files::list(&project.path().to_string_lossy()) {
+                files += list.len();
+            }
+        }
+        println!("list-only: {:?} for {files} files", started.elapsed());
+        let started = std::time::Instant::now();
+        let direct = readers[0].read(&home.join(".claude").to_string_lossy(), &cache);
+        println!(
+            "read-only: {:?} for {} hits",
+            started.elapsed(),
+            direct.len()
+        );
+        println!("hits: {hits}, reads: {}", cache.reads());
+        println!("scan over 4000 transcripts: {timings:?}");
     }
 }

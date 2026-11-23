@@ -12,6 +12,13 @@ use std::collections::{HashMap, HashSet};
 /// Two scans closer together than this are one scan: the second waits.
 pub const MINIMUM_GAP_MS: u64 = 5_000;
 
+/// How many files one cache holds before it is cleared wholesale.
+///
+/// A cleared cache costs one extra read per file and nothing else, so the number
+/// only has to be larger than the stores a real machine has: a heavy year of Claude
+/// Code is a few thousand transcripts.
+pub const SCAN_CACHE_CAPACITY: usize = 4_096;
+
 /// Whether a changed path is news to discovery.
 ///
 /// A path the tailer is already following is not: the tailer sees every line as
@@ -181,6 +188,128 @@ pub fn fingerprint_of(path: &std::path::Path) -> Option<Fingerprint> {
         modified_nanos,
         size: metadata.len(),
     })
+}
+
+/// File text, kept across scans so an unchanged store is not read again (#284).
+///
+/// The cache lives **across ticks**, not inside one scan: a scan that built its own
+/// cache would read everything and forget it. It is `&self` with a lock inside
+/// because the readers are handed it by reference — several of them run in one
+/// scan, and none of them owns it.
+///
+/// Keyed by path, and the value is kept only while the fingerprint matches. A store
+/// rewritten with different content of the same size *and* the same nanosecond is
+/// the one case this cannot see, which is why the fingerprint is nanoseconds and
+/// not milliseconds (#259).
+#[derive(Default)]
+pub struct TextCache {
+    inner: std::sync::Mutex<TextCacheInner>,
+}
+
+#[derive(Default)]
+struct TextCacheInner {
+    fingerprints: ScanCache,
+    text: HashMap<String, std::sync::Arc<str>>,
+    /// How many times a file was actually opened. A test asserts on this rather
+    /// than on elapsed time: "no read happened" is a fact, "it was fast" is not.
+    reads: usize,
+}
+
+impl TextCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            inner: std::sync::Mutex::new(TextCacheInner {
+                fingerprints: ScanCache::with_capacity(capacity),
+                ..TextCacheInner::default()
+            }),
+        }
+    }
+
+    /// The file's whole text, or its last `limit` bytes when it is longer.
+    ///
+    /// `limit` of `None` means the whole file. The two limits a reader uses
+    /// (a tail and a head) are different questions about the same file, so the
+    /// head is a **separate** entry: caching one under the other's key would hand
+    /// a reader the wrong end of the file.
+    pub fn text(
+        &self,
+        path: &std::path::Path,
+        limit: Option<u64>,
+        from_end: bool,
+    ) -> Option<std::sync::Arc<str>> {
+        let key = format!(
+            "{}|{}|{}",
+            path.to_string_lossy(),
+            limit.map(|limit| limit.to_string()).unwrap_or_default(),
+            from_end
+        );
+        let Some(fingerprint) = fingerprint_of(path) else {
+            let mut inner = self.lock();
+            inner.fingerprints.forget(&key);
+            inner.text.remove(&key);
+            return None;
+        };
+        {
+            let inner = self.lock();
+            if inner.fingerprints.unchanged(&key, fingerprint).is_some() {
+                return inner.text.get(&key).cloned();
+            }
+        }
+        // `Arc<str>` rather than `String`: a cache that hands out copies is a cache
+        // that still copies everything. Four thousand 64 KB clones was 250 MB of
+        // memcpy — the whole of what was left of a scan (#284).
+        let contents: std::sync::Arc<str> = read_window(path, limit, from_end)?.into();
+        let mut inner = self.lock();
+        inner.fingerprints.remember(&key, fingerprint);
+        inner.reads += 1;
+        inner.text.insert(key, std::sync::Arc::clone(&contents));
+        Some(contents)
+    }
+
+    /// How many files this cache has opened since it was created.
+    pub fn reads(&self) -> usize {
+        self.lock().reads
+    }
+
+    /// Forget everything. A store that moved is a miss, not a stale answer.
+    pub fn clear(&self) {
+        let mut inner = self.lock();
+        *inner = TextCacheInner::default();
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, TextCacheInner> {
+        // A poisoned lock means another thread panicked while holding it; the
+        // cache holds no invariant worth propagating that panic through.
+        self.inner.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
+
+fn read_window(path: &std::path::Path, limit: Option<u64>, from_end: bool) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let size = file.metadata().ok()?.len();
+    let Some(limit) = limit else {
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).ok()?;
+        return Some(String::from_utf8_lossy(&bytes).into_owned());
+    };
+    let start = if from_end {
+        size.saturating_sub(limit)
+    } else {
+        0
+    };
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::new();
+    file.take(limit).read_to_end(&mut bytes).ok()?;
+    if from_end && start > 0 {
+        // Skip to the first newline: the row at the cut is half a line, and
+        // dropping it keeps a cut multi-byte character from making the whole tail
+        // lossy.
+        if let Some(index) = bytes.iter().position(|byte| *byte == b'\n') {
+            bytes.drain(..=index);
+        }
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// Read `path` unless its fingerprint says it has not changed since the last
