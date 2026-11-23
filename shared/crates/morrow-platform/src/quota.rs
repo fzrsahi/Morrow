@@ -348,6 +348,12 @@ mod tests {
                 Some(QuotaError::Unauthorized),
             ),
             (
+                "forbidden",
+                String::new(),
+                403,
+                Some(QuotaError::Unauthorized),
+            ),
+            (
                 "rate limited",
                 String::new(),
                 429,
