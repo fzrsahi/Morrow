@@ -13,6 +13,7 @@ publish = false
 
 [workspace.dependencies]
 regex = "1"
+url = "2"
 # #247c: the agent session stores are SQLite. `bundled` compiles the library
 # from source so the port does not depend on whatever libsqlite3 the host
 # happens to ship — and `cargo xwin` builds it for the MSVC target, which the
