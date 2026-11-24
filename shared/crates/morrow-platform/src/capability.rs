@@ -215,7 +215,7 @@ impl Feature {
                 }
             }
             Self::PointerMonitor => Capability::Unsupported(if environment.is_x11() {
-                // #235: `pointer_position` answers `None` on every Unix session.
+                // #235: no Unix pointer reader is wired into the adapter table.
                 "no pointer reader yet: XQueryPointer is not wired".into()
             } else {
                 "Wayland gives no global pointer position".into()
