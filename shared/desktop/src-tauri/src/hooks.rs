@@ -2,7 +2,7 @@
 //! report state, install or repair, remove. The panel never needs this; the
 //! user opens Settings and asks for it.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 use morrow_platform::hooks::{self, Paths};
@@ -268,9 +268,7 @@ pub fn site() -> HooksSite {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
-        .map(PathBuf::from)
-        .filter(|path| !path.as_os_str().is_empty());
+    let config_dir = claude_config_dir(&home, std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref());
     HooksSite {
         yaml: yaml_hooks::sites(&home),
         kimi: kimi::Site::new(&home),
@@ -284,6 +282,27 @@ pub fn site() -> HooksSite {
         paths: morrow_platform::hooks::Paths::new(&home, config_dir.as_deref()),
         bridge_source: bridge_source(),
     }
+}
+
+/// Claude Code's own folder: `$CLAUDE_CONFIG_DIR` when it names a directory, the
+/// home's `.claude` otherwise.
+///
+/// The variable is **not** used verbatim. `~/work/claude` is a documented form
+/// and reaches this process unexpanded, so writing `settings.json` beside a
+/// literal `~` would put hooks in a folder Claude Code never reads — while still
+/// reporting success. `morrow_core::config_roots::normalize` is the same seam the
+/// installer and discovery share (#247), so the answer is the same as macOS's:
+/// `~` expanded, trailing separators dropped, and a relative value or a bare root
+/// rejected in favour of the default.
+fn claude_config_dir(home: &Path, raw: Option<&str>) -> Option<PathBuf> {
+    let home_text = home.to_str()?;
+    morrow_core::config_roots::normalize(raw, home_text, path_style()).map(PathBuf::from)
+}
+
+/// `$HOME` and the style it is written in agree, but they are separate facts
+/// when the two are named on Windows: a drive letter is not a `/` prefix.
+const fn path_style() -> morrow_core::config_roots::PathStyle {
+    morrow_core::config_roots::PathStyle::current()
 }
 
 fn bridge_source() -> Option<PathBuf> {
@@ -329,4 +348,66 @@ pub(crate) fn stamp() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The variable reaches this process exactly as the user typed it, and a
+    /// `~` in it is not expanded by anyone else. Used verbatim, it would create
+    /// a literal `~` folder beside wherever the app happens to run.
+    #[test]
+    fn a_config_dir_variable_starting_with_a_tilde_is_expanded() {
+        assert_eq!(
+            claude_config_dir(Path::new("/home/dev"), Some("~/work/claude")),
+            Some(PathBuf::from("/home/dev/work/claude"))
+        );
+        assert_eq!(
+            claude_config_dir(Path::new("/home/dev"), Some("~")),
+            Some(PathBuf::from("/home/dev"))
+        );
+    }
+
+    #[test]
+    fn a_config_dir_variable_is_trimmed() {
+        assert_eq!(
+            claude_config_dir(Path::new("/home/dev"), Some("  /opt/claude///  ")),
+            Some(PathBuf::from("/opt/claude"))
+        );
+    }
+
+    /// A value that cannot be a config dir falls back to the default, the way
+    /// macOS does. A relative one would resolve against the app's cwd and a bare
+    /// `/` would yield `//settings.json`; both would "succeed" in the wrong place.
+    #[test]
+    fn a_config_dir_variable_that_cannot_be_a_directory_falls_back() {
+        assert_eq!(claude_config_dir(Path::new("/home/dev"), None), None);
+        assert_eq!(claude_config_dir(Path::new("/home/dev"), Some("")), None);
+        assert_eq!(claude_config_dir(Path::new("/home/dev"), Some("  ")), None);
+        assert_eq!(
+            claude_config_dir(Path::new("/home/dev"), Some(".claude")),
+            None
+        );
+        assert_eq!(claude_config_dir(Path::new("/home/dev"), Some("/")), None);
+        // The default is the home's own folder, which `Paths::new` derives when
+        // this answers `None`.
+        assert_eq!(
+            path_style().join("/home/dev", ".claude"),
+            "/home/dev/.claude"
+        );
+    }
+
+    #[test]
+    fn a_config_dir_variable_on_windows_keeps_its_drive_letter() {
+        let style = morrow_core::config_roots::PathStyle::Windows;
+        assert_eq!(
+            morrow_core::config_roots::normalize(
+                Some(r"C:\Users\dev\.claude-work\"),
+                r"C:\Users\dev",
+                style
+            ),
+            Some(r"C:\Users\dev\.claude-work".to_owned())
+        );
+    }
 }
