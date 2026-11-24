@@ -53,29 +53,80 @@ enum NotchWidthMetrics {
         }
     }
 
+    enum NotchStatusBadge: Equatable {
+        case pendingQuestion
+        case followUpReminder
+        case waitingAttention
+        case completionGlance
+        case quietHours
+    }
+
+    static func primaryStatusBadge(
+        hasHiddenPendingQuestion: Bool,
+        hasFollowUpHint: Bool,
+        isWaitingAttention: Bool,
+        hasCompletionGlance: Bool,
+        inQuietHours: Bool
+    ) -> NotchStatusBadge? {
+        if hasHiddenPendingQuestion { return .pendingQuestion }
+        if hasFollowUpHint { return .followUpReminder }
+        if isWaitingAttention { return .waitingAttention }
+        if hasCompletionGlance { return .completionGlance }
+        if inQuietHours { return .quietHours }
+        return nil
+    }
+
+    @MainActor
+    static func primaryStatusBadge(for appState: AppState, inQuietHours: Bool) -> NotchStatusBadge? {
+        primaryStatusBadge(
+            hasHiddenPendingQuestion: appState.hiddenPendingQuestionSessionId != nil,
+            hasFollowUpHint: appState.followUps.hintActive,
+            isWaitingAttention: appState.status == .waitingApproval || appState.status == .waitingQuestion,
+            hasCompletionGlance: appState.glanceCompletionActive,
+            inQuietHours: inQuietHours
+        )
+    }
+
+    static func statusBadgeWidth(for badge: NotchStatusBadge?) -> CGFloat {
+        switch badge {
+        case .none: return 0
+        case .pendingQuestion, .followUpReminder: return 13
+        case .waitingAttention, .completionGlance, .quietHours: return 10
+        }
+    }
+
+    static func fitsInlineStatusBadge(
+        isThinking: Bool,
+        isBilateral: Bool,
+        availableInnerWidth: CGFloat,
+        badgeReserve: CGFloat
+    ) -> Bool {
+        guard badgeReserve > 0 else { return false }
+        if isBilateral { return true }
+        guard isThinking else { return false }
+        // Leave at least 44pt for primary wing content (e.g. album art + visualizer)
+        // so narrow width scales (0%–50%) never clip artwork.
+        return (availableInnerWidth - badgeReserve) >= 44
+    }
+
     static func statusBadgesWidth(
         inQuietHours: Bool,
         hasCompletionGlance: Bool,
         hasPendingQuestionOrApproval: Bool
     ) -> CGFloat {
-        var width: CGFloat = 0
-        if inQuietHours { width += 13 }
-        if hasCompletionGlance { width += 13 }
-        if hasPendingQuestionOrApproval { width += 15 }
-        return width
+        let badge = primaryStatusBadge(
+            hasHiddenPendingQuestion: hasPendingQuestionOrApproval,
+            hasFollowUpHint: false,
+            isWaitingAttention: false,
+            hasCompletionGlance: hasCompletionGlance,
+            inQuietHours: inQuietHours
+        )
+        return statusBadgeWidth(for: badge)
     }
 
     @MainActor
     static func statusBadgesWidth(for appState: AppState, inQuietHours: Bool) -> CGFloat {
-        let hasPendingBadge = appState.hiddenPendingQuestionSessionId != nil
-            || appState.followUps.hintActive
-            || appState.status == .waitingApproval
-            || appState.status == .waitingQuestion
-        return statusBadgesWidth(
-            inQuietHours: inQuietHours,
-            hasCompletionGlance: appState.glanceCompletionActive,
-            hasPendingQuestionOrApproval: hasPendingBadge
-        )
+        statusBadgeWidth(for: primaryStatusBadge(for: appState, inQuietHours: inQuietHours))
     }
 
     @MainActor
@@ -600,9 +651,12 @@ struct NotchPanelView: View {
     }
 
     private var effectiveNaturalLeftWidth: CGFloat {
-        let isToolActive = showToolStatus && showAgentDetails && appState.currentTool != nil
+        let activeTool = (appState.pendingPermission == nil && appState.pendingQuestion == nil)
+            ? appState.currentTool
+            : nil
+        let isToolActive = showToolStatus && showAgentDetails && isThinking && activeTool != nil
         if isToolActive {
-            let minTool: CGFloat = isPixel ? 96 : 88
+            let minTool: CGFloat = isPixel ? 96 : 92
             if leftWingWidth > 0 {
                 return max(minTool, min(leftWingWidth + 14, isPixel ? 136 : 128))
             }
@@ -627,55 +681,51 @@ struct NotchPanelView: View {
     }
 
     private var effectiveNaturalRightWidth: CGFloat {
-        let badgeReserve = NotchWidthMetrics.statusBadgeReserve(for: appState, inQuietHours: signals.inQuietHours)
         if mailManager.showMailArrivalAnimation {
             return isThinking ? 118 : 52
         }
         if prayerManager.isPrayerPrioritized {
             if isThinking {
-                return effectiveNaturalLeftWidth + badgeReserve
+                return effectiveNaturalLeftWidth
             }
-            return 56 + badgeReserve
+            return 56
         }
         if signals.isPlaying || nowPlaying.isPlaying {
             if isThinking && !isConnectedChinLyricActive {
                 // Keep Thinking + Music locked to the exact same left/right wing width as Thinking without Music.
-                return effectiveNaturalLeftWidth + badgeReserve
+                return effectiveNaturalLeftWidth
             }
             let baseMusic: CGFloat = isThinking ? 148 : 50
-            let musicBaseline = baseMusic + badgeReserve
-            let cap: CGFloat = (isThinking ? 176 : 62) + badgeReserve
+            let cap: CGFloat = isThinking ? 176 : 56
             if rightWingWidth > 0 {
-                return max(musicBaseline, min(rightWingWidth + 8, cap))
+                return max(baseMusic, min(rightWingWidth + 8, cap))
             }
-            return min(musicBaseline, cap)
+            return min(baseMusic, cap)
         }
         // Standby / Git right wing:
-        // Strict width lock during Thinking: never expand the notch beyond the left wing's Thinking width.
+        // Strict width lock during Thinking and Idle: never expand the notch for status badges.
         if isThinking {
-            return effectiveNaturalLeftWidth + badgeReserve
+            return effectiveNaturalLeftWidth
         }
         let standbyBaseline = min(
             CompactGitStatusModel.estimatedBaselineWidth(
                 isGitRepo: workspaceManager.isGitRepo,
                 aheadCount: workspaceManager.aheadCount,
                 changedCount: workspaceManager.changedFiles.count
-            ) + badgeReserve,
-            176
+            ),
+            56
         )
         if rightWingWidth > 0 {
-            return max(compactWingWidth, min(rightWingWidth + 14, 176))
+            return max(compactWingWidth, min(rightWingWidth + 14, 56))
         }
         return standbyBaseline
     }
 
     private func collapsedMinimumWingFloor(isRightWing: Bool) -> CGFloat {
-        let badgeReserve = NotchWidthMetrics.statusBadgeReserve(for: appState, inQuietHours: signals.inQuietHours)
-        let effectiveReserve = isRightWing ? badgeReserve : 0
         if signals.isPlaying || nowPlaying.isPlaying {
-            return effectiveReserve > 0 ? 56 + effectiveReserve : 42
+            return 42
         }
-        return effectiveReserve > 0 ? 46 + effectiveReserve : 36
+        return 36
     }
 
     private func scaledCollapsedWingWidth(naturalWidth: CGFloat, floor: CGFloat) -> CGFloat {
@@ -689,7 +739,6 @@ struct NotchPanelView: View {
     }
 
     private var bilateralLyricWingWidth: CGFloat {
-        let badgeReserve = NotchWidthMetrics.statusBadgeReserve(for: appState, inQuietHours: signals.inQuietHours)
         let factor = collapsedWidthScaleFactor
         let curLyric = nowPlaying.currentLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextLyric = nowPlaying.nextLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -702,8 +751,8 @@ struct NotchPanelView: View {
             if maxLyricLen >= 5 { return 225 }
             return 210
         }()
-        let naturalLyricWing = baseLyricWing + badgeReserve
-        let floorWing: CGFloat = 148 + badgeReserve
+        let naturalLyricWing = baseLyricWing
+        let floorWing: CGFloat = 148
 
         let scaledLyricWing: CGFloat = factor >= 1.0
             ? naturalLyricWing + (naturalLyricWing * (factor - 1.0) * 0.4)
@@ -2672,20 +2721,47 @@ private struct CompactRightWing: View {
         isHovered
     }
 
+    private var activeStatusBadge: NotchWidthMetrics.NotchStatusBadge? {
+        NotchWidthMetrics.primaryStatusBadge(for: appState, inQuietHours: inQuietHours)
+    }
+
+    private var rawBadgeReserve: CGFloat {
+        let width = NotchWidthMetrics.statusBadgeWidth(for: activeStatusBadge)
+        return width > 0 ? (width + 5) : 0
+    }
+
+    private var availableInnerWidthBeforeBadge: CGFloat {
+        (!expanded && wingWidth > 0)
+            ? max(0, collapsedMaxInnerWidth - totalRightInnerPadding)
+            : .infinity
+    }
+
+    private var showsInlineStatusBadge: Bool {
+        !mailManager.showMailArrivalAnimation
+            && NotchWidthMetrics.fitsInlineStatusBadge(
+                isThinking: isThinking,
+                isBilateral: isBilateralWingsLyricActive,
+                availableInnerWidth: availableInnerWidthBeforeBadge,
+                badgeReserve: rawBadgeReserve
+            )
+    }
+
+    private var showsOverlayStatusBadge: Bool {
+        !mailManager.showMailArrivalAnimation
+            && activeStatusBadge != nil
+            && !showsInlineStatusBadge
+    }
+
     private var extraBadgeCount: Int {
-        var count = 0
-        if inQuietHours { count += 1 }
-        if appState.glanceCompletionActive { count += 1 }
-        if appState.hiddenPendingQuestionSessionId != nil || appState.followUps.hintActive || appState.status == .waitingApproval || appState.status == .waitingQuestion { count += 1 }
-        return count
+        showsInlineStatusBadge ? 1 : 0
     }
 
     private var statusBadgesWidth: CGFloat {
-        NotchWidthMetrics.statusBadgesWidth(for: appState, inQuietHours: inQuietHours)
+        showsInlineStatusBadge ? NotchWidthMetrics.statusBadgeWidth(for: activeStatusBadge) : 0
     }
 
     private var badgeReserve: CGFloat {
-        statusBadgesWidth > 0 ? (statusBadgesWidth + 5) : 0
+        showsInlineStatusBadge ? rawBadgeReserve : 0
     }
 
     private var collapsedMaxInnerWidth: CGFloat {
@@ -2763,7 +2839,7 @@ private struct CompactRightWing: View {
     }
 
     @ViewBuilder
-    private var collapsedWingContent: some View {
+    private var collapsedPrimaryWingContent: some View {
         if workspaceManager.testWingPreview == .nonGitIdle || workspaceManager.testWingPreview == .nonGitThinking {
             standbyPill
         } else if mailManager.showMailArrivalAnimation {
@@ -2812,10 +2888,19 @@ private struct CompactRightWing: View {
             // AGENT / STANDBY MODE: minimal Git telemetry without hover-dock transition
             standbyPill
         }
+    }
 
-        // Quiet hours & status badges are shown when not playing the mail arrival animation
-        // so MailArrivalWingView keeps the full right-wing runway.
-        if !mailManager.showMailArrivalAnimation {
+    @ViewBuilder
+    private var collapsedWingContent: some View {
+        collapsedPrimaryWingContent
+            .overlay(alignment: .topTrailing) {
+                if showsOverlayStatusBadge, let badge = activeStatusBadge {
+                    compactOverlayStatusBadge(for: badge)
+                        .offset(x: 1, y: -1)
+                }
+            }
+
+        if showsInlineStatusBadge {
             statusBadges
         }
     }
@@ -3077,50 +3162,87 @@ private struct CompactRightWing: View {
         .help("Workspace Git Status (Click to expand)")
     }
 
+    private func statusBadgeTooltip(for badge: NotchWidthMetrics.NotchStatusBadge) -> String {
+        switch badge {
+        case .pendingQuestion:
+            return l10n["question_waiting_hint"]
+        case .followUpReminder:
+            return l10n["follow_up_hint"]
+        case .waitingAttention:
+            return l10n["waiting_approval"]
+        case .completionGlance:
+            return "Completed"
+        case .quietHours:
+            return l10n["quiet_hours"]
+        }
+    }
+
+    private var glanceCompletionColor: Color {
+        _ = signals.albumPaletteRevision
+        _ = signals.isPlaying
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
+        )
+    }
+
+    @ViewBuilder
+    private func compactOverlayStatusBadge(for badge: NotchWidthMetrics.NotchStatusBadge) -> some View {
+        let dotColor: Color = {
+            switch badge {
+            case .pendingQuestion, .followUpReminder, .waitingAttention:
+                return Color(red: 1.0, green: 0.7, blue: 0.28)
+            case .completionGlance:
+                return glanceCompletionColor
+            case .quietHours:
+                return Color.white.opacity(0.6)
+            }
+        }()
+
+        Circle()
+            .fill(dotColor)
+            .frame(width: 6, height: 6)
+            .overlay(Circle().strokeBorder(Color.black, lineWidth: 1))
+            .help(statusBadgeTooltip(for: badge))
+    }
+
     @ViewBuilder
     private var statusBadges: some View {
-        // Quiet hours active — explains why event sounds are silent.
-        if inQuietHours {
-            Image(systemName: "moon.fill")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(.white.opacity(0.5))
-                .help(l10n["quiet_hours"])
-        }
-
-        // Glance completion badge
-        if appState.glanceCompletionActive {
-            let _ = signals.albumPaletteRevision
-            let _ = signals.isPlaying
-            let _ = syncThemeWithAlbumArt
-            let glanceColor = AppColorTheme.readableOnDark(
-                AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
-            )
-            Image(systemName: "checkmark.circle.fill")
-                .font(.system(size: 8, weight: .bold))
-                .foregroundStyle(glanceColor)
-                .shadow(color: glanceColor.opacity(0.7), radius: 2)
-        }
-
-        // Question / Approval badges
-        if appState.hiddenPendingQuestionSessionId != nil {
-            Image(systemName: "questionmark.bubble.fill")
-                .font(.system(size: 9, weight: .bold))
-                .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
-                .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
-                .symbolEffect(.bounce, value: appState.followUps.hintPulse)
-                .help(l10n["question_waiting_hint"])
-        } else if appState.followUps.hintActive {
-            Image(systemName: "bell.badge.fill")
-                .font(.system(size: 8.5, weight: .bold))
-                .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
-                .symbolEffect(.bounce, value: appState.followUps.hintPulse)
-                .help(l10n["follow_up_hint"])
-        } else if appState.status == .waitingApproval || appState.status == .waitingQuestion {
-            // A repeating `.symbolEffect` costs a layout pass per
-            // display frame; the bell pulses on the render server
-            // instead and keeps pulsing after the island goes quiet.
-            PulsingBellView(animating: !reduceMotion)
-                .frame(width: 10, height: 10)
+        if let badge = activeStatusBadge {
+            switch badge {
+            case .pendingQuestion:
+                Image(systemName: "questionmark.bubble.fill")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
+                    .symbolEffect(.pulse, options: .repeating, isActive: !reduceMotion)
+                    .symbolEffect(.bounce, value: appState.followUps.hintPulse)
+                    .help(statusBadgeTooltip(for: .pendingQuestion))
+            case .followUpReminder:
+                Image(systemName: "bell.badge.fill")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Color(red: 1.0, green: 0.7, blue: 0.28))
+                    .symbolEffect(.bounce, value: appState.followUps.hintPulse)
+                    .help(statusBadgeTooltip(for: .followUpReminder))
+            case .waitingAttention:
+                // A repeating `.symbolEffect` costs a layout pass per
+                // display frame; the bell pulses on the render server
+                // instead and keeps pulsing after the island goes quiet.
+                PulsingBellView(animating: !reduceMotion)
+                    .frame(width: 10, height: 10)
+                    .help(statusBadgeTooltip(for: .waitingAttention))
+            case .completionGlance:
+                let glanceColor = glanceCompletionColor
+                Image(systemName: "checkmark.circle.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(glanceColor)
+                    .shadow(color: glanceColor.opacity(0.7), radius: 2)
+                    .help(statusBadgeTooltip(for: .completionGlance))
+            case .quietHours:
+                Image(systemName: "moon.fill")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .help(statusBadgeTooltip(for: .quietHours))
+            }
         }
     }
 }

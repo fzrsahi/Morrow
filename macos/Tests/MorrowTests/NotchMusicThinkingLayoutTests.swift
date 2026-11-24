@@ -536,6 +536,64 @@ final class NotchMusicThinkingLayoutTests: XCTestCase {
         XCTAssertGreaterThan(w200, w100, "IdleIndicatorBar width must grow above 100%")
     }
 
+    func testStatusBadgesNeverExpandCollapsedNotchWidthInThinkingOrIdle() throws {
+        let artworkColor = NSColor(srgbRed: 0.0, green: 0.25, blue: 1.0, alpha: 1.0)
+        configureMusic(title: "Baby Blue (feat. Chance)", artworkColor: artworkColor)
+        configureDefaults(theme: .modern, widthScale: 100)
+
+        // 1. Thinking + Music: width with all badges active must match baseline without badges.
+        IslandSignals.shared.setInQuietHours(false)
+        let baselineThinking = try renderCollapsedBar(state: makeAgentState(status: .processing), hasNotch: true, saveName: nil)
+        let baselineThinkingWidth = baselineThinking.barRight - baselineThinking.barLeft
+
+        IslandSignals.shared.setInQuietHours(true)
+        defer { IslandSignals.shared.setInQuietHours(false) }
+        let badgeThinkingState = makeAgentState(status: .processing)
+        badgeThinkingState.glanceCompletionActive = true
+        var waitingSession = SessionSnapshot()
+        waitingSession.source = "codex"
+        waitingSession.status = .waitingApproval
+        waitingSession.currentTool = "Bash"
+        badgeThinkingState.sessions["s2"] = waitingSession
+        badgeThinkingState.refreshDerivedState()
+
+        let badgeThinking = try renderCollapsedBar(state: badgeThinkingState, hasNotch: true, saveName: nil)
+        let badgeThinkingWidth = badgeThinking.barRight - badgeThinking.barLeft
+        XCTAssertEqual(badgeThinkingWidth, baselineThinkingWidth, accuracy: 1.0, "Status badges must not widen Thinking + Music bar")
+        XCTAssertNil(badgeThinking.intrusion)
+        XCTAssertNotNil(badgeThinking.rightAlbumRange)
+        XCTAssertNotNil(badgeThinking.rightTitleRange)
+        XCTAssertNotNil(badgeThinking.rightVisualizerRange)
+
+        // 2. Idle + Music: width with waiting bell / all badges must match baseline Idle + Music and stay <= 56pt per wing.
+        IslandSignals.shared.setInQuietHours(false)
+        let baselineIdle = try renderCollapsedBar(state: makeAgentState(status: .idle), hasNotch: true, saveName: nil)
+        let baselineIdleWidth = baselineIdle.barRight - baselineIdle.barLeft
+
+        IslandSignals.shared.setInQuietHours(true)
+        let badgeIdleState = makeAgentState(status: .waitingApproval, currentTool: "Bash")
+        badgeIdleState.glanceCompletionActive = true
+        let badgeIdle = try renderCollapsedBar(state: badgeIdleState, hasNotch: true, saveName: nil)
+        let badgeIdleWidth = badgeIdle.barRight - badgeIdle.barLeft
+        XCTAssertEqual(badgeIdleWidth, baselineIdleWidth, accuracy: 1.0, "Status badges must not widen Idle + Music bar")
+        XCTAssertLessThanOrEqual((badgeIdleWidth - notch) / 2, 56.0, "Idle + Music wing must stay within 56pt budget")
+        XCTAssertNil(badgeIdle.intrusion)
+        let idleAlbum = try XCTUnwrap(badgeIdle.rightAlbumRange)
+        let idleViz = try XCTUnwrap(badgeIdle.rightVisualizerRange)
+        XCTAssertGreaterThanOrEqual(idleAlbum.upperBound - idleAlbum.lowerBound, 12)
+        XCTAssertLessThanOrEqual(idleAlbum.upperBound, idleViz.lowerBound)
+
+        // 3. Idle + Standby (no music): waiting bell must stay within 56pt Idle wing budget.
+        resetMusicAndSignals()
+        IslandSignals.shared.setInQuietHours(true)
+        let standbyState = makeAgentState(status: .waitingApproval, currentTool: "Bash")
+        standbyState.glanceCompletionActive = true
+        let standbyRender = try renderCollapsedBar(state: standbyState, hasNotch: true, saveName: nil)
+        let standbyWingWidth = (standbyRender.barRight - standbyRender.barLeft - notch) / 2
+        XCTAssertLessThanOrEqual(standbyWingWidth, 56.0, "Idle + Standby with badges must stay within 56pt budget")
+        XCTAssertNil(standbyRender.intrusion)
+    }
+
     // MARK: - Helpers
 
     private func resetMusicAndSignals() {
