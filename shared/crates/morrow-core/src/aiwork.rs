@@ -26,6 +26,7 @@
 //! than hidden behind a call that cannot exist.
 
 use serde_json::Value;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::reduce::{AgentStatus, ChatMessage, SessionSnapshot};
 
@@ -47,14 +48,15 @@ pub fn terminal_placeholder(event_name: &str) -> &'static str {
     }
 }
 
-/// `text` cut to `max` characters with an ellipsis, counted in characters so a preview
-/// never splits a glyph.
+/// `text` cut to `max` grapheme clusters with an ellipsis. Swift's `String.count`
+/// and `prefix` count extended grapheme clusters, not Unicode scalars — a ZWJ
+/// emoji or a combining mark would otherwise shift every boundary.
 pub fn truncate(text: &str, max: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max {
+    let clusters: Vec<&str> = text.graphemes(true).collect();
+    if clusters.len() <= max {
         return text.to_owned();
     }
-    let mut out: String = chars[..max.saturating_sub(1)].iter().collect();
+    let mut out: String = clusters[..max.saturating_sub(1)].concat();
     out.push('…');
     out
 }
@@ -65,6 +67,13 @@ fn string(data: Option<&Value>, key: &str) -> Option<String> {
         .as_str()
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
+}
+
+/// Swift's `??` stops at the first *present* value, even when it is an empty
+/// string; the caller then decides whether empty is acceptable. `string()` above
+/// skips empties per alias and is still right for Swift's `!x.isEmpty` checks.
+fn string_raw(data: Option<&Value>, key: &str) -> Option<String> {
+    data?.get(key)?.as_str().map(str::to_owned)
 }
 
 fn object<'a>(data: Option<&'a Value>, key: &str) -> Option<&'a Value> {
@@ -98,7 +107,9 @@ pub fn tool_name(data: Option<&Value>) -> Option<String> {
     if let Some(display) = tool_display(data) {
         if let Some(title) = string(Some(display), "title") {
             // Prefer the short name when the title is a long "name: detail".
-            if let Some(name) = string(Some(display), "tool_name").or_else(|| string(data, "name"))
+            if let Some(name) = string_raw(Some(display), "tool_name")
+                .or_else(|| string_raw(data, "name"))
+                .filter(|name| !name.is_empty())
             {
                 return Some(name);
             }
@@ -355,11 +366,11 @@ pub fn apply_stream_event(
 }
 
 fn tail_chars(text: &str, count: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= count {
+    let clusters: Vec<&str> = text.graphemes(true).collect();
+    if clusters.len() <= count {
         return text.to_owned();
     }
-    chars[chars.len() - count..].iter().collect()
+    clusters[clusters.len() - count..].concat()
 }
 
 /// The closing of a turn: keep what the assistant said, or leave a stand-in so an idle
@@ -371,10 +382,11 @@ pub fn finalize_turn_messages(
 ) {
     let notice_summary =
         object(data, "terminal_notice").and_then(|notice| string(Some(notice), "summary"));
-    let final_text = string(data, "final_text")
-        .or_else(|| string(data, "text"))
+    let final_text = string_raw(data, "final_text")
+        .or_else(|| string_raw(data, "text"))
         .or(notice_summary)
-        .or(snapshot.last_assistant_message.clone());
+        .or(snapshot.last_assistant_message.clone())
+        .filter(|text| !text.is_empty());
 
     match non_empty(final_text) {
         Some(text) => {
@@ -455,7 +467,7 @@ pub fn apply_session_metadata(snapshot: &mut SessionSnapshot, data: Option<&Valu
         .or_else(|| session.and_then(|session| string(Some(session), "last_user_prompt")))
         .filter(|prompt| !prompt.is_empty())
     {
-        snapshot.last_user_prompt = Some(prompt.chars().take(240).collect());
+        snapshot.last_user_prompt = Some(prompt.graphemes(true).take(240).collect());
     }
     if snapshot.tool_description.is_none() && snapshot.status != AgentStatus::Idle {
         if let Some(signal) = session
@@ -509,6 +521,38 @@ mod tests {
             assert!(is_terminal_event(event));
         }
         assert!(!is_terminal_event("stream.tool_result"));
+    }
+
+    #[test]
+    fn truncation_uses_grapheme_clusters_like_swift_string_count() {
+        // A ZWJ family is one rendered glyph but seven Unicode scalars.
+        let family = "👨‍👩‍👧‍👦";
+        let text = format!("{family}A");
+        assert_eq!(
+            truncate(&text, 2),
+            text,
+            "two clusters fit in two characters"
+        );
+        assert_eq!(
+            truncate(&text, 1),
+            "…",
+            "one cluster leaves no room before the ellipsis"
+        );
+        assert_eq!(tail_chars(&text, 1), "A");
+        assert_eq!(tail_chars(&text, 2), text);
+    }
+
+    #[test]
+    fn an_empty_first_alias_stops_the_chain_like_swifts_null_coalescing() {
+        let data = serde_json::json!({
+            "_meta": {"agentix": {"tool_display": {
+                "title": "Bash", "tool_name": "", "name": "other"
+            }}},
+            "name": "fallback"
+        });
+        // Swift: `tool_name ?? name` keeps the empty string, the !isEmpty guard
+        // fails, and the title is used. Falling through to "other" was the bug.
+        assert_eq!(super::tool_name(Some(&data)), Some("Bash".to_owned()));
     }
 
     #[test]
