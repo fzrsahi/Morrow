@@ -4,9 +4,13 @@
 import { describe, expect, test } from 'bun:test';
 import {
   VOLUME_HUD_MS,
+  VOLUME_SEGMENTS,
   VolumeHudGate,
+  percentForKey,
+  percentForSegment,
   readout,
   segmentColors,
+  setVolumePlan,
   volumeSupported,
   type Volume,
 } from './volume';
@@ -49,6 +53,59 @@ describe('the mono readout', () => {
 
   test('mute prints MUTE instead of a number', () => {
     expect(readout(volume(40, true))).toBe('MUTE');
+  });
+});
+
+describe('the meter as an input (#239 AC 2)', () => {
+  test('clicking a segment lights exactly that many segments', () => {
+    // The inverse of the meter, measured over every segment: a click that lit a
+    // different number than it name would make the HUD lie about the level it
+    // just asked for.
+    for (let index = 0; index < VOLUME_SEGMENTS; index += 1) {
+      const lit = segmentColors(percentForSegment(index), false).filter((c) => c !== 'off').length;
+      expect(lit, `segment ${index} asked for ${percentForSegment(index)}%`).toBe(index + 1);
+    }
+  });
+
+  test('the last segment is 100, not 92', () => {
+    expect(percentForSegment(VOLUME_SEGMENTS - 1)).toBe(100);
+  });
+
+  test('a click outside the meter cannot ask for a level', () => {
+    expect(percentForSegment(-3)).toBe(percentForSegment(0));
+    expect(percentForSegment(99)).toBe(percentForSegment(VOLUME_SEGMENTS - 1));
+  });
+
+  test('the arrow keys step by five and stop at the ends', () => {
+    expect(percentForKey(50, 'ArrowRight')).toBe(55);
+    expect(percentForKey(50, 'ArrowUp')).toBe(55);
+    expect(percentForKey(50, 'ArrowLeft')).toBe(45);
+    expect(percentForKey(50, 'ArrowDown')).toBe(45);
+    expect(percentForKey(100, 'ArrowRight')).toBe(100);
+    expect(percentForKey(2, 'ArrowLeft')).toBe(0);
+    expect(percentForKey(50, 'Home')).toBe(0);
+    expect(percentForKey(50, 'End')).toBe(100);
+  });
+
+  test('a key the meter does not own is left to the page', () => {
+    // Tab and Escape must keep doing what they do; swallowing them would trap
+    // focus in a 1.5 s HUD.
+    for (const key of ['Tab', 'Escape', 'Enter', 'a', ' ']) {
+      expect(percentForKey(50, key)).toBeNull();
+    }
+  });
+
+  test('setting a level while muted unmutes first', () => {
+    // Neither adapter clears the mute flag itself, so without this the meter
+    // would light over silence.
+    expect(setVolumePlan(true, 40)).toEqual({ unmuteFirst: true, percent: 40 });
+    expect(setVolumePlan(false, 40)).toEqual({ unmuteFirst: false, percent: 40 });
+  });
+
+  test('the level a click asks for is inside 0–100', () => {
+    expect(setVolumePlan(false, -20).percent).toBe(0);
+    expect(setVolumePlan(false, 240).percent).toBe(100);
+    expect(setVolumePlan(false, 40.6).percent).toBe(41);
   });
 });
 
