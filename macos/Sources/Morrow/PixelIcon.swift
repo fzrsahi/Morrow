@@ -16,6 +16,7 @@ public enum PixelIconGlyph: String, CaseIterable, Sendable {
     case volumeMute
     case settings
     case power
+    case bolt
 }
 
 // Crisp Canvas-based vector pixel icon renderer
@@ -194,6 +195,18 @@ public struct PixelIcon: View {
                 0,1,1,0,0,0,1,1,0,
                 0,0,1,1,1,1,1,0,0,
                 0,0,0,1,1,1,0,0,0
+            ])
+        case .bolt:
+            return (9, 9, [
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,1,1,0,0,0,0,
+                0,0,1,1,0,0,0,0,0,
+                0,1,1,1,1,1,1,0,0,
+                0,0,0,0,1,1,0,0,0,
+                0,0,0,1,1,0,0,0,0,
+                0,0,1,1,0,0,0,0,0,
+                0,1,1,0,0,0,0,0,0,
+                0,0,0,0,0,0,0,0,0
             ])
         }
     }

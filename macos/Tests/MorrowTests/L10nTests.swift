@@ -217,4 +217,44 @@ final class L10nTests: XCTestCase {
                            "Wrong reply_complete_placeholder for language '\(lang)'")
         }
     }
+
+    // MARK: - Multi-display settings keys (Issue #68)
+
+    func testMultiDisplayLocalizationKeysExistAcrossAllSevenLanguages() {
+        let languages = ["en", "de", "zh", "zh-Hant", "ja", "ko", "tr"]
+        let requiredKeys = [
+            "displays_section",
+            "island_enabled",
+            "island_enabled_desc",
+            "island_disabled_banner",
+            "display_numbered",
+            "display_badge_primary",
+            "display_badge_builtin",
+            "display_badge_notch",
+            "display_badge_external",
+            "display_hidden_hint",
+            "configure_displays",
+            "active_displays",
+            "displays_count",
+            "display_single_count",
+            "island_hidden_summary",
+            "displays_multi_hint",
+        ]
+
+        for lang in languages {
+            guard let dict = L10n.strings[lang] else {
+                XCTFail("Missing dictionary for language '\(lang)'")
+                continue
+            }
+            for key in requiredKeys {
+                let value = dict[key] ?? ""
+                XCTAssertFalse(value.isEmpty, "Language '\(lang)' missing or empty key '\(key)'")
+            }
+
+            L10n.shared.language = lang
+            XCTAssertTrue(String(format: L10n.shared["display_numbered"], 2).contains("2"))
+            XCTAssertTrue(String(format: L10n.shared["display_hidden_hint"], 1).contains("1"))
+            XCTAssertTrue(String(format: L10n.shared["displays_count"], 2).contains("2"))
+        }
+    }
 }

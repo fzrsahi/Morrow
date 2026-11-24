@@ -87,12 +87,19 @@ struct SettingsView: View {
     @ObservedObject private var l10n = L10n.shared
     @State private var selectedPage: SettingsPage
     var appState: AppState?
+    var displaysOverride: [DisplayDescriptor]?
 
     /// `initialPage` opens the window on that page (the offscreen UI gallery
-    /// renders every page through it).
-    init(appState: AppState? = nil, initialPage: SettingsPage = .general) {
+    /// renders every page through it). `displaysOverride` injects simulated
+    /// displays for offscreen multi-display rendering and tests.
+    init(
+        appState: AppState? = nil,
+        initialPage: SettingsPage = .general,
+        displaysOverride: [DisplayDescriptor]? = nil
+    ) {
         self.appState = appState
         _selectedPage = State(initialValue: initialPage)
+        self.displaysOverride = displaysOverride
     }
 
     var body: some View {
@@ -116,8 +123,8 @@ struct SettingsView: View {
         } detail: {
             Group {
                 switch selectedPage {
-                case .general: GeneralPage()
-                case .appearance: AppearancePage()
+                case .general: GeneralPage(selectedPage: $selectedPage, displaysOverride: displaysOverride)
+                case .appearance: AppearancePage(appState: appState, displaysOverride: displaysOverride)
                 case .mascots: MascotsPage()
                 case .sound: SoundPage()
                 case .shortcuts: ShortcutsPage()
@@ -379,17 +386,110 @@ private struct SidebarRow: View {
     }
 }
 
+// MARK: - Display Helpers
+
+enum DisplaySettingsSummaryFormatter {
+    static func summary(
+        islandEnabled: Bool,
+        displays: [DisplayDescriptor],
+        configs: [String: DisplayConfiguration],
+        l10n: L10n
+    ) -> String {
+        guard islandEnabled else {
+            return l10n["island_hidden_summary"]
+        }
+        let enabledDisplays = displays.filter { configs[$0.id]?.enabled == true }
+        guard !enabledDisplays.isEmpty else {
+            return l10n["island_hidden_summary"]
+        }
+        let countLabel = enabledDisplays.count == 1
+            ? l10n["display_single_count"]
+            : String(format: l10n["displays_count"], enabledDisplays.count)
+        let modeLabels = enabledDisplays.map { display -> String in
+            let mode = configs[display.id]?.displayMode
+                ?? DisplayDescriptor.defaultMode(hasNotch: display.hasNotch)
+            return mode == .notch
+                ? l10n["display_mode_notch"]
+                : l10n["display_mode_dynamic_island"]
+        }
+        return "\(countLabel) · \(modeLabels.joined(separator: ", "))"
+    }
+
+    static func metadataLine(display: DisplayDescriptor, l10n: L10n) -> String {
+        var parts = [display.resolutionLabel]
+        if !display.isBuiltin {
+            parts.append(l10n["display_badge_external"])
+        }
+        if display.isPrimary {
+            parts.append(l10n["display_badge_primary"])
+        }
+        return parts.joined(separator: " · ")
+    }
+}
+
 // MARK: - General Page
 
 private struct GeneralPage: View {
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var screenMonitor = ScreenMonitor.shared
+    @Binding var selectedPage: SettingsPage
+    var displaysOverride: [DisplayDescriptor]?
+
+    @AppStorage(SettingsKey.islandEnabled) private var islandEnabled = SettingsDefaults.islandEnabled
+    @AppStorage(SettingsKey.displayConfigurations) private var displayConfigurationsRaw = ""
     @AppStorage(SettingsKey.displayChoice) private var displayChoice = SettingsDefaults.displayChoice
+    @AppStorage(SettingsKey.islandDisplayMode) private var legacyDisplayModeRaw = SettingsDefaults.islandDisplayMode
+    @AppStorage(SettingsKey.dynamicIslandTopOffset) private var legacyTopOffset = SettingsDefaults.dynamicIslandTopOffset
     @AppStorage(SettingsKey.allowHorizontalDrag) private var allowHorizontalDrag = SettingsDefaults.allowHorizontalDrag
     @AppStorage(SettingsKey.avoidMenuBarIcons) private var avoidMenuBarIcons = SettingsDefaults.avoidMenuBarIcons
     @State private var launchAtLogin: Bool
 
-    init() {
+    init(selectedPage: Binding<SettingsPage>, displaysOverride: [DisplayDescriptor]? = nil) {
+        _selectedPage = selectedPage
+        self.displaysOverride = displaysOverride
         _launchAtLogin = State(initialValue: SettingsManager.shared.launchAtLogin)
+    }
+
+    private var activeDisplays: [DisplayDescriptor] {
+        displaysOverride ?? screenMonitor.displays
+    }
+
+    private var resolvedConfigs: [String: DisplayConfiguration] {
+        DisplayConfigurationPlanner.resolvedConfigurations(
+            stored: DisplayConfigurationCodec.decode(displayConfigurationsRaw),
+            displays: activeDisplays,
+            displayChoice: displayChoice,
+            legacyMode: IslandDisplayMode.resolved(from: legacyDisplayModeRaw),
+            legacyTopOffset: legacyTopOffset
+        ).configs
+    }
+
+    private var activeDisplaysSummary: String {
+        DisplaySettingsSummaryFormatter.summary(
+            islandEnabled: islandEnabled,
+            displays: activeDisplays,
+            configs: resolvedConfigs,
+            l10n: l10n
+        )
+    }
+
+    private func ensureAtLeastOneDisplayEnabledIfNeeded() {
+        guard !activeDisplays.isEmpty else { return }
+        var configs = resolvedConfigs
+        let hasEnabled = activeDisplays.contains { configs[$0.id]?.enabled == true }
+        guard !hasEnabled else { return }
+        let targetIndex = DisplayConfigurationPlanner.legacyTargetIndex(
+            displayChoice: displayChoice,
+            displays: activeDisplays
+        ) ?? 0
+        let target = activeDisplays[targetIndex]
+        var updated = configs[target.id]
+            ?? DisplayDescriptor.defaultConfiguration(hasNotch: target.hasNotch, enabled: true)
+        updated.enabled = true
+        configs[target.id] = updated
+        displayConfigurationsRaw = DisplayConfigurationCodec.encode(configs)
+        legacyDisplayModeRaw = updated.displayMode.rawValue
+        legacyTopOffset = DynamicIslandTopOffset.clamp(updated.dynamicIslandTopOffset)
     }
 
     var body: some View {
@@ -422,14 +522,26 @@ private struct GeneralPage: View {
                 Text(l10n["avoid_menu_bar_icons_desc"])
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Picker(l10n["display"], selection: $displayChoice) {
-                    Text(l10n["auto"]).tag("auto")
-                    ForEach(Array(NSScreen.screens.enumerated()), id: \.offset) { index, screen in
-                        let name = screen.localizedName
-                        let isBuiltin = name.contains("Built-in") || name.contains("内置")
-                        let label = isBuiltin ? l10n["builtin_display"] : name
-                        Text(label).tag("screen_\(index)")
+            }
+
+            Section(l10n["displays_section"]) {
+                Toggle(isOn: $islandEnabled) {
+                    Text(l10n["island_enabled"])
+                    Text(l10n["island_enabled_desc"])
+                }
+                .onChange(of: islandEnabled) { _, newValue in
+                    if newValue {
+                        ensureAtLeastOneDisplayEnabledIfNeeded()
                     }
+                }
+
+                LabeledContent {
+                    Button(l10n["configure_displays"]) {
+                        selectedPage = .appearance
+                    }
+                } label: {
+                    Text(l10n["active_displays"])
+                    Text(activeDisplaysSummary)
                 }
             }
         }
@@ -1498,8 +1610,170 @@ enum ContentFontSize {
     static let choices = Array(10...16)
 }
 
+private struct MultiDisplaySchematicRow: View {
+    let displays: [DisplayDescriptor]
+    let configs: [String: DisplayConfiguration]
+    @ObservedObject var l10n: L10n
+
+    var body: some View {
+        HStack(spacing: 10) {
+            ForEach(Array(displays.enumerated()), id: \.element.id) { index, display in
+                let config = configs[display.id]
+                    ?? DisplayDescriptor.defaultConfiguration(hasNotch: display.hasNotch)
+                let numberedDisplay = String(format: l10n["display_numbered"], index + 1)
+                let captionText: String = {
+                    if config.enabled {
+                        return config.displayMode == .notch
+                            ? l10n["display_mode_notch"]
+                            : l10n["display_mode_dynamic_island"]
+                    }
+                    return "Off"
+                }()
+
+                VStack(spacing: 4) {
+                    ZStack(alignment: .top) {
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(config.enabled ? Color.black.opacity(0.75) : Color.primary.opacity(0.05))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    .stroke(
+                                        config.enabled
+                                            ? (display.isPrimary ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.22))
+                                            : Color.primary.opacity(0.14),
+                                        lineWidth: 1
+                                    )
+                            )
+                            .frame(height: 46)
+
+                        if config.enabled {
+                            if config.displayMode == .notch {
+                                UnevenRoundedRectangle(
+                                    topLeadingRadius: 0,
+                                    bottomLeadingRadius: 3,
+                                    bottomTrailingRadius: 3,
+                                    topTrailingRadius: 0,
+                                    style: .continuous
+                                )
+                                .fill(Color.black)
+                                .overlay(
+                                    UnevenRoundedRectangle(
+                                        topLeadingRadius: 0,
+                                        bottomLeadingRadius: 3,
+                                        bottomTrailingRadius: 3,
+                                        topTrailingRadius: 0,
+                                        style: .continuous
+                                    )
+                                    .stroke(Color.white.opacity(0.28), lineWidth: 0.75)
+                                )
+                                .frame(width: 44, height: 8)
+                            } else {
+                                Capsule(style: .continuous)
+                                    .fill(Color.black)
+                                    .overlay(
+                                        Capsule(style: .continuous)
+                                            .stroke(Color.white.opacity(0.32), lineWidth: 0.75)
+                                    )
+                                    .frame(width: 42, height: 7)
+                                    .padding(.top, 4)
+                            }
+                        }
+
+                        Text(numberedDisplay)
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(config.enabled ? Color.white.opacity(0.88) : .secondary)
+                            .frame(maxHeight: .infinity, alignment: .bottom)
+                            .padding(.bottom, 6)
+                    }
+
+                    Text(captionText)
+                        .font(.caption)
+                        .foregroundStyle(config.enabled ? .primary : .secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+}
+
+private struct DisplayConfigRow: View {
+    let index: Int
+    let display: DisplayDescriptor
+    @Binding var configuration: DisplayConfiguration
+    @ObservedObject var l10n: L10n
+
+    private var displayTitle: String {
+        let numbered = String(format: l10n["display_numbered"], index + 1)
+        let displayName = display.isBuiltin ? l10n["builtin_display"] : display.name
+        return "\(numbered) — \(displayName)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle(isOn: $configuration.enabled) {
+                HStack(spacing: 10) {
+                    Image(systemName: display.isBuiltin ? "laptopcomputer" : "display")
+                        .font(.title3)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 24)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(displayTitle)
+                            .foregroundStyle(configuration.enabled ? .primary : .secondary)
+                        Text(DisplaySettingsSummaryFormatter.metadataLine(display: display, l10n: l10n))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+
+            if configuration.enabled {
+                Picker(l10n["display_mode"], selection: $configuration.displayMode) {
+                    Text(l10n["display_mode_notch"]).tag(IslandDisplayMode.notch)
+                    Text(l10n["display_mode_dynamic_island"]).tag(IslandDisplayMode.dynamicIsland)
+                }
+                .pickerStyle(.segmented)
+
+                if configuration.displayMode == .dynamicIsland {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(l10n["dynamic_island_top_offset"])
+                            Spacer()
+                            Text("\(Int(configuration.dynamicIslandTopOffset.rounded()))pt")
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                        Slider(
+                            value: Binding(
+                                get: { DynamicIslandTopOffset.clamp(configuration.dynamicIslandTopOffset) },
+                                set: { configuration.dynamicIslandTopOffset = DynamicIslandTopOffset.clamp($0.rounded()) }
+                            ),
+                            in: DynamicIslandTopOffset.min...DynamicIslandTopOffset.max
+                        )
+                        .accessibilityLabel(Text(l10n["dynamic_island_top_offset"]))
+                        .accessibilityValue(Text("\(Int(configuration.dynamicIslandTopOffset.rounded()))pt"))
+                    }
+                }
+            } else {
+                Text(String(format: l10n["display_hidden_hint"], index + 1))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 private struct AppearancePage: View {
+    var appState: AppState? = nil
     @ObservedObject private var l10n = L10n.shared
+    @ObservedObject private var screenMonitor = ScreenMonitor.shared
+    var displaysOverride: [DisplayDescriptor]? = nil
+
+    @AppStorage(SettingsKey.islandEnabled) private var islandEnabled = SettingsDefaults.islandEnabled
+    @AppStorage(SettingsKey.displayConfigurations) private var displayConfigurationsRaw = ""
+    @AppStorage(SettingsKey.displayChoice) private var displayChoice = SettingsDefaults.displayChoice
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @AppStorage(SettingsKey.musicHUDTheme) private var musicHUDTheme = SettingsDefaults.musicHUDTheme
     @AppStorage(SettingsKey.workspaceHUDTheme) private var workspaceHUDTheme = SettingsDefaults.workspaceHUDTheme
@@ -1514,18 +1788,64 @@ private struct AppearancePage: View {
     @AppStorage(SettingsKey.notchScrollVolumeControl) private var notchScrollVolumeControl = SettingsDefaults.notchScrollVolumeControl
     @AppStorage(SettingsKey.notchScrollTabSwitch) private var notchScrollTabSwitch = SettingsDefaults.notchScrollTabSwitch
 
-    private var islandDisplayMode: Binding<IslandDisplayMode> {
+    private var activeDisplays: [DisplayDescriptor] {
+        displaysOverride ?? screenMonitor.displays
+    }
+
+    private var resolvedConfigs: [String: DisplayConfiguration] {
+        DisplayConfigurationPlanner.resolvedConfigurations(
+            stored: DisplayConfigurationCodec.decode(displayConfigurationsRaw),
+            displays: activeDisplays,
+            displayChoice: displayChoice,
+            legacyMode: IslandDisplayMode.resolved(from: islandDisplayModeRaw),
+            legacyTopOffset: dynamicIslandTopOffset
+        ).configs
+    }
+
+    private func persistConfigurations(_ configs: [String: DisplayConfiguration]) {
+        displayConfigurationsRaw = DisplayConfigurationCodec.encode(configs)
+        if let primaryID = DisplayConfigurationPlanner.primaryEnabledDisplayID(
+            displays: activeDisplays,
+            configs: configs
+        ), let primaryConfig = configs[primaryID] {
+            islandDisplayModeRaw = primaryConfig.displayMode.rawValue
+            dynamicIslandTopOffset = DynamicIslandTopOffset.clamp(primaryConfig.dynamicIslandTopOffset)
+        }
+    }
+
+    private func bindingForDisplay(_ display: DisplayDescriptor) -> Binding<DisplayConfiguration> {
         Binding(
-            get: { IslandDisplayMode.resolved(from: islandDisplayModeRaw) },
-            set: { islandDisplayModeRaw = $0.rawValue }
+            get: {
+                resolvedConfigs[display.id]
+                    ?? DisplayDescriptor.defaultConfiguration(hasNotch: display.hasNotch)
+            },
+            set: { newValue in
+                var configs = resolvedConfigs
+                configs[display.id] = DisplayConfiguration(
+                    enabled: newValue.enabled,
+                    displayMode: newValue.displayMode,
+                    dynamicIslandTopOffset: newValue.dynamicIslandTopOffset
+                )
+                persistConfigurations(configs)
+            }
         )
     }
 
-    private var dynamicIslandTopOffsetBinding: Binding<Double> {
-        Binding(
-            get: { DynamicIslandTopOffset.clamp(dynamicIslandTopOffset) },
-            set: { dynamicIslandTopOffset = DynamicIslandTopOffset.clamp($0) }
-        )
+    private func ensureAtLeastOneDisplayEnabledIfNeeded() {
+        guard !activeDisplays.isEmpty else { return }
+        var configs = resolvedConfigs
+        let hasEnabled = activeDisplays.contains { configs[$0.id]?.enabled == true }
+        guard !hasEnabled else { return }
+        let targetIndex = DisplayConfigurationPlanner.legacyTargetIndex(
+            displayChoice: displayChoice,
+            displays: activeDisplays
+        ) ?? 0
+        let target = activeDisplays[targetIndex]
+        var updated = configs[target.id]
+            ?? DisplayDescriptor.defaultConfiguration(hasNotch: target.hasNotch, enabled: true)
+        updated.enabled = true
+        configs[target.id] = updated
+        persistConfigurations(configs)
     }
 
     private var notchHeightMode: Binding<NotchHeightMode> {
@@ -1542,8 +1862,85 @@ private struct AppearancePage: View {
         )
     }
 
+    @MainActor
+    private func triggerApprovalPreview(on state: AppState) {
+        let sid = "preview-approval"
+        var s = SessionSnapshot()
+        s.status = .waitingApproval
+        s.cwd = "/Users/dev/api-server"
+        s.model = "claude-opus-4-20250514"
+        s.source = "claude"
+        s.currentTool = "Bash"
+        s.toolDescription = "npm run test -- --coverage"
+        s.lastUserPrompt = "Run the test suite"
+        s.addRecentMessage(ChatMessage(isUser: true, text: "Run the test suite"))
+        s.termApp = "iTerm.app"
+
+        let applySurface = {
+            state.sessions[sid] = s
+            state.activeSessionId = sid
+            state.surface = .approvalCard(sessionId: sid)
+        }
+
+        if state.pendingPermission(forSession: sid) == nil,
+           let event = HookEvent(json: [
+               "hook_event_name": "PermissionRequest",
+               "session_id": sid,
+               "tool_name": "Bash",
+               "tool_input": [
+                   "command": "npm run test -- --coverage",
+                   "description": "Run the test suite with a coverage report"
+               ],
+               "cwd": "/Users/dev/api-server",
+               "_source": "claude"
+           ]) {
+            Task { @MainActor in
+                _ = await withCheckedContinuation { (continuation: CheckedContinuation<Data, Never>) in
+                    state.permissionQueue.append(PermissionRequest(event: event, continuation: continuation))
+                    applySurface()
+                }
+            }
+        } else {
+            applySurface()
+        }
+    }
+
     var body: some View {
         Form {
+            Section {
+                Toggle(l10n["island_enabled"], isOn: $islandEnabled)
+                .onChange(of: islandEnabled) { _, newValue in
+                    if newValue {
+                        ensureAtLeastOneDisplayEnabledIfNeeded()
+                    }
+                }
+
+                if !islandEnabled {
+                    Label(l10n["island_disabled_banner"], systemImage: "eye.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    if activeDisplays.count >= 2 {
+                        MultiDisplaySchematicRow(
+                            displays: activeDisplays,
+                            configs: resolvedConfigs,
+                            l10n: l10n
+                        )
+                    }
+
+                    ForEach(Array(activeDisplays.enumerated()), id: \.element.id) { index, display in
+                        DisplayConfigRow(
+                            index: index,
+                            display: display,
+                            configuration: bindingForDisplay(display),
+                            l10n: l10n
+                        )
+                    }
+                }
+            } header: {
+                Text(l10n["displays_section"])
+            }
+
             Section("Cyber Theme Engine") {
                 VStack(alignment: .leading, spacing: 3) {
                     Picker("Island UI Theme", selection: $islandUITheme) {
@@ -1627,37 +2024,6 @@ private struct AppearancePage: View {
 
             Section(l10n["panel"]) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Picker(l10n["display_mode"], selection: islandDisplayMode) {
-                        Text(l10n["display_mode_notch"]).tag(IslandDisplayMode.notch)
-                        Text(l10n["display_mode_dynamic_island"]).tag(IslandDisplayMode.dynamicIsland)
-                    }
-                    .pickerStyle(.segmented)
-                    Text(l10n["display_mode_desc"])
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-
-                    if islandDisplayMode.wrappedValue == .dynamicIsland {
-                        HStack {
-                            Text(l10n["dynamic_island_top_offset"])
-                            Spacer()
-                            Text("\(Int(dynamicIslandTopOffsetBinding.wrappedValue.rounded()))pt")
-                                .foregroundStyle(.secondary)
-                                .monospacedDigit()
-                        }
-                        .padding(.top, 4)
-                        Slider(
-                            value: dynamicIslandTopOffsetBinding,
-                            in: DynamicIslandTopOffset.min...DynamicIslandTopOffset.max,
-                            step: DynamicIslandTopOffset.step
-                        )
-                        .accessibilityLabel(Text(l10n["dynamic_island_top_offset"]))
-                        .accessibilityValue(Text("\(Int(dynamicIslandTopOffsetBinding.wrappedValue.rounded()))pt"))
-                        Text(l10n["dynamic_island_top_offset_desc"])
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                VStack(alignment: .leading, spacing: 4) {
                     HStack {
                         Text(l10n["notch_animation_speed"])
                         Spacer()
@@ -1723,67 +2089,146 @@ private struct AppearancePage: View {
 
                     Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                         GridRow {
-                            Button(action: {
-                                SystemMonitorManager.shared.triggerChargingBanner()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "battery.100.bolt")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 0.19, green: 0.82, blue: 0.35))
-                                    Text("Test MagSafe Charging")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "battery.100.bolt",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test MagSafe Charging"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .charging(kind: .magSafe, watts: 140, timeToFullMinutes: 28),
+                                    previewBatteryLevel: 54
+                                )
                             }
-                            .buttonStyle(.bordered)
 
-                            Button(action: {
-                                PrayerTimeManager.shared.triggerTestBanner()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "moon.stars.fill")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83))
-                                    Text("Test Prayer Reminder")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
+                            notificationPreviewButton(
+                                icon: "moon.stars.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Prayer (Maghrib)"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .maghrib)
                             }
-                            .buttonStyle(.bordered)
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sunrise.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Subuh"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .subuh)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "sun.max.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Dzuhur"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .dzuhur)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sun.haze.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Ashar"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .ashar)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "moon.fill",
+                                color: Color(red: 0.0, green: 0.96, blue: 0.83),
+                                title: "Test Isya"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestBanner(prayer: .isya)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "cable.connector",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test USB-C Charging"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .charging(kind: .usbC, watts: 65, timeToFullMinutes: 42),
+                                    previewBatteryLevel: 48
+                                )
+                            }
+
+                            notificationPreviewButton(
+                                icon: "pause.circle.fill",
+                                color: Color(red: 1.0, green: 0.72, blue: 0.12),
+                                title: "Test Charging On Hold"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .onHold(kind: .magSafe),
+                                    previewBatteryLevel: 80
+                                )
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "checkmark.circle.fill",
+                                color: Color(red: 0.19, green: 0.82, blue: 0.35),
+                                title: "Test Fully Charged"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .fullyCharged(kind: .magSafe),
+                                    previewBatteryLevel: 100
+                                )
+                            }
+
+                            notificationPreviewButton(
+                                icon: "battery.25",
+                                color: Color(red: 1.0, green: 0.36, blue: 0.25),
+                                title: "Test Low Battery"
+                            ) {
+                                SystemMonitorManager.shared.triggerChargingBanner(
+                                    previewState: .lowBattery(percent: 15),
+                                    previewBatteryLevel: 15
+                                )
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "speaker.wave.2.fill",
+                                color: Color(red: 1.0, green: 0.8, blue: 0.15),
+                                title: "Test Volume HUD"
+                            ) {
+                                SystemVolumeManager.shared.presentHUD()
+                            }
+
+                            notificationPreviewButton(
+                                icon: "music.note",
+                                color: Color(red: 1.0, green: 0.16, blue: 0.53),
+                                title: "Test Track Auto-Expand"
+                            ) {
+                                NowPlayingManager.shared.triggerTestTrackChange()
+                            }
                         }
 
                         GridRow {
                             Button(action: {
-                                SystemVolumeManager.shared.presentHUD()
+                                if let appState {
+                                    triggerApprovalPreview(on: appState)
+                                }
                             }) {
                                 HStack(spacing: 6) {
-                                    Image(systemName: "speaker.wave.2.fill")
+                                    Image(systemName: "checkmark.shield.fill")
                                         .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 1.0, green: 0.8, blue: 0.15))
-                                    Text("Test Volume HUD")
+                                        .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.20))
+                                    Text("Test Approval Modal")
                                         .font(.system(size: 11, weight: .medium))
                                 }
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3.5)
                             }
                             .buttonStyle(.bordered)
-
-                            Button(action: {
-                                NowPlayingManager.shared.triggerTestTrackChange()
-                            }) {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "music.note")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundStyle(Color(red: 1.0, green: 0.16, blue: 0.53))
-                                    Text("Test Track Auto-Expand")
-                                        .font(.system(size: 11, weight: .medium))
-                                }
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3.5)
-                            }
-                            .buttonStyle(.bordered)
+                            .disabled(appState == nil)
                         }
                     }
                     .padding(.top, 4)
@@ -1807,6 +2252,26 @@ private struct AppearancePage: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    private func notificationPreviewButton(
+        icon: String,
+        color: Color,
+        title: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(color)
+                Text(title)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3.5)
+        }
+        .buttonStyle(.bordered)
     }
 }
 
