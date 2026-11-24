@@ -21,9 +21,11 @@
 //! that backfill lands. Their Rust types carry no `Serialize`, and growing one just to
 //! write a cache that is about to be recomputed is the wrong trade.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::reduce::{SessionSnapshot, Timestamp};
 use crate::time::{format_iso8601, parse_iso8601};
@@ -129,6 +131,11 @@ pub struct PersistedSession {
     pub hermes_chat_elsewhere: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
+    /// Fields written by the macOS build that this port does not manage. They
+    /// must survive a save, or a 2-second timer silently deletes the user's
+    /// agentTasks/recap/title-source data (#339).
+    #[serde(default, flatten)]
+    pub extra: BTreeMap<String, Value>,
 }
 
 /// Whether a card is written out for the next launch.
@@ -156,6 +163,7 @@ fn option(text: Option<&str>) -> Option<String> {
 /// The row written for one session.
 pub fn to_persisted(session_id: &str, s: &SessionSnapshot) -> PersistedSession {
     PersistedSession {
+        extra: BTreeMap::new(),
         session_id: session_id.to_owned(),
         cwd: option(s.cwd.as_deref()),
         source: s.source.clone(),
@@ -263,6 +271,15 @@ pub fn decode(text: &str) -> Vec<PersistedSession> {
         .collect()
 }
 
+/// The first index that names the session wins, matching
+/// `SessionTitleStore.codexThreadName(sessionId:)`: each Codex root keeps its
+/// own `session_index.jsonl` (#339).
+pub fn codex_thread_name_from_roots(indexes: &[&str], session_id: &str) -> Option<String> {
+    indexes
+        .iter()
+        .find_map(|index| codex_thread_name(index, session_id))
+}
+
 /// Where `sessions.json` lives: `~/.morrow`, unless an override names another folder.
 ///
 /// The override and the legacy folder are injected rather than read from the process,
@@ -348,15 +365,52 @@ pub fn file_path(dir: &Path) -> PathBuf {
 pub fn save(dir: &Path, list: &[PersistedSession]) {
     let _ = std::fs::create_dir_all(dir);
     let path = file_path(dir);
-    if std::fs::write(&path, encode(list)).is_ok() {
+    let prior = load(dir);
+    let merged: Vec<PersistedSession> = list
+        .iter()
+        .map(
+            |row| match prior.iter().find(|old| old.session_id == row.session_id) {
+                Some(old) => merge_unmanaged(row, old),
+                None => row.clone(),
+            },
+        )
+        .collect();
+    if std::fs::write(&path, encode(&merged)).is_ok() {
         restrict(&path);
     }
 }
 
+/// Keep anything the fresh row leaves unset (or never declares) from the row
+/// already on disk. Working on the JSON form covers both declared Option fields
+/// and fields only the macOS build knows about.
+fn merge_unmanaged(fresh: &PersistedSession, old: &PersistedSession) -> PersistedSession {
+    let Ok(mut value) = serde_json::to_value(fresh) else {
+        return fresh.clone();
+    };
+    let Ok(previous) = serde_json::to_value(old) else {
+        return fresh.clone();
+    };
+    if let (Some(current), Some(previous)) = (value.as_object_mut(), previous.as_object()) {
+        for (key, old_value) in previous {
+            let unset = current.get(key).is_none_or(Value::is_null);
+            if unset && !old_value.is_null() {
+                current.insert(key.clone(), old_value.clone());
+            }
+        }
+    }
+    serde_json::from_value(value).unwrap_or_else(|_| fresh.clone())
+}
+
 /// Read the list. A missing or unreadable file is an empty list, not an error.
 pub fn load(dir: &Path) -> Vec<PersistedSession> {
-    match std::fs::read_to_string(file_path(dir)) {
-        Ok(text) => decode(&text),
+    let path = file_path(dir);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            // Restore the private-file promise too: a `sessions.json` copied in
+            // from another build (or an older install) may be world-readable.
+            restrict(&path);
+            decode(&text)
+        }
         Err(_) => Vec::new(),
     }
 }
@@ -582,6 +636,52 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
     }
 
+    #[test]
+    fn a_save_keeps_fields_the_mac_build_wrote() {
+        let root = tempdir("preserve");
+        std::fs::write(
+            file_path(&root),
+            r#"[{"sessionId":"a","startTime":"2026-01-01T00:00:00Z","lastActivity":"2026-01-01T00:00:00Z","sessionTitleSource":"claudeCustomTitle","agentTasks":{"open":3},"recap":{"text":"user note"}}]"#,
+        )
+        .expect("a macOS-written file");
+        save(&root, std::slice::from_ref(&to_persisted("a", &snapshot())));
+
+        let text = std::fs::read_to_string(file_path(&root)).expect("the saved file");
+        assert!(text.contains("agentTasks"), "{text}");
+        assert!(text.contains("recap"), "{text}");
+        let back = load(&root);
+        assert_eq!(back.len(), 1);
+        assert_eq!(back[0].extra["agentTasks"]["open"], 3);
+        assert_eq!(back[0].extra["recap"]["text"], "user note");
+        assert_eq!(
+            back[0].session_title_source,
+            Some(SessionTitleSource::ClaudeCustomTitle)
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn loading_a_world_readable_file_restores_private_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempdir("restore-perms");
+        std::fs::write(file_path(&root), "[]\n").expect("a file");
+        std::fs::set_permissions(file_path(&root), std::fs::Permissions::from_mode(0o644))
+            .expect("world readable");
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o755))
+            .expect("world readable dir");
+        assert!(load(&root).is_empty());
+        let mode = std::fs::metadata(file_path(&root))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
+        let dir_mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
+        assert_eq!(dir_mode, 0o700);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_file_is_the_users_alone() {
@@ -597,6 +697,21 @@ mod tests {
         let dir_mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_title_is_resolved_from_the_first_index_that_names_it() {
+        let primary = "{\"id\":\"b\",\"thread_name\":\"from-primary\"}\n";
+        let secondary = "{\"id\":\"a\",\"thread_name\":\"from-secondary\"}\n";
+        assert_eq!(
+            codex_thread_name_from_roots(&[primary, secondary], "a"),
+            Some("from-secondary".to_owned())
+        );
+        assert_eq!(
+            codex_thread_name_from_roots(&[primary, secondary], "b"),
+            Some("from-primary".to_owned())
+        );
+        assert_eq!(codex_thread_name_from_roots(&[primary], "a"), None);
     }
 
     #[test]
