@@ -625,9 +625,8 @@ struct NotchPanelView: View {
         }
         if signals.isPlaying || nowPlaying.isPlaying {
             if isThinking && !isConnectedChinLyricActive {
-                // Keep Thinking + Music wide enough for the music title even when a short tool name narrows the left wing.
-                let minMusicTitleWing: CGFloat = isPixel ? 136 : 132
-                return max(effectiveNaturalLeftWidth, minMusicTitleWing) + badgeReserve
+                // Keep Thinking + Music locked to the exact same left/right wing width as Thinking without Music.
+                return effectiveNaturalLeftWidth + badgeReserve
             }
             let baseMusic: CGFloat = isThinking ? 148 : 50
             let musicBaseline = baseMusic + badgeReserve
@@ -792,12 +791,6 @@ struct NotchPanelView: View {
                 asymmetricEnabled: true
             )
         }
-        if signals.showChargingBanner && !appState.surface.isExpanded {
-            return min(max(440, collapsedNotchGapWidth + symmetricWingWidth * 2), maxPanelWidth)
-        }
-        if signals.showMiniPeekBanner && !appState.surface.isExpanded {
-            return min(max(420, collapsedNotchGapWidth + symmetricWingWidth * 2), maxPanelWidth)
-        }
         if showIdleIndicator {
             return CompactNotchWingGeometry.centerShift(
                 leftWidth: idleLeftIndicatorWingWidth,
@@ -883,9 +876,11 @@ struct NotchPanelView: View {
             return min(max(baseWidth, minWidth), maxPanelWidth)
         }
         if isToastOnly {
-            let targetWidth: CGFloat = signals.showChargingBanner ? 440 : 420
-            let requiredActiveBarWidth = collapsedNotchGapWidth + symmetricWingWidth * 2
-            return min(max(targetWidth, requiredActiveBarWidth), maxPanelWidth)
+            if displayMode == .dynamicIsland && !hasNotch {
+                return min(280, maxPanelWidth)
+            }
+            let requiredActiveBarWidth = nw + symmetricWingWidth * 2
+            return min(max(280, requiredActiveBarWidth), maxPanelWidth)
         }
         if showIdleIndicator {
             if displayMode == .dynamicIsland && !hasNotch {

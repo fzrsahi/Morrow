@@ -554,7 +554,12 @@ struct CyberMusicWingView: View {
     }
 
     private var isCompactNarrow: Bool {
-        !isEnlarged && !isBilateralWingsLyricActive && ((maxContentWidth ?? 999) < 32 || (wingWidth > 0 && wingWidth < 42))
+        guard !isEnlarged && !isBilateralWingsLyricActive else { return false }
+        if (maxContentWidth ?? 999) < 32 || (wingWidth > 0 && wingWidth < 42) { return true }
+        // Thinking with a short tool keeps the symmetric wing narrow. Compact the
+        // album art, spectrum and spacing so the marquee title fits the existing
+        // width budget instead of widening the wing (spec §3).
+        return isThinking && (maxContentWidth ?? 999) < 80
     }
 
     /// Maximum title width permitted inside the right wing without pushing adjacent content into the notch.
