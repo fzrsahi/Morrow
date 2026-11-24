@@ -1058,6 +1058,16 @@ pub mod opencode {
     /// writes its first row after the process is already running.
     pub const START_SLACK_MS: i64 = 10_000;
 
+    /// The answers a recent-session lookup can have. "No session" and "schema
+    /// I did not expect" must not collapse into the same `None`: the first
+    /// says the agent is not running, the second says this reader cannot tell.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub enum RecentSessionLookup {
+        Found(SessionHit),
+        NoSession,
+        UnexpectedSchema,
+    }
+
     /// `findRecentOpenCodeSession`: the newest session that belongs to `cwd`.
     ///
     /// A session counts when its own `directory` matches **or** one of its
@@ -1066,20 +1076,40 @@ pub mod opencode {
     /// sessions (`parent_id` set), which MiMo Code spawns in the same directory
     /// while a subagent runs: it is then the most recently updated row and would
     /// otherwise win, though it is never the CLI's own.
+    ///
+    /// An unexpected schema answers `None` here; use
+    /// [`find_recent_session_reporting`] to tell it from "no session".
     pub fn find_recent_session(
         connection: &Connection,
         cwd: &str,
         started_at_ms: Option<i64>,
         root_sessions_only: bool,
     ) -> Option<SessionHit> {
+        match find_recent_session_reporting(connection, cwd, started_at_ms, root_sessions_only) {
+            RecentSessionLookup::Found(hit) => Some(hit),
+            RecentSessionLookup::NoSession | RecentSessionLookup::UnexpectedSchema => None,
+        }
+    }
+
+    /// `find_recent_session`, also saying when the store's schema is not one
+    /// this reader understands — as opposed to "no session matched".
+    pub fn find_recent_session_reporting(
+        connection: &Connection,
+        cwd: &str,
+        started_at_ms: Option<i64>,
+        root_sessions_only: bool,
+    ) -> RecentSessionLookup {
         let columns = crate::sqlite::table_columns(connection, "session");
-        if columns.is_empty() {
-            return None;
+        // These two are read unconditionally. A fork that renamed either would
+        // otherwise turn a SQL error into "no sessions", which looks exactly
+        // like "the agent is not running".
+        if !columns.iter().any(|column| column == "id")
+            || !columns.iter().any(|column| column == "time_updated")
+        {
+            return RecentSessionLookup::UnexpectedSchema;
         }
         // Conditions are collected and joined rather than interpolated as
-        // fragments: an empty fragment next to `AND` is a syntax error, and a
-        // query that fails to prepare answers "no sessions" — which looks exactly
-        // like "the agent is not running".
+        // fragments: an empty fragment next to `AND` is a syntax error.
         let mut conditions: Vec<&str> = Vec::new();
         // A fork that has no `parent_id` column has no child sessions either.
         if root_sessions_only && columns.iter().any(|column| column == "parent_id") {
@@ -1088,12 +1118,19 @@ pub mod opencode {
         if columns.iter().any(|column| column == "time_archived") {
             conditions.push("time_archived IS NULL");
         }
-        let mine = "(directory = ?1
-                 OR EXISTS (
-                     SELECT 1 FROM message m
-                     WHERE m.session_id = session.id
-                       AND json_extract(m.data, '$.path.cwd') = ?2
-                 ))";
+        // `directory` is one of the columns the forks disagree about. When a
+        // fork renamed it, the `message.data → path.cwd` arm still finds the
+        // session and needs no such column.
+        let by_message_cwd = "EXISTS (
+                              SELECT 1 FROM message m
+                              WHERE m.session_id = session.id
+                                AND json_extract(m.data, '$.path.cwd') = ?2
+                          )";
+        let mine = if columns.iter().any(|column| column == "directory") {
+            format!("(directory = ?1 OR {by_message_cwd})")
+        } else {
+            format!("({by_message_cwd})")
+        };
         let sql = if conditions.is_empty() {
             format!(
                 "SELECT id, time_updated FROM session WHERE {mine}
@@ -1106,8 +1143,12 @@ pub mod opencode {
                 conditions.join(" AND ")
             )
         };
-        let mut statement = connection.prepare(&sql).ok()?;
-        let mut rows = statement.query([cwd, cwd]).ok()?;
+        let Ok(mut statement) = connection.prepare(&sql) else {
+            return RecentSessionLookup::UnexpectedSchema;
+        };
+        let Ok(mut rows) = statement.query([cwd, cwd]) else {
+            return RecentSessionLookup::UnexpectedSchema;
+        };
         let floor = started_at_ms.map(|start| start - START_SLACK_MS);
         while let Ok(Some(row)) = rows.next() {
             let Ok(session_id) = row.get::<_, String>(0) else {
@@ -1119,12 +1160,12 @@ pub mod opencode {
             if floor.is_some_and(|floor| updated_ms < floor) {
                 continue;
             }
-            return Some(SessionHit {
+            return RecentSessionLookup::Found(SessionHit {
                 session_id,
                 modified_ms: updated_ms,
             });
         }
-        None
+        RecentSessionLookup::NoSession
     }
 
     /// Every stored session worth showing, newest first — the **backfill** query.
@@ -1298,7 +1339,7 @@ pub mod opencode {
 mod opencode_tests {
     use rusqlite::Connection;
 
-    use super::opencode;
+    use super::opencode::{self, RecentSessionLookup};
     use crate::sqlite::open_read_only;
 
     /// A store shaped like OpenCode's, filled by `rows`, then opened the way
@@ -1587,6 +1628,65 @@ mod opencode_tests {
             opencode::find_recent_session(&connection, "/home/dev/project", None, true)
                 .map(|hit| hit.session_id),
             Some("s".to_owned())
+        );
+    }
+
+    /// A fork that renamed `directory` must still be found through the cwd its
+    /// messages recorded. Using the column unconditionally made `prepare` fail
+    /// and `.ok()?` reported "no session" for a running agent.
+    #[test]
+    fn a_fork_without_the_directory_column_still_matches_message_cwd() {
+        let store = Store::new(
+            "fork-no-directory",
+            "CREATE TABLE session (id TEXT PRIMARY KEY, time_updated INTEGER);
+             CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);
+             INSERT INTO session VALUES ('s', 1000);
+             INSERT INTO message VALUES ('m', 's', '{\"path\":{\"cwd\":\"/home/dev/project\"}}');",
+        );
+        let connection = store.open();
+        assert_eq!(
+            opencode::find_recent_session(&connection, "/home/dev/project", None, false)
+                .map(|hit| hit.session_id),
+            Some("s".to_owned())
+        );
+        assert_eq!(
+            opencode::find_recent_session_reporting(&connection, "/home/dev/project", None, false),
+            RecentSessionLookup::Found(opencode::SessionHit {
+                session_id: "s".to_owned(),
+                modified_ms: 1_000,
+            })
+        );
+    }
+
+    /// "No session" and "schema I did not expect" are different answers: the
+    /// first means the agent is not running, the second that this reader cannot
+    /// tell.
+    #[test]
+    fn an_unexpected_schema_is_not_the_same_as_no_session() {
+        let store = Store::new(
+            "renamed-columns",
+            "CREATE TABLE session (key TEXT, updated INTEGER, directory TEXT);
+             CREATE TABLE message (id TEXT, session_id TEXT, data TEXT);",
+        );
+        assert_eq!(
+            opencode::find_recent_session_reporting(
+                &store.open(),
+                "/home/dev/project",
+                None,
+                false
+            ),
+            RecentSessionLookup::UnexpectedSchema
+        );
+
+        let normal = Store::new("no-match", SCHEMA);
+        assert_eq!(
+            opencode::find_recent_session_reporting(
+                &normal.open(),
+                "/home/dev/project",
+                None,
+                false
+            ),
+            RecentSessionLookup::NoSession
         );
     }
 }

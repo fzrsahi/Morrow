@@ -10,9 +10,29 @@ import type { Card } from './types';
 /**
  * macOS `FollowUpReminderController.intervalChoices` is [0, 1, 2, 3, 5]
  * minutes, where 0 is off. One minute is the shortest enabled choice and the
- * timeout a waiting request is first re-announced at.
+ * default timeout a waiting request is first re-announced at.
  */
+export const FOLLOW_UP_CHOICES_MINUTES = [0, 1, 2, 3, 5] as const;
+export const DEFAULT_FOLLOW_UP_MINUTES = 1;
+export const SETTINGS_KEY_FOLLOW_UP_MINUTES = 'followUpReminderMinutes';
 export const FOLLOW_UP_MS = 60_000;
+
+/** Milliseconds for a stored choice, or `null` when reminders are off. */
+export function followUpIntervalMs(minutes: number): number | null {
+  if (!FOLLOW_UP_CHOICES_MINUTES.includes(minutes as (typeof FOLLOW_UP_CHOICES_MINUTES)[number])) {
+    return DEFAULT_FOLLOW_UP_MINUTES * FOLLOW_UP_MS;
+  }
+  return minutes === 0 ? null : minutes * FOLLOW_UP_MS;
+}
+
+/** The stored setting as one of the offered choices, defaulting to 1 minute. */
+export function followUpMinutesFromSettings(value: unknown): number {
+  if (value === null || value === undefined || value === '') return DEFAULT_FOLLOW_UP_MINUTES;
+  const minutes = typeof value === 'number' ? value : Number(value);
+  return FOLLOW_UP_CHOICES_MINUTES.includes(minutes as (typeof FOLLOW_UP_CHOICES_MINUTES)[number])
+    ? minutes
+    : DEFAULT_FOLLOW_UP_MINUTES;
+}
 
 /** What the shell and the ambient poll say about delivering a reminder now.
  *  `locked` and `quiet` are the ambient scene's own fields, not a second
@@ -53,6 +73,28 @@ function content(card: Card): Reminder {
 
 export class FollowUpReminders {
   private entries = new Map<number, Entry>();
+  private intervalMs: number | null = FOLLOW_UP_MS;
+
+  constructor(minutes: number = DEFAULT_FOLLOW_UP_MINUTES) {
+    this.intervalMs = followUpIntervalMs(minutes);
+  }
+
+  /** #201 PR203 review: honour the stored 0/1/2/3/5-minute choice. Changing
+   *  it restarts every wait and clears already-sent bells, like Swift's
+   *  `FollowUpReminderController.settingsChanged()`. `now` is injected so the
+   *  policy stays testable without a wall clock. */
+  configure(minutes: number, now: number): void {
+    this.intervalMs = followUpIntervalMs(minutes);
+    for (const entry of this.entries.values()) {
+      entry.waitingSince = now;
+      entry.sent = false;
+    }
+  }
+
+  /** True when reminders are on (a choice other than 0). */
+  get enabled(): boolean {
+    return this.intervalMs !== null;
+  }
 
   /** Reconcile with the feed's held requests. A new id starts a new wait;
    *  an id that is gone was answered or dropped, so its scheduler stops and
@@ -75,10 +117,10 @@ export class FollowUpReminders {
    *  Held-back requests keep their wait and are delivered on the first eligible
    *  pass after the hold ends — the macOS `.deferred` → `.catchUp` path. */
   collect(now: number, room: ReminderRoom): Reminder[] {
-    if (!eligible(room)) return [];
+    if (!eligible(room) || this.intervalMs === null) return [];
     const due: Reminder[] = [];
     for (const entry of this.entries.values()) {
-      if (entry.sent || now - entry.waitingSince < FOLLOW_UP_MS) continue;
+      if (entry.sent || now - entry.waitingSince < this.intervalMs) continue;
       entry.sent = true;
       due.push(content(entry.card));
     }
@@ -88,11 +130,11 @@ export class FollowUpReminders {
   /** Absolute time of the next wake-up, or null when there is nothing to
    *  schedule (no wait left, all sent, or the room is held back). */
   nextDue(now: number, room: ReminderRoom): number | null {
-    if (!eligible(room)) return null;
+    if (!eligible(room) || this.intervalMs === null) return null;
     let earliest: number | null = null;
     for (const entry of this.entries.values()) {
       if (entry.sent) continue;
-      const due = entry.waitingSince + FOLLOW_UP_MS;
+      const due = entry.waitingSince + this.intervalMs;
       if (earliest === null || due < earliest) earliest = due;
     }
     return earliest === null ? null : Math.max(now, earliest);
