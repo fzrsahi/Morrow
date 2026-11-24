@@ -36,6 +36,47 @@ export function readout(volume: Volume): string {
   return volume.muted ? 'MUTE' : `${volume.percent}%`;
 }
 
+/** #239 AC 2 — the meter is now an input, not only a reading.
+ *
+ *  Clicking segment `index` asks for the level that lights exactly that many
+ *  segments, which is the inverse of `litCount` and must stay one: a click that
+ *  asked for 8 % on the first segment would light it and five of its neighbours
+ *  read differently. The invariant is a test, not an observation. */
+export function percentForSegment(index: number): number {
+  const clamped = Math.min(VOLUME_SEGMENTS - 1, Math.max(0, Math.round(index)));
+  return Math.round(((clamped + 1) / VOLUME_SEGMENTS) * 100);
+}
+
+/** Arrow-key step on the meter (5 %, like a desktop mixer). `null` for a key
+ *  that is not the meter's business, so the caller can let it through. */
+export function percentForKey(percent: number, key: string): number | null {
+  const from = Math.min(100, Math.max(0, Math.round(percent)));
+  switch (key) {
+    case 'ArrowRight':
+    case 'ArrowUp':
+      return Math.min(100, from + 5);
+    case 'ArrowLeft':
+    case 'ArrowDown':
+      return Math.max(0, from - 5);
+    case 'Home':
+      return 0;
+    case 'End':
+      return 100;
+    default:
+      return null;
+  }
+}
+
+/** What a click on the meter does to the shell, in order.
+ *
+ *  Setting a level while muted also unmutes. Neither adapter clears the flag
+ *  itself (`wpctl set-volume` and `IAudioEndpointVolume` both leave it alone),
+ *  so without this the click would draw a dark meter over sound that stays
+ *  silent — the user would click again, and again. */
+export function setVolumePlan(muted: boolean, percent: number): { unmuteFirst: boolean; percent: number } {
+  return { unmuteFirst: muted, percent: Math.min(100, Math.max(0, Math.round(percent))) };
+}
+
 /** A device without a volume adapter must not get a HUD that cannot answer a
  *  click. Only a plain `Supported` row counts; `Degraded` still hides it. */
 export function volumeSupported(rows: CapabilityRow[]): boolean {

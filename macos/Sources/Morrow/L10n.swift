@@ -43,6 +43,9 @@ final class L10n: ObservableObject {
         "tr": tr,
     ]
 
+    // The tables live in L10n+Strings.swift, generated from
+    // shared/contract/strings/*.json (#239 AC 4). Editing a string means editing
+    // that JSON and running ./scripts/ci/strings-codegen.sh.
     private static let en: [String: String] = [
         // Settings pages
         "general": "General",
