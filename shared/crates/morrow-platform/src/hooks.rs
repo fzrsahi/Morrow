@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use morrow_core::installer::claude_hooks;
 use morrow_core::installer::codex_config;
-use morrow_core::installer::targets::{self, Target};
+use morrow_core::installer::targets::{self, Root, Target};
 
 /// Bumped when the script below changes, so an install from an older build is
 /// rewritten instead of left in place (`hookScriptVersion`).
@@ -92,7 +92,7 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
     targets::TARGETS
         .iter()
         .map(|target| {
-            let path = paths.home.join(target.path);
+            let path = target.file(&paths.home, grok_home_env);
             let text = read_text(&path).ok().flatten();
             TargetStatus {
                 source: target.source,
@@ -109,7 +109,9 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
 
 /// The directory each CLI proves itself by. Codex keeps `~/.codex`, Gemini
 /// `~/.gemini`; a file the user has never run their CLI for is ours to leave
-/// alone.
+/// alone. A nested path is allowed: Trae CLI Next owns `~/.trae/cli`, while the
+/// older CLI only creates `~/.trae`, so sharing that directory would detect a
+/// CLI that is not installed.
 const CLI_DIRS: &[(&str, &str)] = &[
     ("codex", ".codex"),
     ("gemini", ".gemini"),
@@ -128,6 +130,10 @@ const CLI_DIRS: &[(&str, &str)] = &[
     ("antigravity", ".antigravity"),
     ("workbuddy", ".workbuddy"),
     ("qwen", ".qwen"),
+    // #234 batch 2. Grok is deliberately absent: it hangs from `$GROK_HOME`, and a
+    // target with its own root proves itself by that root existing.
+    // `~/.trae` alone is the older CLI's marker; Next lives one level deeper.
+    ("traecli-next", ".trae/cli"),
 ];
 
 /// Install or repair one target with the Unix hook command.
@@ -159,7 +165,7 @@ pub fn install_target_with(
     if !cli_dir_exists(paths, target) {
         return Ok(None);
     }
-    let path = paths.home.join(target.path);
+    let path = target.file(&paths.home, grok_home_env);
     let existing = read_text(&path)?;
     let outcome = targets::install(target, existing.as_deref(), command)
         .ok_or_else(|| Error::UnparseableSettings(path.clone()))?;
@@ -210,7 +216,7 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
             format!("no hook target named {source}"),
         )));
     };
-    let path = paths.home.join(target.path);
+    let path = target.file(&paths.home, grok_home_env);
     let Some(existing) = read_text(&path)? else {
         return Ok(None);
     };
@@ -225,10 +231,22 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
 }
 
 fn cli_dir_exists(paths: &Paths, target: &Target) -> bool {
+    // A target that does not hang from the home proves itself by its **root**
+    // existing: `$GROK_HOME` is the store, and there is no fixed directory name to
+    // look for beside it.
+    if target.root != Root::Home {
+        return target.root.directory(&paths.home, grok_home_env).is_dir();
+    }
     CLI_DIRS
         .iter()
         .find(|(source, _)| *source == target.source)
         .is_none_or(|(_, directory)| paths.home.join(directory).is_dir())
+}
+
+/// The one environment lookup the target table needs, in one place so it can be
+/// read, and so `Root` itself stays a pure function (#234).
+fn grok_home_env(name: &str) -> Option<String> {
+    std::env::var(name).ok()
 }
 
 /// What an install or uninstall did.
