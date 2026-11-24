@@ -263,6 +263,26 @@ fn missing_credentials_are_unsupported_rather_than_promised() {
 }
 
 #[test]
+fn a_present_credentials_file_makes_the_row_supported() {
+    // #306: the row is backed by `quota::read_credentials`. With the file it
+    // reads in place, the reader exists and the row honestly says Supported.
+    let root = temp("creds-supported");
+    let path = root.join(".credentials.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"{"claudeAiOauth":{"accessToken":"not-read-here"}}"#,
+    )
+    .unwrap();
+    let mut env = x11(root);
+    env.claude_credentials = path;
+    assert_eq!(
+        Feature::ClaudeCredentials.probe(&env),
+        Capability::Supported
+    );
+}
+
+#[test]
 fn dragging_the_island_is_a_capability_not_a_silent_failure() {
     // X11 and Windows let the app place its own window; Wayland hands that to
     // the compositor, so the drag is stated as unavailable in Settings (#196).
