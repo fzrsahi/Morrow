@@ -16,6 +16,7 @@ export type SettingsPageId =
   | 'shortcuts'
   | 'agents'
   | 'music'
+  | 'quota'
   | 'behavior'
   | 'hooks'
   | 'capabilities'
@@ -44,6 +45,7 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
     items: [
       { id: 'agents', label: 'Agents', icon: 'agents', available: false },
       { id: 'music', label: 'Music', icon: 'music', available: false },
+      { id: 'quota', label: 'Claude quota', icon: 'workspace', available: true },
     ],
   },
   {
@@ -71,6 +73,8 @@ export const SETTINGS_KEYS = {
   /** #185: the filter choice and row density live in the same document. */
   sessionFilter: 'sessionFilter',
   sessionDensity: 'sessionDensity',
+  /** #308: same key and raw values as Swift `SettingsKey.claudeQuotaChip`. */
+  quotaChip: 'claudeQuotaChip',
 } as const;
 
 export type AppearanceSettings = {
@@ -175,6 +179,27 @@ export function sessionFilterFromSettings(value: unknown): SessionFilter {
 /// that build on it; a fresh install uses the 34 pt compact rows.
 export function sessionDensityFromSettings(value: unknown): SessionDensity {
   return chosen((object(value) ?? {})[SETTINGS_KEYS.sessionDensity], DENSITIES, 'compact');
+}
+
+/** #308 — Swift `ClaudeQuotaChipMode`'s raw values. */
+export type QuotaMode = 'off' | 'auto' | 'session' | 'weeklyAll' | 'weeklyScoped';
+
+export const QUOTA_MODES: readonly QuotaMode[] = [
+  'off',
+  'auto',
+  'session',
+  'weeklyAll',
+  'weeklyScoped',
+];
+
+/** A missing or unknown chip mode means Swift's `auto` default. */
+export function quotaModeFromSettings(value: unknown): QuotaMode {
+  return parseQuotaMode((object(value) ?? {})[SETTINGS_KEYS.quotaChip]);
+}
+
+/** Validate the raw value from `quota_settings_load` before the picker draws it. */
+export function parseQuotaMode(value: unknown): QuotaMode {
+  return chosen(value, QUOTA_MODES, 'auto');
 }
 
 export type DescribedCapability = {

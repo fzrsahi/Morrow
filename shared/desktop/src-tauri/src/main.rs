@@ -14,6 +14,7 @@ mod peek_window;
 mod permissions;
 mod position;
 mod prune;
+mod quota;
 mod sessions;
 mod settings;
 mod settings_window;
@@ -111,6 +112,7 @@ fn main() -> ExitCode {
 
     let hooks_site = hooks::site();
     let position = position::Store::new(&hooks_site.paths.codeisland_dir);
+    let quota = quota::new_state(&hooks_site);
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
     Feed::spawn_pruner(Arc::clone(&feed));
@@ -126,6 +128,7 @@ fn main() -> ExitCode {
         .manage(hooks_site)
         .manage(Smoke(smoke))
         .manage(position)
+        .manage(quota)
         .invoke_handler(tauri::generate_handler![
             subscribe,
             set_probes_active,
@@ -158,6 +161,9 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            quota::quota_snapshot,
+            quota::quota_settings_load,
+            quota::quota_settings_set,
             settings_window::open_settings,
             peek_window::close_peek,
             music::music_track,
