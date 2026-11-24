@@ -1,4 +1,5 @@
 import AppKit
+import MorrowCore
 
 extension UserDefaults {
     @objc dynamic var hideWhenNoSession: Bool {
@@ -7,12 +8,31 @@ extension UserDefaults {
 }
 
 @MainActor
-final class StatusItemController: NSObject {
+final class StatusItemController: NSObject, NSMenuDelegate {
     static let shared = StatusItemController()
 
     private var statusItem: NSStatusItem?
     private var observation: NSKeyValueObservation?
+    private var toggleIslandItem: NSMenuItem?
+    private var settingsItem: NSMenuItem?
+    private var quitItem: NSMenuItem?
     private lazy var menu: NSMenu = makeMenu()
+
+    var displaysProvider: () -> [DisplayDescriptor] = { ScreenDetector.descriptors() }
+    var statusMenuForTesting: NSMenu { menu }
+
+    static func activeDisplayCount(
+        displays: [DisplayDescriptor],
+        configs: [String: DisplayConfiguration]
+    ) -> Int {
+        displays.filter { configs[$0.id]?.enabled == true }.count
+    }
+
+    private func isIslandEffectivelyActive(displays: [DisplayDescriptor]) -> Bool {
+        guard SettingsManager.shared.islandEnabled else { return false }
+        let configs = SettingsManager.shared.displayConfigurations(for: displays)
+        return Self.activeDisplayCount(displays: displays, configs: configs) > 0
+    }
 
     func startObserving() {
         syncVisibility()
@@ -82,6 +102,19 @@ final class StatusItemController: NSObject {
 
     private func makeMenu() -> NSMenu {
         let menu = NSMenu()
+        menu.delegate = self
+
+        let toggleItem = NSMenuItem(
+            title: L10n.shared["island_enabled"],
+            action: #selector(toggleIslandEnabled),
+            keyEquivalent: ""
+        )
+        toggleItem.target = self
+        toggleItem.state = isIslandEffectivelyActive(displays: displaysProvider()) ? .on : .off
+        menu.addItem(toggleItem)
+        toggleIslandItem = toggleItem
+
+        menu.addItem(.separator())
 
         let settingsItem = NSMenuItem(
             title: L10n.shared["settings_ellipsis"],
@@ -90,6 +123,7 @@ final class StatusItemController: NSObject {
         )
         settingsItem.target = self
         menu.addItem(settingsItem)
+        self.settingsItem = settingsItem
 
         menu.addItem(.separator())
 
@@ -100,8 +134,31 @@ final class StatusItemController: NSObject {
         )
         quitItem.target = self
         menu.addItem(quitItem)
+        self.quitItem = quitItem
 
         return menu
+    }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        toggleIslandItem?.title = L10n.shared["island_enabled"]
+        toggleIslandItem?.state = isIslandEffectivelyActive(displays: displaysProvider()) ? .on : .off
+        settingsItem?.title = L10n.shared["settings_ellipsis"]
+        quitItem?.title = L10n.shared["quit"]
+    }
+
+    @objc func toggleIslandEnabled() {
+        Task { @MainActor in
+            self.performToggleIslandEnabled()
+        }
+    }
+
+    func performToggleIslandEnabled() {
+        let displays = displaysProvider()
+        if isIslandEffectivelyActive(displays: displays) {
+            SettingsManager.shared.islandEnabled = false
+        } else {
+            SettingsManager.shared.restoreIslandIfAllDisplaysOff(displays: displays)
+        }
     }
 
     @objc private func openSettings() {
