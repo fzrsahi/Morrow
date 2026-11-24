@@ -553,6 +553,24 @@ final class L10n: ObservableObject {
         // Window
         "settings_title": "Morrow Settings",
 
+        // Multi-Display Settings
+        "displays_section": "Displays",
+        "island_enabled": "Show Morrow Island",
+        "island_enabled_desc": "Menu bar icon stays accessible when turned off",
+        "island_disabled_banner": "Morrow is hidden on all displays. Re-enable here or from the menu bar icon.",
+        "display_numbered": "Display %d",
+        "display_badge_primary": "Primary",
+        "display_badge_builtin": "Built-in",
+        "display_badge_notch": "Notch",
+        "display_badge_external": "External",
+        "display_hidden_hint": "Hidden on Display %d",
+        "configure_displays": "Configure…",
+        "active_displays": "Active Displays",
+        "displays_count": "%d Displays",
+        "display_single_count": "1 Display",
+        "island_hidden_summary": "Hidden on all displays",
+        "displays_multi_hint": "Enable one or both displays and choose Notch or Dynamic Island independently per screen.",
+
         // Menu
         "settings_ellipsis": "Settings...",
         "check_for_updates": "Check for Updates...",
@@ -1157,6 +1175,24 @@ final class L10n: ObservableObject {
 
         // Window
         "settings_title": "Morrow-Einstellungen",
+
+        // Multi-Display Settings
+        "displays_section": "Displays",
+        "island_enabled": "Morrow Island anzeigen",
+        "island_enabled_desc": "Menüleisten-Symbol bleibt beim Deaktivieren erreichbar",
+        "island_disabled_banner": "Morrow ist auf allen Displays ausgeblendet. Hier oder über das Menüleisten-Symbol wieder aktivieren.",
+        "display_numbered": "Display %d",
+        "display_badge_primary": "Hauptdisplay",
+        "display_badge_builtin": "Integriert",
+        "display_badge_notch": "Notch",
+        "display_badge_external": "Extern",
+        "display_hidden_hint": "Auf Display %d ausgeblendet",
+        "configure_displays": "Konfigurieren…",
+        "active_displays": "Aktive Displays",
+        "displays_count": "%d Displays",
+        "display_single_count": "1 Display",
+        "island_hidden_summary": "Auf allen Displays ausgeblendet",
+        "displays_multi_hint": "Aktiviere ein oder beide Displays und wähle Notch oder Dynamic Island unabhängig pro Bildschirm.",
 
         // Menu
         "settings_ellipsis": "Einstellungen...",
@@ -1763,6 +1799,24 @@ final class L10n: ObservableObject {
         // Window
         "settings_title": "Morrow 设置",
 
+        // Multi-Display Settings
+        "displays_section": "显示器",
+        "island_enabled": "显示 Morrow 灵动岛",
+        "island_enabled_desc": "关闭时菜单栏图标仍保持可用",
+        "island_disabled_banner": "Morrow 已在所有显示器上隐藏。可在此处或通过菜单栏图标重新开启。",
+        "display_numbered": "显示器 %d",
+        "display_badge_primary": "主显示器",
+        "display_badge_builtin": "内建",
+        "display_badge_notch": "刘海",
+        "display_badge_external": "外接",
+        "display_hidden_hint": "已在显示器 %d 上隐藏",
+        "configure_displays": "配置…",
+        "active_displays": "当前显示器",
+        "displays_count": "%d 台显示器",
+        "display_single_count": "1 台显示器",
+        "island_hidden_summary": "已在所有显示器上隐藏",
+        "displays_multi_hint": "可单独开启一个或多个显示器，并为每块屏幕独立选择刘海或灵动岛模式。",
+
         // Menu
         "settings_ellipsis": "设置...",
         "check_for_updates": "检查更新...",
@@ -2367,6 +2421,24 @@ final class L10n: ObservableObject {
 
         // Window
         "settings_title": "Morrow 設定",
+
+        // Multi-Display Settings
+        "displays_section": "顯示器",
+        "island_enabled": "顯示 Morrow 動態島",
+        "island_enabled_desc": "關閉時選單列圖示仍保持可用",
+        "island_disabled_banner": "Morrow 已在所有顯示器上隱藏。可於此處或透過選單列圖示重新開啟。",
+        "display_numbered": "顯示器 %d",
+        "display_badge_primary": "主顯示器",
+        "display_badge_builtin": "內建",
+        "display_badge_notch": "瀏海",
+        "display_badge_external": "外接",
+        "display_hidden_hint": "已在顯示器 %d 上隱藏",
+        "configure_displays": "設定…",
+        "active_displays": "目前顯示器",
+        "displays_count": "%d 台顯示器",
+        "display_single_count": "1 台顯示器",
+        "island_hidden_summary": "已在所有顯示器上隱藏",
+        "displays_multi_hint": "可單獨開啟一個或多個顯示器，並為每塊螢幕獨立選擇瀏海或動態島模式。",
 
         // Menu
         "settings_ellipsis": "設定...",
@@ -2973,6 +3045,24 @@ final class L10n: ObservableObject {
         // Window
         "settings_title": "Morrow 設定",
 
+        // Multi-Display Settings
+        "displays_section": "ディスプレイ",
+        "island_enabled": "Morrow Island を表示",
+        "island_enabled_desc": "オフにしてもメニューバーアイコンは利用できます",
+        "island_disabled_banner": "Morrow はすべてのディスプレイで非表示です。ここまたはメニューバーアイコンから再度有効にできます。",
+        "display_numbered": "ディスプレイ %d",
+        "display_badge_primary": "主ディスプレイ",
+        "display_badge_builtin": "内蔵",
+        "display_badge_notch": "ノッチ",
+        "display_badge_external": "外部",
+        "display_hidden_hint": "ディスプレイ %d では非表示",
+        "configure_displays": "設定…",
+        "active_displays": "有効なディスプレイ",
+        "displays_count": "%d 台のディスプレイ",
+        "display_single_count": "1 台のディスプレイ",
+        "island_hidden_summary": "すべてのディスプレイで非表示",
+        "displays_multi_hint": "1台または両方のディスプレイを有効にし、画面ごとに Notch と Dynamic Island を個別に選択できます。",
+
         // Menu
         "settings_ellipsis": "設定...",
         "check_for_updates": "アップデートを確認...",
@@ -3578,6 +3668,24 @@ final class L10n: ObservableObject {
         // Window
         "settings_title": "Morrow 설정",
 
+        // Multi-Display Settings
+        "displays_section": "디스플레이",
+        "island_enabled": "Morrow 아일랜드 표시",
+        "island_enabled_desc": "꺼져 있을 때도 메뉴 막대 아이콘을 계속 사용할 수 있습니다",
+        "island_disabled_banner": "모든 디스플레이에서 Morrow가 숨겨져 있습니다. 여기 또는 메뉴 막대 아이콘에서 다시 켜세요.",
+        "display_numbered": "디스플레이 %d",
+        "display_badge_primary": "기본",
+        "display_badge_builtin": "내장",
+        "display_badge_notch": "노치",
+        "display_badge_external": "외부",
+        "display_hidden_hint": "디스플레이 %d에서 숨김",
+        "configure_displays": "구성…",
+        "active_displays": "활성 디스플레이",
+        "displays_count": "디스플레이 %d대",
+        "display_single_count": "디스플레이 1대",
+        "island_hidden_summary": "모든 디스플레이에서 숨김",
+        "displays_multi_hint": "하나 이상의 디스플레이를 켜고 화면별로 노치 또는 다이내믹 아일랜드를 독립적으로 선택하세요.",
+
         // Menu
         "settings_ellipsis": "설정...",
         "check_for_updates": "업데이트 확인...",
@@ -4182,6 +4290,24 @@ final class L10n: ObservableObject {
 
         // Window
         "settings_title": "Morrow Ayarları",
+
+        // Multi-Display Settings
+        "displays_section": "Ekranlar",
+        "island_enabled": "Morrow Adasını Göster",
+        "island_enabled_desc": "Kapatıldığında menü çubuğu simgesi erişilebilir kalır",
+        "island_disabled_banner": "Morrow tüm ekranlarda gizli. Buradan veya menü çubuğu simgesinden yeniden etkinleştirin.",
+        "display_numbered": "Ekran %d",
+        "display_badge_primary": "Birincil",
+        "display_badge_builtin": "Dahili",
+        "display_badge_notch": "Çentik",
+        "display_badge_external": "Harici",
+        "display_hidden_hint": "Ekran %d üzerinde gizli",
+        "configure_displays": "Yapılandır…",
+        "active_displays": "Etkin Ekranlar",
+        "displays_count": "%d Ekran",
+        "display_single_count": "1 Ekran",
+        "island_hidden_summary": "Tüm ekranlarda gizli",
+        "displays_multi_hint": "Bir veya her iki ekranı etkinleştirin ve her ekran için Çentik veya Dynamic Island modunu bağımsız seçin.",
 
         // Menu
         "settings_ellipsis": "Ayarlar...",

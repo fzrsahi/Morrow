@@ -17,6 +17,7 @@ import {
   putWizard,
   questionInput,
   QuestionFocusGate,
+  setTyped,
   togglePick,
   wizardFor,
   type QuestionPrompt,
@@ -44,6 +45,41 @@ describe('typed answers (#question, #question-multi)', () => {
   test('only typed text can be submitted, never an empty field', () => {
     expect(canSubmitTyped('')).toBe(false);
     expect(canSubmitTyped('Jotai, we already use it in admin')).toBe(true);
+  });
+
+  test('#189 PR203 review: a wizard step accepts typed text as its answer', () => {
+    const prompts: QuestionPrompt[] = [
+      {
+        question: 'Which library?',
+        header: 'State',
+        options: [{ label: 'Zustand' }],
+        multi_select: false,
+      },
+      { question: 'Anything else?', header: 'Notes', options: [], multi_select: false },
+    ];
+    let wizard = newWizard(prompts.length);
+    wizard = setTyped(wizard, 'My own state lib');
+    expect(canConfirm(wizard)).toBe(true);
+    expect(answersOf(wizard, prompts)).toEqual(['My own state lib', '']);
+
+    // Moving on keeps the typed answer for its own step.
+    wizard = goNext(wizard, prompts.length);
+    expect(answersOf(wizard, prompts)).toEqual(['My own state lib', '']);
+  });
+
+  test('#189 PR203 review: picking an option clears a typed answer for that step', () => {
+    let wizard = newWizard(1);
+    wizard = setTyped(wizard, 'typed');
+    wizard = togglePick(wizard, 0, false);
+    expect(canConfirm(wizard)).toBe(true);
+    expect(answersOf(wizard, [
+      {
+        question: 'Which?',
+        header: 'State',
+        options: [{ label: 'Zustand' }],
+        multi_select: false,
+      },
+    ])).toEqual(['Zustand']);
   });
 });
 
