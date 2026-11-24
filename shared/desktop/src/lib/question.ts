@@ -63,6 +63,8 @@ export type WizardState = {
   step: number;
   /** Picked option indices per prompt; `null` until that prompt is answered. */
   picks: (number[] | null)[];
+  /** #189: a typed (Other / free-text) answer for a step, instead of options. */
+  typed: (string | null)[];
 };
 
 /** The prompts a wizard walks, falling back to the single #188 question card. */
@@ -79,10 +81,15 @@ export function promptsOf(card: QuestionCard): QuestionPrompt[] {
 }
 
 export function newWizard(total: number): WizardState {
-  return { step: 0, picks: Array.from({ length: total }, () => null) };
+  return {
+    step: 0,
+    picks: Array.from({ length: total }, () => null),
+    typed: Array.from({ length: total }, () => null),
+  };
 }
 
-/** Toggle an option at the current step. Multi accumulates; single replaces. */
+/** Toggle an option at the current step. Multi accumulates; single replaces.
+ *  Picking an option drops a typed answer for that step — the two are exclusive. */
 export function togglePick(state: WizardState, index: number, multi: boolean): WizardState {
   const current = state.picks[state.step] ?? [];
   const next = multi
@@ -94,12 +101,24 @@ export function togglePick(state: WizardState, index: number, multi: boolean): W
       : [index];
   const picks = [...state.picks];
   picks[state.step] = next;
-  return { ...state, picks };
+  const typed = [...state.typed];
+  typed[state.step] = null;
+  return { ...state, picks, typed };
 }
 
-/** Confirm / Next is enabled only once the current step has a pick. */
+/** #189: record a typed answer for the current step, clearing its option picks. */
+export function setTyped(state: WizardState, text: string): WizardState {
+  if (!canSubmitTyped(text)) return state;
+  const typed = [...state.typed];
+  typed[state.step] = text;
+  const picks = [...state.picks];
+  picks[state.step] = null;
+  return { ...state, typed, picks };
+}
+
+/** Confirm / Next is enabled once the current step has a pick or typed text. */
 export function canConfirm(state: WizardState): boolean {
-  return (state.picks[state.step]?.length ?? 0) > 0;
+  return (state.picks[state.step]?.length ?? 0) > 0 || canSubmitTyped(state.typed[state.step] ?? '');
 }
 
 /** `n/total` chip; a single-question request has no progress chip. */
@@ -118,6 +137,9 @@ export function goNext(state: WizardState, total: number): WizardState {
 /** Answer strings in prompt order. A multi-select joins labels like macOS. */
 export function answersOf(state: WizardState, prompts: QuestionPrompt[]): string[] {
   return prompts.map((prompt, i) => {
+    // #189: a typed answer wins over option picks for that step.
+    const typed = state.typed[i];
+    if (typed) return typed;
     const picked = state.picks[i] ?? [];
     return picked
       .map((index) => prompt.options[index]?.label ?? '')
