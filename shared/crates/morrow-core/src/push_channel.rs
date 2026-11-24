@@ -24,6 +24,7 @@
 
 use base64::Engine as _;
 use serde_json::{Map, Value, json};
+use std::borrow::Cow;
 
 use crate::push::{PushEventKind, PushMessage, truncated, truncated_utf8, truncated_utf16};
 use crate::push_policy::PushChannelKind;
@@ -310,15 +311,29 @@ pub fn build_request(
     channel: &PushChannelConfig,
     now: f64,
 ) -> Result<PushHttpRequest, PushConfigProblem> {
+    // #350: the detail policy is enforced HERE, once, for every builder —
+    // not left to a caller that does not exist yet. A group chat (or an
+    // explicit opt-out) never carries command text or summaries.
+    let message = scoped_message(message, channel.include_details);
     match channel.kind {
-        PushChannelKind::Bark => bark(message, channel),
-        PushChannelKind::Ntfy => ntfy(message, channel),
-        PushChannelKind::Dingtalk => dingtalk(message, channel, now),
-        PushChannelKind::Feishu => feishu(message, channel, now),
-        PushChannelKind::Wecom => wecom(message, channel),
-        PushChannelKind::Slack => slack(message, channel),
-        PushChannelKind::Telegram => telegram(message, channel),
+        PushChannelKind::Bark => bark(&message, channel),
+        PushChannelKind::Ntfy => ntfy(&message, channel),
+        PushChannelKind::Dingtalk => dingtalk(&message, channel, now),
+        PushChannelKind::Feishu => feishu(&message, channel, now),
+        PushChannelKind::Wecom => wecom(&message, channel),
+        PushChannelKind::Slack => slack(&message, channel),
+        PushChannelKind::Telegram => telegram(&message, channel),
     }
+}
+
+fn scoped_message(message: &PushMessage, include_details: bool) -> Cow<'_, PushMessage> {
+    if include_details || message.body.is_empty() {
+        return Cow::Borrowed(message);
+    }
+    Cow::Owned(PushMessage {
+        body: String::new(),
+        ..message.clone()
+    })
 }
 
 fn bark(
@@ -866,6 +881,24 @@ mod tests {
             body_json(&build_request(&quiet, &config, 0.0).unwrap())["level"],
             "active"
         );
+    }
+
+    #[test]
+    fn include_details_false_keeps_command_text_out_of_every_builder() {
+        for kind in PushChannelKind::all() {
+            let mut config = channel(kind);
+            config.include_details = false;
+            config.endpoint = "https://example.invalid/hook".to_owned();
+            config.target = "hook".to_owned();
+            config.token = "123:ABC".to_owned();
+            config.secret = "SEC".to_owned();
+            let request = build_request(&message(), &config, 0.0)
+                .unwrap_or_else(|error| panic!("{kind:?}: {error:?}"));
+            assert!(
+                !request.body.windows(12).any(|w| w == b"rm -rf build"),
+                "{kind:?} leaked the command body"
+            );
+        }
     }
 
     #[test]
