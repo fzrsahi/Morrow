@@ -165,7 +165,7 @@ Re-read the latest commit before re-reviewing: do not paste a stale finding the 
 
 ### 5.9. Implementation Memory
 
-Agents must update [`docs/memory/`](docs/memory/README.md) whenever they implement code, not only when a PR merges. Add a dated entry to `docs/memory/YYYY-MM-DD.md` with the issue or PR number, what landed, the paths or modules changed, how it was verified, and what remains open. Old plans and progress boards with the same information were removed, so this folder is the record of what the project actually implemented. Write entries in English. Do not rewrite older dates unless a fact was wrong.
+Agents must read the [`docs/memory/`](docs/memory/README.md) index before starting work in an area it covers, and must update it whenever they implement code, not only when a PR merges. Add a dated entry to `docs/memory/YYYY-MM-DD.md` with the issue or PR number, what landed, the paths or modules changed, how it was verified, what remains open, and why the change was made. If later work changes an earlier decision, append `Superseded on YYYY-MM-DD` to that entry instead of rewriting it. Old plans and progress boards were removed, so this folder is the record of what the project actually implemented. Write entries in English.
 
 ---
 
