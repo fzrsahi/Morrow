@@ -15,3 +15,4 @@ pub mod opencode;
 pub mod settings;
 pub mod targets;
 pub mod yaml_hooks;
+pub mod zcode;
