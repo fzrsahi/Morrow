@@ -22,6 +22,7 @@
 
 use crate::push::{PushEventKind, truncated};
 use crate::push_policy::PushChannelKind;
+use url::Url;
 
 /// Raw outcome of one HTTP exchange, before the channel interprets the body.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -404,10 +405,34 @@ pub fn redirect_refusal(
     if original_scheme.as_deref() == Some("https") && scheme == "http" {
         return Some(RedirectRefusal::Downgrade);
     }
-    if host_of(target).map(str::to_lowercase) != original.and_then(host_of).map(str::to_lowercase) {
+    // A redirect is only followed inside the same authority. `Url` does the
+    // parsing: credentials, IPv6 literals and an explicit port were all misread
+    // by the old `split(':')` surgery (#360).
+    let target_authority = authority(target);
+    let original_authority = original.and_then(authority);
+    if target_authority.as_ref().map(|a| a.0.as_str())
+        != original_authority.as_ref().map(|a| a.0.as_str())
+        || target_authority.as_ref().map(|a| a.1) != original_authority.as_ref().map(|a| a.1)
+    {
         return Some(RedirectRefusal::OtherHost);
     }
     None
+}
+
+/// Lower-cased host and explicit port, with a scheme's implicit default
+/// normalised away so `http→https` on the same host is still the same authority.
+fn authority(url: &str) -> Option<(String, Option<u16>)> {
+    let parsed = Url::parse(url).ok()?;
+    let host = parsed.host_str()?.to_lowercase();
+    let port = parsed.port().filter(|port| {
+        Some(*port)
+            != match parsed.scheme() {
+                "http" => Some(80),
+                "https" => Some(443),
+                _ => None,
+            }
+    });
+    Some((host, port))
 }
 
 fn scheme_of(url: &str) -> Option<String> {
@@ -415,36 +440,20 @@ fn scheme_of(url: &str) -> Option<String> {
     Some(scheme.to_lowercase())
 }
 
-fn host_of(url: &str) -> Option<&str> {
-    let (_, rest) = url.split_once("://")?;
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = &rest[..end];
-    // Drop credentials and the port: neither is the host.
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    let host = authority.split(':').next().unwrap_or(authority);
-    (!host.is_empty()).then_some(host)
-}
-
 /// Credential-free, token-free form of a URL for the settings page.
 ///
 /// The path of a webhook (Slack, Telegram) or the query (DingTalk, WeCom) *is* the
 /// credential, so only scheme, host and port are shown.
 pub fn display_url(url: &str) -> String {
-    let scheme = scheme_of(url).unwrap_or_default();
-    let host = host_of(url).unwrap_or_default();
-    let port = port_of(url);
-    match port {
+    let Ok(parsed) = Url::parse(url) else {
+        return format!("{}://…", scheme_of(url).unwrap_or_default());
+    };
+    let scheme = parsed.scheme();
+    let host = parsed.host_str().unwrap_or_default();
+    match parsed.port() {
         Some(port) => format!("{scheme}://{host}:{port}/…"),
         None => format!("{scheme}://{host}/…"),
     }
-}
-
-fn port_of(url: &str) -> Option<&str> {
-    let (_, rest) = url.split_once("://")?;
-    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-    let authority = &rest[..end];
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-    authority.split_once(':').map(|(_, port)| port)
 }
 
 #[cfg(test)]
@@ -495,7 +504,14 @@ mod tests {
         );
 
         // Feishu: current and legacy shapes.
-        assert!(interpret(PushChannelKind::Feishu, 200, r#"{"code":0,"msg":"success"}"#).0);
+        assert!(
+            interpret(
+                PushChannelKind::Feishu,
+                200,
+                r#"{"code":0,"msg":"success"}"#
+            )
+            .0
+        );
         assert_eq!(
             interpret(
                 PushChannelKind::Feishu,
@@ -662,6 +678,38 @@ mod tests {
         );
         assert!(RedirectRefusal::Downgrade.names_a_new_address());
         assert!(!RedirectRefusal::TooManyHops.names_a_new_address());
+    }
+
+    #[test]
+    fn ipv6_and_explicit_ports_are_parsed_as_authorities() {
+        assert_eq!(
+            display_url("http://[::1]:8080/a?token=secret"),
+            "http://[::1]:8080/…"
+        );
+        assert_eq!(
+            redirect_refusal(Some("https://[::1]:8443/a"), "https://[::1]:8443/b", 0),
+            None
+        );
+        assert_eq!(
+            redirect_refusal(Some("https://[::1]:8443/a"), "https://[::1]:9443/b", 0),
+            Some(RedirectRefusal::OtherHost)
+        );
+        // Credentials are not part of the host; a change there is still the
+        // same authority, as it was before.
+        assert_eq!(
+            redirect_refusal(
+                Some("https://u:p@example.com/a"),
+                "https://example.com/b",
+                0
+            ),
+            None
+        );
+        // The scheme's implicit port counts: https:443 → http:80 is a hop to
+        // a different authority (and is caught as a downgrade first).
+        assert_eq!(
+            redirect_refusal(Some("http://example.com/a"), "https://example.com/b", 0),
+            None
+        );
     }
 
     #[test]
