@@ -38,6 +38,7 @@ pub mod panel;
 pub mod plugins;
 pub mod process;
 pub mod quota;
+pub mod remote;
 pub mod runner;
 pub mod settings;
 pub mod sound;
