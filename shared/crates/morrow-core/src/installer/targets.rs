@@ -22,6 +22,15 @@ pub enum Format {
     Flat,
     /// `{type, bash, timeoutSec}` in a file of its own — Copilot CLI.
     Copilot,
+    /// `{matcher, loop_limit, hooks: [...]}` — Trae's IDE, which wants the Claude
+    /// shape plus a loop limit, and names the event on the command line.
+    TraeIde,
+    /// `{command, matcher, timeout_ms}` — Kiro's agent file, beside Claude's
+    /// naming a `matcher` on every entry.
+    KiroAgent,
+    /// Google Antigravity: a named-config wrapper whose entries take **two
+    /// different shapes** depending on the event family.
+    AntigravityNamed,
 }
 
 /// One hook event to register, with the timeout the CLI expects (seconds,
@@ -112,6 +121,12 @@ impl Target {
         self.bridge_source.unwrap_or(self.source)
     }
 
+    /// Whether `event` is one of the tool events, which Antigravity wraps
+    /// differently from the rest.
+    pub fn is_tool_event(&self, event: &str) -> bool {
+        matches!(event, "PreToolUse" | "PostToolUse")
+    }
+
     /// The file this target's hooks live in.
     pub fn file(
         &self,
@@ -170,6 +185,42 @@ const QWEN_EVENTS: &[TargetEvent] = &[
     event("SessionEnd", 5_000, true),
     event("Notification", 86_400_000, false),
     event("PreCompact", 5_000, true),
+];
+
+/// `defaultEvents(for: .traeIDE)`: the six TraeCode fires. Both editions document
+/// the same list; the Cursor-style camelCase names a `.flat` target uses never
+/// fire there.
+const TRAE_IDE_EVENTS: &[TargetEvent] = &[
+    event("SessionStart", 5, false),
+    event("UserPromptSubmit", 5, false),
+    event("PreToolUse", 5, false),
+    event("PostToolUse", 5, false),
+    event("Stop", 5, false),
+    // Trae ignores Notification's stdout, so it gets the same short timeout as
+    // the status events rather than the long one a blocking hook would want.
+    event("Notification", 5, false),
+];
+
+/// `defaultEvents(for: .kiroAgent)`: Kiro's camelCase events, five of them, with
+/// seconds stored in the table and milliseconds written to the file.
+const KIRO_AGENT_EVENTS: &[TargetEvent] = &[
+    event("agentSpawn", 5, false),
+    event("userPromptSubmit", 5, true),
+    event("preToolUse", 5, false),
+    event("postToolUse", 5, true),
+    event("stop", 5, true),
+];
+
+/// `defaultEvents(for: .antigravityNamed)`: the three actionable events.
+///
+/// `PreInvocation`/`PostInvocation` are pass-through with no meaning for a card, so
+/// they are left out. `PreToolUse` keeps the documented 30-second default rather
+/// than a day-long ceiling: Antigravity counts a killed hook as a denial, and a
+/// bridge that has to be killed should not be able to sit on an approval.
+const ANTIGRAVITY_EVENTS: &[TargetEvent] = &[
+    event("PreToolUse", 30, false),
+    event("PostToolUse", 5, false),
+    event("Stop", 5, false),
 ];
 
 /// Grok's managed events (`GrokHookForwardingPolicy.managedHookEvents`).
@@ -448,6 +499,58 @@ pub const TARGETS: &[Target] = &[
     // Trae CLI Next moved its hooks under `~/.trae/cli` and reads TraeX event
     // names, but reports them under the same `traecli` source as the older CLI —
     // one product, two config layouts.
+    // Trae / Trae CN: the desktop IDE, whose hooks file is `~/.trae{,-cn}/hooks.json`.
+    // Two editions, one format, two sources — the user can have both installed.
+    Target {
+        source: "trae",
+        name: "Trae",
+        path: ".trae/hooks.json",
+        root: Root::Home,
+        key: "hooks",
+        format: Format::TraeIde,
+        events: TRAE_IDE_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    Target {
+        source: "traecn",
+        name: "Trae CN",
+        path: ".trae-cn/hooks.json",
+        root: Root::Home,
+        key: "hooks",
+        format: Format::TraeIde,
+        events: TRAE_IDE_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    // Kiro's agent file: one file per agent under `~/.kiro/agents`, so its name is
+    // ours and removing it is removing our own file.
+    Target {
+        source: "kiro",
+        name: "Kiro",
+        path: ".kiro/agents/codeisland.json",
+        root: Root::Home,
+        key: "hooks",
+        format: Format::KiroAgent,
+        events: KIRO_AGENT_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
+    // Google Antigravity — **not** the `antigravity` Claude fork above. It reads a
+    // standalone `~/.gemini/config/hooks.json` (not Gemini-CLI's settings file),
+    // wrapped in a named config keyed `codeisland`, and its stdin carries no event
+    // name, so every command needs `--event`.
+    Target {
+        source: "google-antigravity",
+        name: "Google Antigravity",
+        path: ".gemini/config/hooks.json",
+        root: Root::Home,
+        key: "codeisland",
+        format: Format::AntigravityNamed,
+        events: ANTIGRAVITY_EVENTS,
+        bridge_source: None,
+        seeds_version: false,
+    },
     Target {
         source: "traecli-next",
         name: "Trae CLI Next",
@@ -487,7 +590,9 @@ pub fn command_for(target: &Target, bridge: &str, event: &str) -> String {
     match target.format {
         // Gemini and Copilot do not report their event on stdin.
         Format::Nested if target.source == "gemini" => format!("{base} --event {event}"),
-        Format::Flat | Format::Copilot => format!("{base} --event {event}"),
+        Format::Flat | Format::Copilot | Format::TraeIde | Format::AntigravityNamed => {
+            format!("{base} --event {event}")
+        }
         _ => base,
     }
 }
@@ -515,6 +620,43 @@ fn entry_for(target: &Target, bridge: &str, event: &'static TargetEvent) -> Valu
             "type": "command",
             "bash": command,
             "timeoutSec": event.timeout,
+        }),
+        // Trae's IDE wants Claude's shape plus a loop limit: an entry that keeps
+        // re-firing is what `loop_limit` bounds, and Trae refuses the file without
+        // it.
+        Format::TraeIde => json!({
+            "matcher": "*",
+            "loop_limit": 5,
+            "hooks": [{
+                "type": "command",
+                "command": command,
+                "timeout": event.timeout,
+            }],
+        }),
+        // Antigravity has two event families and **two entry shapes**, and getting
+        // it wrong is silent: a tool event wrapped the model-event way never runs,
+        // and a model event wrapped the tool way never fires either. Tool events
+        // take a matcher and a `hooks` array; the rest are the handler itself.
+        Format::AntigravityNamed if target.is_tool_event(event.name) => json!({
+            "matcher": "*",
+            "hooks": [{
+                "type": "command",
+                "command": command,
+                "timeout": event.timeout,
+            }],
+        }),
+        Format::AntigravityNamed => json!({
+            "type": "command",
+            "command": command,
+            "timeout": event.timeout,
+        }),
+        // Kiro's agent file names no `hooks` array and takes **milliseconds**
+        // where every other target here takes seconds. The table stores seconds
+        // for consistency; the conversion happens here, once.
+        Format::KiroAgent => json!({
+            "command": command,
+            "matcher": "*",
+            "timeout_ms": event.timeout * 1_000,
         }),
     }
 }

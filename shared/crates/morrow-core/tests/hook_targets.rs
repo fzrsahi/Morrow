@@ -52,6 +52,13 @@ fn every_target_of_the_ticket_is_here() {
             "qwen",
             // #234 batch 2: the two whose paths are not a plain home directory.
             "grok",
+            // #234 batch 3a: two formats of their own.
+            "trae",
+            "traecn",
+            "kiro",
+            // #234 batch 4: the named-config one. `cline` and the four plugin
+            // sources are not table entries.
+            "google-antigravity",
             "traecli-next"
         ]
     );
@@ -78,8 +85,80 @@ fn the_paths_and_keys_are_the_ones_macos_writes() {
     assert_eq!(target("workbuddy").path, ".workbuddy/settings.json");
     assert_eq!(target("qwen").path, ".qwen/settings.json");
     for target in TARGETS {
+        // Antigravity wraps its entries in a named config, so its key is the name.
+        if target.source == "google-antigravity" {
+            continue;
+        }
         assert_eq!(target.key, "hooks");
     }
+}
+
+/// #234 batch 4: Antigravity's two event families take two entry shapes, and the
+/// difference is silent when it is wrong.
+#[test]
+fn antigravity_wraps_tool_events_but_not_model_events() {
+    let antigravity = target("google-antigravity");
+    assert_eq!(antigravity.key, "codeisland");
+    assert_eq!(antigravity.path, ".gemini/config/hooks.json");
+
+    let text = install(antigravity, None, BRIDGE).expect("an install").text;
+    let hooks = &parsed(&text)["codeisland"];
+    // Tool events: a matcher and a `hooks` array.
+    assert_eq!(hooks["PreToolUse"][0]["matcher"], "*");
+    assert_eq!(
+        hooks["PreToolUse"][0]["hooks"][0]["command"],
+        format!("{BRIDGE} --source google-antigravity --event PreToolUse")
+    );
+    assert_eq!(hooks["PreToolUse"][0]["hooks"][0]["timeout"], 30);
+    // Model events: the handler itself, with no wrapper at all. Wrapped, `Stop`
+    // never fires and every session sits on "thinking" forever.
+    assert_eq!(
+        hooks["Stop"][0]["command"],
+        format!("{BRIDGE} --source google-antigravity --event Stop")
+    );
+    assert!(hooks["Stop"][0]["hooks"].is_null(), "{}", text);
+    assert!(hooks["Stop"][0]["matcher"].is_null(), "{}", text);
+
+    // It is a different product from the Claude fork, and a different file.
+    assert_eq!(target("antigravity").path, ".antigravity/settings.json");
+    assert_ne!(target("antigravity").key, "codeisland");
+}
+
+/// #234 batch 3a: Trae's IDE wants Claude's shape plus a loop limit and the event
+/// on the command line; Kiro wants neither a matcher-less entry nor seconds.
+#[test]
+fn trae_ide_and_kiro_have_their_own_entry_shapes() {
+    // Trae: `--event` on the command, `loop_limit` beside the matcher.
+    let trae = install(target("trae"), None, BRIDGE)
+        .expect("an install")
+        .text;
+    let entry = &parsed(&trae)["hooks"]["PreToolUse"][0];
+    assert_eq!(entry["matcher"], "*");
+    assert_eq!(entry["loop_limit"], 5);
+    assert_eq!(entry["hooks"][0]["timeout"], 5);
+    assert_eq!(
+        entry["hooks"][0]["command"],
+        format!("{BRIDGE} --source trae --event PreToolUse")
+    );
+    // The IDE's own six events, not a Claude fork's ten.
+    assert_eq!(event_names(&trae, "hooks").len(), 6);
+    assert!(parsed(&trae)["hooks"]["Notification"].is_array());
+
+    // Kiro: no `hooks` array, a matcher on every entry, and **milliseconds**.
+    let kiro = install(target("kiro"), None, BRIDGE)
+        .expect("an install")
+        .text;
+    let entry = &parsed(&kiro)["hooks"]["preToolUse"][0];
+    assert_eq!(entry["command"], format!("{BRIDGE} --source kiro"));
+    assert_eq!(entry["matcher"], "*");
+    assert_eq!(entry["timeout_ms"], 5_000);
+    assert!(entry["hooks"].is_null(), "Kiro has no nested hooks array");
+    assert_eq!(event_names(&kiro, "hooks").len(), 5);
+
+    // Two Trae editions, one format, different files.
+    assert_eq!(target("trae").path, ".trae/hooks.json");
+    assert_eq!(target("traecn").path, ".trae-cn/hooks.json");
+    assert_eq!(target("traecn").format, Format::TraeIde);
 }
 
 /// #234 batch 2: Grok's file is not in the user's home. `$GROK_HOME` decides, the
@@ -194,9 +273,11 @@ fn antigravity_is_not_google_antigravity() {
     assert_eq!(fork.format, Format::Claude);
     assert_eq!(fork.key, "hooks");
     assert_eq!(fork.path, ".antigravity/settings.json");
-    // Not yet installed at all: it is #234 batch 4, and an absent target is the
-    // honest answer until then.
-    assert!(target_for("google-antigravity").is_none());
+    // Now installable (#234 batch 4) — and still a different file and a different
+    // key, which is the whole point of the assertion above.
+    let named = target_for("google-antigravity").expect("a target");
+    assert_eq!(named.key, "codeisland");
+    assert_ne!(named.path, fork.path);
 }
 
 #[test]

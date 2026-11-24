@@ -87,9 +87,10 @@ pub struct TargetStatus {
     pub path: PathBuf,
 }
 
-/// Every target the core knows, in table order.
+/// Every target the core knows, in table order, plus the two that are not one key
+/// in one file: ZCode's `{enabled, events}` wrapper and MiniMax's plugin pack.
 pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
-    targets::TARGETS
+    let mut rows: Vec<TargetStatus> = targets::TARGETS
         .iter()
         .map(|target| {
             let path = target.file(&paths.home, grok_home_env);
@@ -104,7 +105,101 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
                 path,
             }
         })
-        .collect()
+        .collect();
+    rows.push(zcode_status(paths));
+    rows.push(minimax_status(paths));
+    rows.push(cline_status(paths));
+    rows.push(mimo_status(paths));
+    // AiWork has no hooks at all: "activated" is monitoring being on and the app
+    // being present. A row, and nothing else.
+    rows.push(aiwork_status(paths, "aiwork", "AiWork"));
+    rows.push(aiwork_status(paths, "aiwork-cli", "AiWork CLI"));
+    rows.push(extension_status(
+        paths,
+        "pi",
+        "Pi",
+        ".pi/agent/extensions/codeisland.ts",
+        ".pi",
+    ));
+    rows.push(extension_status(
+        paths,
+        "omp",
+        "Oh My Pi",
+        ".omp/agent/extensions/codeisland.ts",
+        ".omp",
+    ));
+    rows.push(extension_status(
+        paths,
+        "openclaw",
+        "OpenClaw",
+        ".openclaw/codeisland-plugin/index.ts",
+        ".openclaw",
+    ));
+    rows.push(dsh_status(paths));
+    rows
+}
+
+/// ZCode's single file, and the switch inside it.
+pub fn zcode_status(paths: &Paths) -> TargetStatus {
+    let path = zcode_path(paths);
+    let text = read_text(&path).ok().flatten();
+    TargetStatus {
+        source: "zcode",
+        name: "ZCode",
+        detected: paths.home.join(".zcode").is_dir(),
+        installed: text
+            .as_deref()
+            .is_some_and(morrow_core::installer::zcode::is_installed),
+        path,
+    }
+}
+
+fn zcode_path(paths: &Paths) -> PathBuf {
+    paths.home.join(".zcode/cli/config.json")
+}
+
+/// MiniMax's pack: two files, so `installed` means both are current.
+pub fn minimax_status(paths: &Paths) -> TargetStatus {
+    let plugin = minimax_plugin_dir(paths);
+    let manifest = read_text(&plugin.join(".claude-plugin/plugin.json"))
+        .ok()
+        .flatten();
+    let hooks = read_text(&plugin.join("hooks/hooks.json")).ok().flatten();
+    TargetStatus {
+        source: "minimax",
+        name: "MiniMax Code",
+        detected: minimax_root(paths).is_dir(),
+        installed: manifest
+            .as_deref()
+            .is_some_and(morrow_core::installer::minimax::manifest_is_ours)
+            && hooks.is_some_and(|text| text.contains("codeisland")),
+        path: plugin,
+    }
+}
+
+/// `$MINIMAX_DATA_DIR` or `$MAVIS_DATA_DIR`, expanded, else `~/.minimax`.
+fn minimax_root(paths: &Paths) -> PathBuf {
+    for key in ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"] {
+        if let Some(raw) = std::env::var(key).ok().map(|raw| raw.trim().to_owned()) {
+            if raw.is_empty() {
+                continue;
+            }
+            if raw == "~" {
+                return paths.home.clone();
+            }
+            if let Some(rest) = raw.strip_prefix("~/") {
+                return paths.home.join(rest);
+            }
+            return PathBuf::from(raw);
+        }
+    }
+    paths.home.join(".minimax")
+}
+
+fn minimax_plugin_dir(paths: &Paths) -> PathBuf {
+    minimax_root(paths)
+        .join("plugins")
+        .join(morrow_core::installer::minimax::PLUGIN_NAME)
 }
 
 /// The directory each CLI proves itself by. Codex keeps `~/.codex`, Gemini
@@ -134,6 +229,14 @@ const CLI_DIRS: &[(&str, &str)] = &[
     // target with its own root proves itself by that root existing.
     // `~/.trae` alone is the older CLI's marker; Next lives one level deeper.
     ("traecli-next", ".trae/cli"),
+    // #234 batch 3a. Kiro's marker is `.kiro`; its file lives under `agents/`,
+    // which an install creates if the directory exists.
+    ("trae", ".trae"),
+    ("traecn", ".trae-cn"),
+    ("kiro", ".kiro"),
+    // Google Antigravity proves itself by its own folder inside Gemini's, not by
+    // `~/.gemini` — a Gemini CLI user has that one and may have no Antigravity.
+    ("google-antigravity", ".gemini/antigravity-cli"),
 ];
 
 /// Install or repair one target with the Unix hook command.
@@ -156,6 +259,23 @@ pub fn install_target_with(
     stamp: &str,
     command: &str,
 ) -> Result<Option<Report>, Error> {
+    // Two sources are installers of their own rather than a key in a file: ZCode
+    // wraps its events beside a user-owned switch, and MiniMax loads hooks only
+    // from a plugin pack (#234 batch 3b).
+    match source {
+        "zcode" => return install_zcode(paths, stamp, command),
+        "minimax" => return install_minimax(paths, stamp, command),
+        "cline" => return install_cline(paths, &format!("{command} --source cline")),
+        "mimo" => return install_mimo(paths, stamp),
+        "pi" => return install_extension(paths, "pi", stamp, crate::plugins::PI),
+        "omp" => return install_extension(paths, "omp", stamp, crate::plugins::OMP),
+        "openclaw" => return install_extension(paths, "openclaw", stamp, crate::plugins::OPENCLAW),
+        // Nothing to write: AiWork has no hooks, so "install" is the row itself.
+        "aiwork" | "aiwork-cli" => return Ok(Some(Report::default())),
+        // The plugin is third-party; the row is the feature.
+        "dsh" => return Ok(None),
+        _ => {}
+    }
     let Some(target) = targets::target_for(source) else {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -210,6 +330,17 @@ fn enable_codex_hooks(paths: &Paths) -> Result<bool, Error> {
 
 /// Take one target's hook back out.
 pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, Error> {
+    match source {
+        "zcode" => return uninstall_zcode(paths),
+        "minimax" => return uninstall_minimax(paths),
+        "cline" => return uninstall_cline(paths),
+        "mimo" => return uninstall_mimo(paths),
+        "pi" | "omp" | "openclaw" => return uninstall_extension(paths, source),
+        // Nothing of ours to remove: the plugin is the user's.
+        "dsh" => return Ok(None),
+        "aiwork" | "aiwork-cli" => return Ok(None),
+        _ => {}
+    }
     let Some(target) = targets::target_for(source) else {
         return Err(Error::Io(io::Error::new(
             io::ErrorKind::NotFound,
@@ -241,6 +372,420 @@ fn cli_dir_exists(paths: &Paths, target: &Target) -> bool {
         .iter()
         .find(|(source, _)| *source == target.source)
         .is_none_or(|(_, directory)| paths.home.join(directory).is_dir())
+}
+
+/// ZCode's single file, written through the core's plan (#234 batch 3b).
+fn install_zcode(paths: &Paths, stamp: &str, command: &str) -> Result<Option<Report>, Error> {
+    if !zcode_status(paths).detected {
+        return Ok(None);
+    }
+    // ZCode's command names its source itself: the caller hands over the bare hook
+    // command, as the target table's `command_for` does for every other CLI.
+    let command = format!("{command} --source zcode");
+    let path = zcode_path(paths);
+    let existing = read_text(&path)?;
+    let outcome = morrow_core::installer::zcode::install(existing.as_deref(), &command)
+        .ok_or_else(|| Error::UnparseableSettings(path.clone()))?;
+    let mut report = Report::default();
+    if outcome.changed {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if existing.is_some() {
+            report.backup = back_up(&path, stamp)?;
+        }
+        fs::write(&path, &outcome.text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+fn uninstall_zcode(paths: &Paths) -> Result<Option<Report>, Error> {
+    let path = zcode_path(paths);
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    let Some(outcome) = morrow_core::installer::zcode::uninstall(&existing) else {
+        return Ok(None);
+    };
+    let mut report = Report::default();
+    if outcome.changed {
+        fs::write(&path, &outcome.text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+/// MiniMax's plugin pack: two files under `<root>/plugins/morrow` (#234 batch 3b).
+///
+/// A pack someone else put there is refused, not overwritten — the manifest's
+/// marker is the only proof of authorship this installer has.
+fn install_minimax(paths: &Paths, _stamp: &str, command: &str) -> Result<Option<Report>, Error> {
+    if !minimax_root(paths).is_dir() {
+        return Ok(None);
+    }
+    let command = format!("{command} --source minimax");
+    let plugin = minimax_plugin_dir(paths);
+    let manifest_path = plugin.join(".claude-plugin/plugin.json");
+    if let Some(existing) = read_text(&manifest_path)? {
+        if !morrow_core::installer::minimax::manifest_is_ours(&existing) {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} holds a plugin this installer did not write",
+                    plugin.display()
+                ),
+            )));
+        }
+    }
+    let mut report = Report::default();
+    for (relative, text) in morrow_core::installer::minimax::files(&command) {
+        let path = plugin.join(relative);
+        if read_text(&path)?.as_deref() == Some(text.as_str()) {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+fn uninstall_minimax(paths: &Paths) -> Result<Option<Report>, Error> {
+    let path = minimax_plugin_dir(paths).join(".claude-plugin/plugin.json");
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    if !morrow_core::installer::minimax::manifest_is_ours(&existing) {
+        return Ok(None);
+    }
+    let mut report = Report::default();
+    // The pack is entirely ours — two files in a directory named after us — so the
+    // whole directory goes, rather than a pack with no hooks in it left behind.
+    if let Some(plugin) = path.parent().and_then(|dir| dir.parent()) {
+        if fs::remove_dir_all(plugin).is_ok() {
+            report.settings_changed = true;
+        }
+    }
+    Ok(Some(report))
+}
+
+/// Cline's eight scripts (#234 batch 4). No file to merge: a directory of hooks.
+fn cline_hooks_dir(paths: &Paths) -> PathBuf {
+    paths.home.join("Documents/Cline/Hooks")
+}
+
+pub fn cline_status(paths: &Paths) -> TargetStatus {
+    let directory = cline_hooks_dir(paths);
+    let installed = morrow_core::installer::cline::EVENTS.iter().all(|event| {
+        read_text(&directory.join(event))
+            .ok()
+            .flatten()
+            .is_some_and(|text| morrow_core::installer::cline::is_ours(&text))
+    });
+    TargetStatus {
+        source: "cline",
+        name: "Cline",
+        // The VS Code extension's storage, or Cline's own folder. Creating
+        // `Documents/Cline` for someone without Cline would make the row claim a
+        // CLI they do not have.
+        detected: paths
+            .home
+            .join("Library/Application Support/Code/User/globalStorage/saoudrizwan.claude-dev")
+            .exists()
+            || paths.home.join("Documents/Cline").is_dir(),
+        installed,
+        path: directory,
+    }
+}
+
+fn install_cline(paths: &Paths, command: &str) -> Result<Option<Report>, Error> {
+    if !cline_status(paths).detected {
+        return Ok(None);
+    }
+    let directory = cline_hooks_dir(paths);
+    fs::create_dir_all(&directory)?;
+    let script = morrow_core::installer::cline::script(command);
+    let mut report = Report::default();
+    for event in morrow_core::installer::cline::EVENTS {
+        let path = directory.join(event);
+        if read_text(&path)?.as_deref() == Some(script.as_str()) {
+            continue;
+        }
+        fs::write(&path, &script)?;
+        set_executable(&path)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+fn uninstall_cline(paths: &Paths) -> Result<Option<Report>, Error> {
+    let directory = cline_hooks_dir(paths);
+    let mut report = Report::default();
+    for event in morrow_core::installer::cline::EVENTS {
+        let path = directory.join(event);
+        // Only a file that says it is ours: the user's own hook for the same
+        // event is theirs.
+        let Some(text) = read_text(&path)? else {
+            continue;
+        };
+        if !morrow_core::installer::cline::is_ours(&text) {
+            continue;
+        }
+        fs::remove_file(&path)?;
+        report.settings_changed = true;
+    }
+    Ok(report.settings_changed.then_some(report))
+}
+
+#[cfg(unix)]
+fn set_executable(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(not(unix))]
+fn set_executable(_path: &std::path::Path) -> std::io::Result<()> {
+    // Cline on Windows runs these through Git Bash, where the mode is not what
+    // decides: the file existing is. Nothing to set.
+    Ok(())
+}
+
+/// MiMo Code's plugin, which is OpenCode's file re-labelled (#234 batch 5).
+pub fn mimo_status(paths: &Paths) -> TargetStatus {
+    let path = paths
+        .home
+        .join(morrow_core::installer::mimo::MIMO_PLUGIN_PATH);
+    TargetStatus {
+        source: "mimo",
+        name: "MiMo Code",
+        detected: paths.home.join(".config/mimocode").is_dir()
+            || paths
+                .home
+                .join(morrow_core::installer::mimo::MIMO_INSTALL_DIR)
+                .is_dir(),
+        installed: read_text(&path)
+            .ok()
+            .flatten()
+            .is_some_and(|text| morrow_core::installer::mimo::is_our_mimo_plugin(&text)),
+        path,
+    }
+}
+
+fn install_mimo(paths: &Paths, stamp: &str) -> Result<Option<Report>, Error> {
+    if !mimo_status(paths).detected {
+        return Ok(None);
+    }
+    let path = paths
+        .home
+        .join(morrow_core::installer::mimo::MIMO_PLUGIN_PATH);
+    // An artefact that lost its marker yields nothing, and shipping OpenCode's own
+    // file under MiMo's name would mislabel every event.
+    let source = morrow_core::installer::mimo::mimo_plugin_source(crate::opencode::PLUGIN_SOURCE)
+        .ok_or_else(|| {
+        Error::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "the bundled plugin no longer names its source line exactly once",
+        ))
+    })?;
+    if read_text(&path)?.as_deref() == Some(source.as_str()) {
+        return Ok(Some(Report::default()));
+    }
+    let existing = read_text(&path)?;
+    if existing
+        .as_deref()
+        .is_some_and(|text| !morrow_core::installer::mimo::is_our_mimo_plugin(text))
+    {
+        return Ok(None);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut report = Report::default();
+    if existing.is_some() {
+        report.backup = back_up(&path, stamp)?;
+    }
+    fs::write(&path, source)?;
+    report.settings_changed = true;
+    Ok(Some(report))
+}
+
+fn uninstall_mimo(paths: &Paths) -> Result<Option<Report>, Error> {
+    let path = paths
+        .home
+        .join(morrow_core::installer::mimo::MIMO_PLUGIN_PATH);
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    if !morrow_core::installer::mimo::is_our_mimo_plugin(&existing) {
+        return Ok(None);
+    }
+    fs::remove_file(&path)?;
+    Ok(Some(Report {
+        settings_changed: true,
+        ..Report::default()
+    }))
+}
+
+/// AiWork: nothing to install, so `installed` is `detected` and the install is a
+/// no-op that says what it did.
+pub fn aiwork_status(paths: &Paths, source: &'static str, name: &'static str) -> TargetStatus {
+    let detected = if source == "aiwork" {
+        // The GUI's state directory is what decides in practice: a GUI-launched
+        // app inherits a minimal PATH and cannot see the CLI's binary.
+        paths
+            .home
+            .join(morrow_core::installer::mimo::AIWORK_STATE_DIR)
+            .join("run")
+            .is_dir()
+    } else {
+        // The CLI is on PATH; the state directory is the same evidence.
+        paths
+            .home
+            .join(morrow_core::installer::mimo::AIWORK_STATE_DIR)
+            .join("run")
+            .is_dir()
+            || in_path("aiwork")
+            || in_path("dtcoder")
+    };
+    TargetStatus {
+        source,
+        name,
+        detected,
+        installed: detected,
+        path: paths
+            .home
+            .join(morrow_core::installer::mimo::AIWORK_STATE_DIR),
+    }
+}
+
+fn in_path(binary: &str) -> bool {
+    std::env::var_os("PATH")
+        .map(|path| {
+            std::env::split_paths(&path).any(|directory| {
+                std::fs::metadata(directory.join(binary))
+                    .map(|metadata| metadata.is_file())
+                    .unwrap_or(false)
+            })
+        })
+        .unwrap_or(false)
+}
+
+/// The extension file each source loads, and the directory that proves the CLI is
+/// there.
+const EXTENSIONS: &[(&str, &str)] = &[
+    ("pi", ".pi/agent/extensions/codeisland.ts"),
+    ("omp", ".omp/agent/extensions/codeisland.ts"),
+    ("openclaw", ".openclaw/codeisland-plugin/index.ts"),
+];
+
+/// `pi`'s extension, `omp`'s, `openclaw`'s: three artefacts with one shape.
+pub fn extension_status(
+    paths: &Paths,
+    source: &'static str,
+    name: &'static str,
+    relative: &str,
+    marker: &str,
+) -> TargetStatus {
+    let path = paths.home.join(relative);
+    TargetStatus {
+        source,
+        name,
+        detected: paths.home.join(marker).is_dir(),
+        installed: read_text(&path)
+            .ok()
+            .flatten()
+            .is_some_and(|text| morrow_core::installer::extension::is_ours(&text)),
+        path,
+    }
+}
+
+fn install_extension(
+    paths: &Paths,
+    source: &str,
+    stamp: &str,
+    bundled: &str,
+) -> Result<Option<Report>, Error> {
+    let Some((_, relative)) = EXTENSIONS.iter().find(|(name, _)| *name == source) else {
+        return Ok(None);
+    };
+    let status = extension_status(paths, "", "", relative, "");
+    if !status.detected {
+        return Ok(None);
+    }
+    // A bridge that is not there yet is still the right path to name: the
+    // extension checks for it at load and stays quiet until it appears.
+    let bridge = paths.bridge.to_string_lossy().into_owned();
+    let text =
+        morrow_core::installer::extension::with_bridge_path(bundled, &bridge).ok_or_else(|| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("the bundled {source} extension no longer names its bridge line once"),
+            ))
+        })?;
+    let path = paths.home.join(relative);
+    let existing = read_text(&path)?;
+    if let Some(existing_text) = existing.as_deref() {
+        // An extension someone else put here is theirs. Refuse rather than back
+        // it up and overwrite it — the same ownership rule uninstall applies
+        // (#311).
+        if !morrow_core::installer::extension::is_ours(existing_text) {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} holds an extension this installer did not write",
+                    path.display()
+                ),
+            )));
+        }
+        if existing_text == text {
+            return Ok(Some(Report::default()));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let mut report = Report::default();
+    if existing.is_some() {
+        report.backup = back_up(&path, stamp)?;
+    }
+    fs::write(&path, text)?;
+    report.settings_changed = true;
+    Ok(Some(report))
+}
+
+fn uninstall_extension(paths: &Paths, source: &str) -> Result<Option<Report>, Error> {
+    let Some((_, relative)) = EXTENSIONS.iter().find(|(name, _)| *name == source) else {
+        return Ok(None);
+    };
+    let path = paths.home.join(relative);
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    if !morrow_core::installer::extension::is_ours(&existing) {
+        return Ok(None);
+    }
+    fs::remove_file(&path)?;
+    Ok(Some(Report {
+        settings_changed: true,
+        ..Report::default()
+    }))
+}
+
+/// DSH is bridged by a third-party plugin the user installs themselves
+/// (`dsh-island`), so there is nothing for this installer to write — only a row.
+pub fn dsh_status(paths: &Paths) -> TargetStatus {
+    TargetStatus {
+        source: "dsh",
+        name: "DSH",
+        detected: paths.home.join(".dsh").is_dir(),
+        // The plugin is not ours to check: if DSH is there, the bridge it listens
+        // for is the same socket every other source uses.
+        installed: paths.home.join(".dsh").is_dir(),
+        path: paths.home.join(".dsh"),
+    }
 }
 
 /// The one environment lookup the target table needs, in one place so it can be

@@ -32,6 +32,10 @@ pub mod music;
 pub mod notify;
 pub mod opencode;
 pub mod panel;
+/// The TypeScript extensions that ship with the app (#234 batch 4b). `include_str!`
+/// rather than a path into `macos/`: the Linux and Windows packages must not depend
+/// on the macOS tree at run time, which is the rule OpenCode's plugin already set.
+pub mod plugins;
 pub mod process;
 pub mod quota;
 pub mod runner;
