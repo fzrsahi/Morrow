@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use morrow_platform::autostart;
-use morrow_platform::capability::{Capability, Environment, Feature, table};
+use morrow_platform::capability::{ADAPTERS, Capability, Environment, Feature, Os, adapter, table};
 use serde_json::json;
 
 fn temp(tag: &str) -> PathBuf {
@@ -27,9 +27,7 @@ fn x11(config_home: PathBuf) -> Environment {
         has_session_bus: true,
         path_tools: vec!["/usr/bin".into()],
         config_home,
-        claude_credentials: PathBuf::from("/nonexistent/.credentials.json"),
         has_portal_shortcuts: false,
-        appimage: false,
     }
 }
 
@@ -39,6 +37,75 @@ fn wayland(config_home: PathBuf) -> Environment {
         session_type: Some("wayland".into()),
         ..x11(config_home)
     }
+}
+
+fn windows(config_home: PathBuf) -> Environment {
+    Environment {
+        os: Os::Windows,
+        session_type: None,
+        has_session_bus: false,
+        path_tools: Vec::new(),
+        config_home,
+        has_portal_shortcuts: false,
+    }
+}
+
+// MARK: - #235: a row may not claim more than the code does
+
+/// Every row that is not `Unsupported` has to name the adapter behind it.
+/// The registry is an explicit list, not a search, so a feature cannot become
+/// "supported" by accident — and a feature that loses its adapter has to say so.
+#[test]
+fn no_row_claims_capability_without_a_registered_adapter() {
+    let mut lies = Vec::new();
+    for environment in [
+        x11(temp("guard-x11")),
+        wayland(temp("guard-wayland")),
+        windows(temp("guard-windows")),
+    ] {
+        for feature in Feature::ALL {
+            let capability = feature.probe(&environment);
+            if matches!(capability, Capability::Unsupported(_)) {
+                continue;
+            }
+            if adapter(environment.os, *feature).is_none() {
+                lies.push(format!(
+                    "{} on {:?} says {}",
+                    feature.name(),
+                    environment.os,
+                    capability.label()
+                ));
+            }
+        }
+    }
+    assert!(
+        lies.is_empty(),
+        "these rows claim a capability with no adapter registered (#235):\n  {}",
+        lies.join("\n  ")
+    );
+}
+
+/// The registry is only worth reading if the files it names are there.
+#[test]
+fn every_registered_adapter_names_a_file_that_exists() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut seen = std::collections::BTreeSet::new();
+    for entry in ADAPTERS {
+        assert!(
+            root.join(entry.module).is_file(),
+            "{} on {:?} names {}, which is not in the tree",
+            entry.feature.name(),
+            entry.os,
+            entry.module
+        );
+        assert!(
+            seen.insert((format!("{:?}", entry.os), entry.feature.name())),
+            "{} on {:?} is registered twice",
+            entry.feature.name(),
+            entry.os
+        );
+    }
+    assert!(!ADAPTERS.is_empty(), "the registry is the audit trail");
 }
 
 // MARK: - The table
@@ -67,23 +134,12 @@ fn every_feature_gets_a_row_and_a_label() {
 }
 
 #[test]
-fn a_wayland_session_loses_the_x11_only_adapters_and_says_why() {
-    let env = wayland(temp("wayland"));
-    for feature in [
-        Feature::PointerMonitor,
-        Feature::TerminalVisibility,
-        Feature::Fullscreen,
-        Feature::SyntheticInput,
-    ] {
-        let capability = feature.probe(&env);
-        assert!(
-            matches!(capability, Capability::Unsupported(_)),
-            "{} should be unsupported on Wayland",
-            feature.name()
-        );
-    }
+fn a_wayland_session_has_no_hotkey_to_grab_and_says_so() {
     // The hotkey is not simply gone: it needs a portal, or a desktop binding.
-    let hotkey = Feature::GlobalHotkey.probe(&env);
+    // The adapters that do not exist at all are covered above, on both
+    // sessions, because "Wayland lacks it" and "nobody wrote it" are
+    // different answers and only one of them is Wayland's fault.
+    let hotkey = Feature::GlobalHotkey.probe(&wayland(temp("wayland")));
     assert!(matches!(hotkey, Capability::Unsupported(_)));
     assert!(hotkey.reason().unwrap().contains("morrow toggle"));
 }
@@ -91,19 +147,48 @@ fn a_wayland_session_loses_the_x11_only_adapters_and_says_why() {
 #[test]
 fn x11_supports_what_wayland_cannot() {
     let env = x11(temp("x11-features"));
-    for feature in [
-        Feature::PointerMonitor,
-        Feature::TerminalVisibility,
-        Feature::Fullscreen,
-        Feature::SyntheticInput,
-        Feature::GlobalHotkey,
-    ] {
+    for feature in [Feature::IslandReposition, Feature::GlobalHotkey] {
         assert_eq!(
             feature.probe(&env),
             Capability::Supported,
             "{} on X11",
             feature.name()
         );
+    }
+}
+
+/// #235: a feature with no adapter says so on every session, and says why. The
+/// list is the audit's own: none of these has a line of code behind it yet, so
+/// none of them may borrow X11's name to look supported.
+#[test]
+fn adapters_that_do_not_exist_yet_are_unsupported_everywhere() {
+    for environment in [x11(temp("absent-x11")), wayland(temp("absent-wayland"))] {
+        for feature in [
+            Feature::TerminalVisibility,
+            Feature::PointerMonitor,
+            Feature::Fullscreen,
+            Feature::SyntheticInput,
+            Feature::SystemStats,
+            Feature::Geolocation,
+            Feature::Secrets,
+            Feature::ClaudeCredentials,
+            Feature::Ble,
+            Feature::Audio,
+            Feature::Updater,
+        ] {
+            let capability = feature.probe(&environment);
+            assert!(
+                matches!(capability, Capability::Unsupported(_)),
+                "{} has no adapter, so it cannot say {}",
+                feature.name(),
+                capability.label()
+            );
+            assert!(
+                capability.reason().is_some_and(|reason| !reason.is_empty()),
+                "{} has to say why it is missing",
+                feature.name()
+            );
+        }
     }
 }
 
@@ -115,7 +200,7 @@ fn a_missing_appindicator_is_reported_not_fatal() {
     let tray = Feature::Tray.probe(&env);
     assert!(matches!(tray, Capability::Unsupported(_)), "{tray:?}");
     assert!(
-        Feature::PointerMonitor.probe(&env).is_supported(),
+        Feature::IslandReposition.probe(&env).is_supported(),
         "one missing adapter does not take the others down"
     );
 }
@@ -144,13 +229,18 @@ fn no_session_bus_marks_the_bus_bound_features() {
 }
 
 #[test]
-fn a_missing_credentials_file_is_degraded_rather_than_broken() {
+fn missing_credentials_are_unsupported_rather_than_promised() {
+    // #235: nothing reads the credentials file yet, so a file that happens to
+    // exist is not a reason to say the feature works.
     let env = x11(temp("creds"));
     let capability = Feature::ClaudeCredentials.probe(&env);
     assert!(
-        matches!(capability, Capability::Degraded(_)),
+        matches!(capability, Capability::Unsupported(_)),
         "{capability:?}"
     );
+    // The file's presence changes nothing: there is no reader to consult it.
+    fs::write(env.config_home.join(".credentials.json"), "{}").expect("write credentials");
+    assert_eq!(Feature::ClaudeCredentials.probe(&env), capability);
 }
 
 #[test]
