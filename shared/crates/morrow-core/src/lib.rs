@@ -29,10 +29,15 @@
 
 pub mod agent_process;
 pub mod agent_tasks;
+pub mod aiwork;
 pub mod attention;
+pub mod buddy;
+pub mod codex_rules;
 pub mod config_roots;
 pub mod digest;
 pub mod discovery;
+pub mod display_only_wait;
+pub mod follow_up;
 pub mod git;
 pub mod installer;
 pub mod intake;
@@ -43,6 +48,7 @@ pub mod music;
 pub mod prayer;
 pub mod quota;
 pub mod path_identity;
+pub mod push;
 pub mod reduce;
 pub mod scan_policy;
 pub mod session_recap;

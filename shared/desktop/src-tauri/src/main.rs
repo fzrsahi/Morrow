@@ -17,6 +17,7 @@ mod permissions;
 mod position;
 mod prayer;
 mod prune;
+mod reminders;
 mod sessions;
 mod settings;
 mod settings_window;

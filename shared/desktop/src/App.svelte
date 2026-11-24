@@ -40,6 +40,7 @@
     wizardFor,
     type WizardState,
   } from './lib/question';
+
   import {
     followUpMinutesFromSettings,
     FollowUpReminders,
@@ -173,7 +174,6 @@
   const drag = new DragGate();
   // #201: pure timing/decision state; this component only arms the timer and
   // calls the shell.
-  const reminders = new FollowUpReminders();
   let dragging = $state(false);
   let suppressClick = false;
   let hoverTimer: ReturnType<typeof setTimeout>;
@@ -336,8 +336,9 @@
   // or wizard card shows the picks collected for its own request id.
   function questionPicks(id: number, view: NonNullable<ReturnType<typeof questionView>>) {
     if (!view.prompt.multi_select && view.prompts.length === 1) {
-      if (selected?.id !== id) return [];
-      const index = view.prompt.options.findIndex((o) => o.label === selected.label);
+      const inFlight = selected;
+      if (inFlight?.id !== id) return [];
+      const index = view.prompt.options.findIndex((o) => o.label === inFlight.label);
       return index < 0 ? [] : [index];
     }
     return view.wizard.picks[view.wizard.step] ?? [];
@@ -843,6 +844,8 @@
   function acceptSnapshot(snapshot: Snapshot) {
     sessions = snapshot.sessions;
     cards = snapshot.permissions;
+    // #238 AC 9: the shell owns the reminder schedule, so it hands over the bells.
+    reminderIds = snapshot.reminder_ids ?? [];
     // #307: the shell carries the card in the snapshot; the `prayer_next`
     // command is only the explicit refresh on mount and after a settings write.
     prayer = snapshot.prayer ?? null;

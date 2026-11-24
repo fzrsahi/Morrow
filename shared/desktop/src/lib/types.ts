@@ -149,6 +149,8 @@ export type Snapshot = {
   sessions: Session[];
   permissions: Card[];
   completion: Completion | null;
+  /** Cards whose follow-up reminder already went out (#238 AC 9). */
+  reminder_ids?: number[];
   /** #307 — absent until a prayer setting is saved; never fabricated. */
   prayer?: PrayerSnapshot | null;
 };

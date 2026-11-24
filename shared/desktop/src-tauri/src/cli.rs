@@ -232,10 +232,6 @@ fn target(site: &HooksSite, source: &str, install: bool) -> Result<(), String> {
             Some(report) => print_report(source, &report),
         })
         .map_err(|error| error.to_string())
-    let _ = (site, install);
-    Err(format!(
-        "{source}: no Windows path for this source yet (#234)"
-    ))
 }
 
 /// Every source this machine has, in table order, so a caller does not have to
@@ -303,7 +299,6 @@ fn status_sources(site: &HooksSite) -> Vec<(String, &'static str)> {
             ));
         }
     }
-    sources.push(("claude".to_owned(), windows_state(site)));
     let opencode = opencode::status(&site.opencode);
     sources.push((
         "opencode".to_owned(),
