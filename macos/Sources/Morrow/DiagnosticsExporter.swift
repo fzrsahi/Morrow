@@ -132,8 +132,30 @@ struct DiagnosticsExporter {
                 "maxVisibleSessions": UserDefaults.standard.integer(forKey: SettingsKey.maxVisibleSessions),
                 "mascotSpeed": UserDefaults.standard.integer(forKey: SettingsKey.mascotSpeed),
                 "displayChoice": UserDefaults.standard.string(forKey: SettingsKey.displayChoice) ?? "auto",
+                "islandEnabled": UserDefaults.standard.object(forKey: SettingsKey.islandEnabled) as? Bool ?? SettingsDefaults.islandEnabled,
+                "displayConfigurations": displayConfigurationsMetadata(),
             ],
         ]
+    }
+
+    private static func displayConfigurationsMetadata() -> [String: [String: Any]] {
+        let obj = UserDefaults.standard.object(forKey: SettingsKey.displayConfigurations)
+        let decoded: [String: DisplayConfiguration]?
+        if let str = obj as? String {
+            decoded = DisplayConfigurationCodec.decode(str)
+        } else if let data = obj as? Data {
+            decoded = DisplayConfigurationCodec.decode(data: data)
+        } else {
+            decoded = nil
+        }
+        guard let decoded else { return [:] }
+        return decoded.mapValues { config in
+            [
+                "enabled": config.enabled,
+                "displayMode": config.displayMode.rawValue,
+                "dynamicIslandTopOffset": config.dynamicIslandTopOffset,
+            ]
+        }
     }
 
     @MainActor
