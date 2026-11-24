@@ -110,5 +110,17 @@ if [ -n "$RUST_FILES" ] && [ -f "Cargo.toml" ] && command -v cargo >/dev/null 2>
     }
 fi
 
+# 6. String resource drift (#239 AC 4): the JSON is the source of truth, and both
+# readers are generated from it. Editing one side only fails here, before the push
+# turns into a review comment.
+if echo "$TARGET_FILES" | grep -qE '(^|/)L10n(\+Strings)?\.swift$|strings\.generated\.ts$|contract/strings/'; then
+    if [ -x "scripts/ci/strings-codegen.sh" ] && command -v python3 >/dev/null 2>&1; then
+        ./scripts/ci/strings-codegen.sh --check >/dev/null 2>&1 || {
+            echo "ERROR: string tables are out of date — run ./scripts/ci/strings-codegen.sh"
+            exit 1
+        }
+    fi
+fi
+
 echo "✅ Local verification passed. Clean to commit & push."
 exit 0

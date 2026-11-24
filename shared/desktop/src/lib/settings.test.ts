@@ -55,6 +55,7 @@ describe('appearance settings', () => {
       position: 'Top centre · primary monitor',
       expandOnHover: false,
       collapseOnLeave: false,
+      language: 'system',
     });
   });
 

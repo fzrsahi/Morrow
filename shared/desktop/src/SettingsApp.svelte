@@ -17,10 +17,12 @@
     SETTINGS_KEYS,
     SETTINGS_NAV,
     appearanceFromSettings,
+    pageLabel,
     type AppearanceSettings,
     type SettingsPageId,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
+  import { resolveLanguage, type Language } from './lib/strings';
   import { cssVariables } from './lib/tokens';
   import type {
     AutostartStatus,
@@ -51,6 +53,12 @@
   // #239 AC 1: shown on About so the file the user may want to back up or paste
   // into a bug report is reachable without knowing the convention.
   let settingsFile = $state('');
+  // #239 AC 4: one language for the window. `system` is not a table —
+  // `resolveLanguage` narrows it, as Swift's `effectiveLanguage` does. Derived,
+  // so switching the stored tag redraws the sidebar without a restart.
+  let language = $derived(
+    resolveLanguage(typeof navigator === 'undefined' ? 'en' : navigator.language, appearance.language),
+  );
   // #239 AC 3: the page being shown, for the unavailable ones that have no
   // component of their own. Read from the same list the sidebar draws, so a
   // reason can never be a second copy.
@@ -151,7 +159,9 @@
             onclick={() => (page = item.id)}
           >
             <PixelIcon name={item.icon} size={1.1} />
-            <span>{item.label}</span>
+            <!-- #239 AC 4: the label is the string macOS draws, from
+                 shared/contract/strings — not a second copy typed here. -->
+            <span>{pageLabel(item, language)}</span>
           </button>
         {/each}
       {/each}

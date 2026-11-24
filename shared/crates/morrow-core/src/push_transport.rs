@@ -495,7 +495,14 @@ mod tests {
         );
 
         // Feishu: current and legacy shapes.
-        assert!(interpret(PushChannelKind::Feishu, 200, r#"{"code":0,"msg":"success"}"#).0);
+        assert!(
+            interpret(
+                PushChannelKind::Feishu,
+                200,
+                r#"{"code":0,"msg":"success"}"#
+            )
+            .0
+        );
         assert_eq!(
             interpret(
                 PushChannelKind::Feishu,

@@ -4,6 +4,7 @@
 
 import type { DisplayMode, SessionDensity, SessionFilter } from './panel';
 import type { CapabilityRow } from './types';
+import { STRINGS, translate, BASE_LANGUAGE } from './strings';
 
 /** #202 — the shell emits the settings document to both webviews after a write. */
 export const SETTINGS_CHANGED_EVENT = 'settings-changed';
@@ -32,6 +33,18 @@ export type SettingsNavItem = {
    *  yet", and the difference is the whole point of the criterion. */
   reason?: string;
 };
+
+/** #239 AC 4 — the label a Settings row draws.
+ *
+ *  Ten of the eleven pages have a key in the shared resource (the macOS table
+ *  calls them the same thing); `capabilities` is port-only — macOS shows that
+ *  table nowhere — so it keeps its literal. Measured: `capabilities` is the only
+ *  id missing from `en.json`, and a test pins that it stays the only one.
+ */
+export function pageLabel(item: SettingsNavItem, language: string = BASE_LANGUAGE): string {
+  if (item.id in (STRINGS[language] ?? STRINGS[BASE_LANGUAGE])) return translate(item.id, language as never);
+  return item.label;
+}
 
 /** The default global hotkey, as `hotkey.rs` registers it. One place, because the
  *  Shortcuts page must not be the second copy of a binding. */
@@ -117,6 +130,8 @@ export const SETTINGS_KEYS = {
   expandOnHover: 'expandOnHover',
   collapseOnLeave: 'collapseOnLeave',
   /** #185: the filter choice and row density live in the same document. */
+  /** Same key as Swift `SettingsKey.appLanguage`; `system` resolves to one. */
+  language: 'appLanguage',
   sessionFilter: 'sessionFilter',
   sessionDensity: 'sessionDensity',
 } as const;
@@ -132,6 +147,8 @@ export type AppearanceSettings = {
   position: string;
   expandOnHover: boolean;
   collapseOnLeave: boolean;
+  /** #239 AC 4: a stored tag, or `system` to follow the desktop. */
+  language: string;
 };
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
@@ -145,6 +162,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   position: 'Top centre · primary monitor',
   expandOnHover: false,
   collapseOnLeave: false,
+  language: 'system',
 };
 
 const FONT_SIZES = [11, 12, 14, 16] as const;
@@ -202,6 +220,7 @@ export function appearanceFromSettings(value: unknown): AppearanceSettings {
         : DEFAULT_APPEARANCE.islandShape,
     displayMode: displayModeFromSettings(stored),
     position: text(stored[SETTINGS_KEYS.position], DEFAULT_APPEARANCE.position),
+    language: text(stored[SETTINGS_KEYS.language], DEFAULT_APPEARANCE.language),
     expandOnHover: flag(stored[SETTINGS_KEYS.expandOnHover], DEFAULT_APPEARANCE.expandOnHover),
     collapseOnLeave: flag(
       stored[SETTINGS_KEYS.collapseOnLeave],
