@@ -80,6 +80,8 @@ struct MascotView: View {
                 MechaMascotView(status: status, size: size)
             case "ghost", "pacman":
                 GhostMascotView(status: status, size: size)
+            case IdleMascotSource.morrow:
+                MorrowIdleMascotView(status: status, size: size)
             default:
                 ClawdView(status: status, size: size)
             }

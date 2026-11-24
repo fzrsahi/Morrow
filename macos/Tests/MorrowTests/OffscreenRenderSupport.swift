@@ -241,6 +241,7 @@ struct DefaultsSandbox {
         [
             SettingsKey.appLanguage, SettingsKey.contentFontSize, SettingsKey.showAgentDetails,
             SettingsKey.smartSuppress, SettingsKey.hideWhenNoSession, SettingsKey.showToolStatus,
+            SettingsKey.agentsEnabled,
             SettingsKey.islandEnabled, SettingsKey.displayConfigurations, SettingsKey.displayChoice,
             SettingsKey.islandDisplayMode, SettingsKey.dynamicIslandTopOffset, SettingsKey.collapsedWidthScale, SettingsKey.hapticOnHover, SettingsKey.hapticIntensity,
             SettingsKey.sessionGroupingMode, SettingsKey.defaultSource, SettingsKey.soundEnabled,
