@@ -32,12 +32,14 @@
 #       decide whether the E2E-2 gate passed.
 >>>>>>> origin/main
 
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location $root
 
 <<<<<<< HEAD
 $app = if ($env:MORROW_APP) { $env:MORROW_APP } else { Join-Path $root 'target\debug\morrow-app.exe' }
+$app = if ($env:MORROW_APP) { $env:MORROW_APP } else { Join-Path $root 'target\release\morrow-app.exe' }
 =======
 $app = if ($env:MORROW_APP) { $env:MORROW_APP } else { Join-Path $root 'target\release\morrow-app.exe' }
 >>>>>>> origin/main
@@ -52,6 +54,7 @@ function Check([string]$name, [scriptblock]$test) {
 
 <<<<<<< HEAD
 if (-not (Test-Path $app)) { throw "no $app : build it first (cargo build -p morrow-app)" }
+if (-not (Test-Path $app)) { throw "no $app : build it first (cargo build --release -p morrow-app)" }
 =======
 if (-not (Test-Path $app)) { throw "no $app : build it first (cargo build --release -p morrow-app)" }
 >>>>>>> origin/main
@@ -155,4 +158,5 @@ finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }
 >>>>>>> origin/main
+
 exit $failed
