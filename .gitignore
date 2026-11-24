@@ -31,7 +31,9 @@ android-watch/**/build/
 # Code agents config files
 .adal/
 .aider-desk/
-.agents/
+.agents/*
+!.agents/docs/
+!.agents/docs/*.md
 .augment/
 .bob/
 .claude/

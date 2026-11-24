@@ -122,5 +122,13 @@ if echo "$TARGET_FILES" | grep -qE '(^|/)L10n(\+Strings)?\.swift$|strings\.gener
     fi
 fi
 
+# 7. Crate dependency boundaries (.agents/docs/ownership.md and rust-purity.sh)
+if [ -x "shared/ci/check-crate-boundaries.sh" ]; then
+    ./shared/ci/check-crate-boundaries.sh >/dev/null || {
+        echo "ERROR: crate dependency boundaries violated. Run ./shared/ci/check-crate-boundaries.sh"
+        exit 1
+    }
+fi
+
 echo "✅ Local verification passed. Clean to commit & push."
 exit 0

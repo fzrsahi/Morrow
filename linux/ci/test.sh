@@ -44,6 +44,7 @@ step fmt cargo fmt --all --check
 step clippy cargo clippy --workspace --exclude morrow-app --all-targets --locked -- -D warnings
 step test cargo test --workspace --exclude morrow-app --locked
 step purity shared/ci/rust-purity.sh
+step boundaries ./shared/ci/check-crate-boundaries.sh
 
 {
   echo
