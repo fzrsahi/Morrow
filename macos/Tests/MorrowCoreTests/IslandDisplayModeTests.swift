@@ -75,11 +75,11 @@ final class IslandDisplayModeTests: XCTestCase {
     func testRestingWidthFormsBalancedPillWhenNonNotchDynamicIslandIdle() {
         XCTAssertEqual(
             IslandDisplayMetrics.restingWidth(notchWidth: 185, scalePercent: 100, hasNotch: false, displayMode: .dynamicIsland),
-            110
+            116
         )
         XCTAssertEqual(
             IslandDisplayMetrics.restingWidth(notchWidth: 185, scalePercent: 0, hasNotch: false, displayMode: .dynamicIsland),
-            92
+            96
         )
         XCTAssertEqual(
             IslandDisplayMetrics.restingWidth(notchWidth: 185, scalePercent: 200, hasNotch: false, displayMode: .dynamicIsland),
@@ -93,6 +93,162 @@ final class IslandDisplayModeTests: XCTestCase {
         XCTAssertEqual(
             IslandDisplayMetrics.restingWidth(notchWidth: 185, scalePercent: 100, hasNotch: false, displayMode: .notch),
             185
+        )
+    }
+
+    func testPillShapeKindFollowsSpecSection4() {
+        XCTAssertEqual(
+            IslandDisplayMetrics.pillShapeKind(isExpanded: false, isExtendedPill: false),
+            .capsule
+        )
+        XCTAssertEqual(
+            IslandDisplayMetrics.pillShapeKind(isExpanded: false, isExtendedPill: true),
+            .roundedRectangle(cornerRadius: 18.0)
+        )
+        XCTAssertEqual(
+            IslandDisplayMetrics.pillShapeKind(isExpanded: true, isExtendedPill: false),
+            .roundedRectangle(cornerRadius: 24.0)
+        )
+        XCTAssertEqual(
+            IslandDisplayMetrics.pillShapeKind(isExpanded: true, isExtendedPill: true),
+            .roundedRectangle(cornerRadius: 24.0)
+        )
+    }
+
+    func testAllowsNotchLyricLayoutDisablesFallbackOnNonNotchDynamicIsland() {
+        XCTAssertFalse(IslandDisplayMetrics.allowsNotchLyricLayout(displayMode: .dynamicIsland, hasNotch: false))
+        XCTAssertTrue(IslandDisplayMetrics.allowsNotchLyricLayout(displayMode: .dynamicIsland, hasNotch: true))
+        XCTAssertTrue(IslandDisplayMetrics.allowsNotchLyricLayout(displayMode: .notch, hasNotch: false))
+        XCTAssertTrue(IslandDisplayMetrics.allowsNotchLyricLayout(displayMode: .notch, hasNotch: true))
+    }
+
+    func testShouldShowInlineLyricsOverridesWhenAgentActiveOrToastVisible() {
+        XCTAssertTrue(
+            IslandDisplayMetrics.shouldShowInlineLyrics(
+                displayMode: .dynamicIsland,
+                hasNotch: false,
+                lyricsEligible: true,
+                hasActiveOrWaitingAgent: false,
+                isToastOnly: false
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.shouldShowInlineLyrics(
+                displayMode: .dynamicIsland,
+                hasNotch: false,
+                lyricsEligible: true,
+                hasActiveOrWaitingAgent: true,
+                isToastOnly: false
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.shouldShowInlineLyrics(
+                displayMode: .dynamicIsland,
+                hasNotch: false,
+                lyricsEligible: true,
+                hasActiveOrWaitingAgent: false,
+                isToastOnly: true
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.shouldShowInlineLyrics(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                lyricsEligible: true,
+                hasActiveOrWaitingAgent: false,
+                isToastOnly: false
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.shouldShowInlineLyrics(
+                displayMode: .notch,
+                hasNotch: false,
+                lyricsEligible: true,
+                hasActiveOrWaitingAgent: false,
+                isToastOnly: false
+            )
+        )
+    }
+
+    func testInlineLyricsWidthStaysWithinSpecBoundsAndHardCaps() {
+        let shortW = IslandDisplayMetrics.inlineLyricsWidth(displayedText: "Yeah", screenWidth: 1440, scalePercent: 100)
+        XCTAssertEqual(shortW, 180, accuracy: 0.5)
+
+        let mediumW = IslandDisplayMetrics.inlineLyricsWidth(displayedText: "Dancing in the moonlight", screenWidth: 1440, scalePercent: 100)
+        XCTAssertGreaterThan(mediumW, 180)
+        XCTAssertLessThanOrEqual(mediumW, 320)
+
+        let longW = IslandDisplayMetrics.inlineLyricsWidth(
+            displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
+            screenWidth: 1440,
+            scalePercent: 100
+        )
+        XCTAssertEqual(longW, 320, accuracy: 0.5)
+
+        let scaledMaxW = IslandDisplayMetrics.inlineLyricsWidth(
+            displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
+            screenWidth: 1440,
+            scalePercent: 200
+        )
+        XCTAssertEqual(scaledMaxW, 340, accuracy: 0.5)
+
+        let narrowScreenW = IslandDisplayMetrics.inlineLyricsWidth(
+            displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
+            screenWidth: 800,
+            scalePercent: 100
+        )
+        XCTAssertEqual(narrowScreenW, 280, accuracy: 0.5)
+
+        let cjkW = IslandDisplayMetrics.inlineLyricsWidth(displayedText: "夜空ノムコウ", screenWidth: 1440, scalePercent: 100)
+        XCTAssertGreaterThanOrEqual(cjkW, 180)
+        XCTAssertLessThanOrEqual(cjkW, 320)
+    }
+
+    func testBalancedTwinHardCapMatchesSpecSection2() {
+        XCTAssertEqual(
+            IslandDisplayMetrics.balancedTwinHardCap(
+                isHoveringRightWing: false,
+                hasActiveOrWaitingAgent: false,
+                isMusicPlaying: true,
+                hasPriorityAccessory: false
+            ),
+            160
+        )
+        XCTAssertEqual(
+            IslandDisplayMetrics.balancedTwinHardCap(
+                isHoveringRightWing: false,
+                hasActiveOrWaitingAgent: false,
+                isMusicPlaying: false,
+                hasPriorityAccessory: true
+            ),
+            180
+        )
+        XCTAssertEqual(
+            IslandDisplayMetrics.balancedTwinHardCap(
+                isHoveringRightWing: false,
+                hasActiveOrWaitingAgent: true,
+                isMusicPlaying: false,
+                hasPriorityAccessory: false
+            ),
+            260
+        )
+        XCTAssertEqual(
+            IslandDisplayMetrics.balancedTwinHardCap(
+                isHoveringRightWing: false,
+                hasActiveOrWaitingAgent: true,
+                isMusicPlaying: true,
+                hasPriorityAccessory: false
+            ),
+            280
+        )
+        XCTAssertEqual(
+            IslandDisplayMetrics.balancedTwinHardCap(
+                isHoveringRightWing: true,
+                hasActiveOrWaitingAgent: false,
+                isMusicPlaying: true,
+                hasPriorityAccessory: false
+            ),
+            320
         )
     }
 

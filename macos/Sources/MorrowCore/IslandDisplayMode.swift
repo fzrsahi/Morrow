@@ -43,9 +43,16 @@ public enum DynamicIslandTopOffset {
     }
 }
 
+/// Shape decision for Dynamic Island pills and expanded surfaces.
+public enum DynamicIslandShapeKind: Equatable, Sendable {
+    case capsule
+    case roundedRectangle(cornerRadius: Double)
+}
+
 /// Platform-agnostic geometry calculations shared by display-mode rendering and window positioning.
 public enum IslandDisplayMetrics {
     public static let floatingPillTopGap: Double = DynamicIslandTopOffset.defaultValue
+    public static let nonNotchCollapsedHeight: Double = 34.0
     private static let dynamicIslandCenterBaseGap: Double = 16.0
 
     private static func scaleFactor(for scalePercent: Int) -> Double {
@@ -112,9 +119,9 @@ public enum IslandDisplayMetrics {
         if displayMode == .dynamicIsland && !hasNotch {
             let factor = scaleFactor(for: scalePercent)
             if factor <= 1.0 {
-                return 92.0 + (110.0 - 92.0) * factor
+                return 96.0 + (116.0 - 96.0) * factor
             }
-            return 110.0 + (136.0 - 110.0) * (factor - 1.0)
+            return 116.0 + (136.0 - 116.0) * (factor - 1.0)
         }
         return centerGapWidth(
             notchWidth: notchWidth,
@@ -122,6 +129,83 @@ public enum IslandDisplayMetrics {
             hasNotch: hasNotch,
             displayMode: displayMode
         )
+    }
+
+    /// Shape decision rule for Dynamic Island surfaces: tall extended pills and expanded cards
+    /// must use continuous rounded rectangles rather than circular capsules.
+    public static func pillShapeKind(isExpanded: Bool, isExtendedPill: Bool) -> DynamicIslandShapeKind {
+        if isExpanded {
+            return .roundedRectangle(cornerRadius: 24.0)
+        }
+        if isExtendedPill {
+            return .roundedRectangle(cornerRadius: 18.0)
+        }
+        return .capsule
+    }
+
+    /// Hardware-notch lyric layouts (connected chin, bilateral wings) are restricted to notch mode
+    /// or notched displays; non-notch Dynamic Island never falls back to 3-column notch layouts.
+    public static func allowsNotchLyricLayout(displayMode: IslandDisplayMode, hasNotch: Bool) -> Bool {
+        !(displayMode == .dynamicIsland && !hasNotch)
+    }
+
+    /// Inline Lyrics renders on non-notch Dynamic Island only when all sessions are idle/empty
+    /// and no tall toast banner is active.
+    public static func shouldShowInlineLyrics(
+        displayMode: IslandDisplayMode,
+        hasNotch: Bool,
+        lyricsEligible: Bool,
+        hasActiveOrWaitingAgent: Bool,
+        isToastOnly: Bool
+    ) -> Bool {
+        displayMode == .dynamicIsland
+            && !hasNotch
+            && lyricsEligible
+            && !hasActiveOrWaitingAgent
+            && !isToastOnly
+    }
+
+    /// Adaptive Inline Lyrics pill width (180–320 pt at 100%, hard-capped at min(340, screenWidth * 0.35)),
+    /// measured strictly from the currently displayed lyric text.
+    public static func inlineLyricsWidth(
+        displayedText: String,
+        screenWidth: Double,
+        scalePercent: Int = 100
+    ) -> Double {
+        let trimmed = displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let textWidth = trimmed.unicodeScalars.reduce(0.0) { sum, scalar in
+            let isWideCJK = (0x1100...0x11FF).contains(scalar.value)
+                || (0x2E80...0x9FFF).contains(scalar.value)
+                || (0xAC00...0xD7AF).contains(scalar.value)
+                || (0xF900...0xFAFF).contains(scalar.value)
+            return sum + (isWideCJK ? 11.5 : 6.2)
+        }
+        let chromeAllowance = 106.0
+        let base = min(320.0, max(180.0, chromeAllowance + textWidth))
+        let factor = scaleFactor(for: scalePercent)
+        let scaled: Double
+        if factor >= 1.0 {
+            scaled = base + (factor - 1.0) * 20.0
+        } else {
+            scaled = max(180.0, base - (1.0 - factor) * 20.0)
+        }
+        let hardCap = min(340.0, screenWidth * 0.35)
+        return min(scaled, hardCap)
+    }
+
+    /// Hard width cap for non-notch Balanced Twin states per spec Section 2.
+    public static func balancedTwinHardCap(
+        isHoveringRightWing: Bool,
+        hasActiveOrWaitingAgent: Bool,
+        isMusicPlaying: Bool,
+        hasPriorityAccessory: Bool
+    ) -> Double {
+        if isHoveringRightWing { return 320.0 }
+        if hasActiveOrWaitingAgent && isMusicPlaying { return 280.0 }
+        if hasActiveOrWaitingAgent { return 260.0 }
+        if hasPriorityAccessory { return 180.0 }
+        if isMusicPlaying { return 160.0 }
+        return 180.0
     }
 
     /// Continuous corner radius used in Dynamic Island mode for each visual state.

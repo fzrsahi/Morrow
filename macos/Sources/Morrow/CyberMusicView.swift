@@ -1337,15 +1337,31 @@ struct DynamicIslandInlineLyricPillView: View {
         }
     }
 
-    private var displayText: String {
-        let lyric = nowPlaying.currentLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
+    static func resolvedDisplayText(
+        currentLyric: String,
+        lyricsLoading: Bool,
+        currentLyricIndex: Int,
+        title: String,
+        artist: String
+    ) -> String {
+        let lyric = currentLyric.trimmingCharacters(in: .whitespacesAndNewlines)
         if !lyric.isEmpty { return lyric }
-        if nowPlaying.lyricsLoading { return "Loading lyrics..." }
-        if nowPlaying.currentLyricIndex > 0 { return "Instrumental Interlude" }
-        if !nowPlaying.title.isEmpty {
-            return nowPlaying.artist.isEmpty ? nowPlaying.title : "\(nowPlaying.title) — \(nowPlaying.artist)"
+        if lyricsLoading { return "Loading lyrics..." }
+        if currentLyricIndex > 0 { return "Instrumental Interlude" }
+        if !title.isEmpty {
+            return artist.isEmpty ? title : "\(title) — \(artist)"
         }
         return "Music Playing"
+    }
+
+    private var displayText: String {
+        Self.resolvedDisplayText(
+            currentLyric: nowPlaying.currentLyricText,
+            lyricsLoading: nowPlaying.lyricsLoading,
+            currentLyricIndex: nowPlaying.currentLyricIndex,
+            title: nowPlaying.title,
+            artist: nowPlaying.artist
+        )
     }
 
     private var progressFraction: CGFloat {
@@ -1359,23 +1375,23 @@ struct DynamicIslandInlineLyricPillView: View {
             NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
             onOpenFull()
         }) {
-            VStack(spacing: 3) {
-                HStack(spacing: 10) {
-                    MascotView(source: mascotSource, status: mascotStatus, size: min(19, mascotSize))
-                        .frame(width: min(19, mascotSize), height: min(19, mascotSize))
-                        .fixedSize()
+            HStack(spacing: 10) {
+                MascotView(source: mascotSource, status: mascotStatus, size: min(19, mascotSize))
+                    .frame(width: min(19, mascotSize), height: min(19, mascotSize))
+                    .fixedSize()
 
-                    Rectangle()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 1, height: 12)
+                Rectangle()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: 1, height: 14)
 
-                    Text(displayText)
-                        .font(.system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign))
-                        .foregroundStyle(Color.white.opacity(0.95))
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                Text(displayText)
+                    .font(.system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign))
+                    .foregroundStyle(Color.white.opacity(0.95))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: .infinity, alignment: .center)
 
+                ZStack {
                     CompactAlbumArtworkThumbnail(
                         artworkImage: nowPlaying.artworkImage,
                         size: 18,
@@ -1383,27 +1399,16 @@ struct DynamicIslandInlineLyricPillView: View {
                         accentColor: accentColor,
                         borderOpacity: 0.24
                     )
+                    RoundedRectangle(cornerRadius: 5.5, style: .continuous)
+                        .trim(from: 0, to: progressFraction)
+                        .stroke(accentColor.opacity(0.75), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                        .frame(width: 20, height: 20)
                 }
-                .padding(.horizontal, 13)
-
-                // Subtle 2pt lyric progress hairline cleanly separated below the row
-                GeometryReader { geo in
-                    let trackW = max(40, geo.size.width - 46)
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(width: trackW, height: 2)
-                        Capsule()
-                            .fill(accentColor)
-                            .frame(width: trackW * progressFraction, height: 2)
-                    }
-                    .frame(maxWidth: .infinity, alignment: .center)
-                }
-                .frame(height: 2)
+                .frame(width: 20, height: 20)
+                .fixedSize()
             }
-            .padding(.top, 5)
-            .padding(.bottom, 4)
-            .frame(width: max(220, width))
+            .padding(.horizontal, 13)
+            .frame(width: width, height: CGFloat(IslandDisplayMetrics.nonNotchCollapsedHeight))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
