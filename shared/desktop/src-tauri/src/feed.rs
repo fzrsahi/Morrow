@@ -585,9 +585,6 @@ impl Feed {
                 // scan — a hook that arrives first wins, the file is only a memory.
                 let home = std::path::PathBuf::from(feed.lock().sessions.home_directory());
                 let sessions_dir = sessions_directory(&home);
-                let codex_index =
-                    std::fs::read_to_string(codex_home(&home).join("session_index.jsonl")).ok();
-                feed.restore_sessions(&sessions_dir, codex_index.as_deref());
                 // The interval the panel has always used; 0 in the setting turns it off.
                 feed.set_reminder_interval(Some(morrow_core::follow_up::DEFAULT_INTERVAL_SECONDS));
                 // Swift iterates every Codex root, not only $CODEX_HOME: a
