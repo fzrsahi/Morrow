@@ -10,6 +10,7 @@
   import AppearancePage from './lib/components/AppearancePage.svelte';
   import BehaviorPage from './lib/components/BehaviorPage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
+  import SoundPage from './lib/components/SoundPage.svelte';
   import {
     DEFAULT_APPEARANCE,
     SETTINGS_NAV,
@@ -17,6 +18,7 @@
     type AppearanceSettings,
     type SettingsPageId,
   } from './lib/settings';
+  import { isSupported } from './lib/capabilities';
   import {
     followUpMinutesFromSettings,
     SETTINGS_KEY_FOLLOW_UP_MINUTES,
@@ -28,6 +30,7 @@
     HooksSnapshot,
     KimiStatus,
     OpencodeStatus,
+    SoundCue,
     TargetStatus,
     YamlStatus,
   } from './lib/types';
@@ -44,6 +47,7 @@
   let capabilities = $state<CapabilityRow[]>([]);
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
+  let cues = $state<SoundCue[]>([]);
   let followUpMinutes = $state(1);
   let busy = $state(false);
   let error = $state<string | null>(null);
@@ -56,15 +60,17 @@
 
   async function load() {
     try {
-      const [h, c, a, stored] = await Promise.all([
+      const [h, c, a, stored, sound] = await Promise.all([
         invoke<HooksSnapshot>('hooks_status'),
         invoke<CapabilityRow[]>('capabilities'),
         invoke<AutostartStatus>('autostart_status'),
         invoke<unknown>('settings_load'),
+        invoke<SoundCue[]>('sound_cues'),
       ]);
       hooks = h;
       capabilities = c;
       autostart = a;
+      cues = sound;
       appearance = appearanceFromSettings(stored);
       followUpMinutes = followUpMinutesFromSettings(
         (stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
@@ -94,6 +100,10 @@
     applyAppearance();
     void run(() => invoke('settings_set', { key, value }), false);
   }
+
+  // #241: the same answer the Capability table gives, read the same way, so
+  // the page and the table cannot disagree about whether a sound can play.
+  const soundSupported = $derived(isSupported(capabilities, 'Sound effects'));
 
   function saveFollowUpMinutes(key: string, value: number) {
     followUpMinutes = value;
@@ -151,6 +161,13 @@
           {busy}
           onToggleAutostart={() =>
             run(() => invoke('autostart_set', { enabled: !autostart?.installed }))}
+        />
+      {:else if page === 'sound'}
+        <SoundPage
+          {cues}
+          supported={soundSupported}
+          {busy}
+          onPreview={(cue) => run(() => invoke('sound_preview', { cue }), false)}
         />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} />

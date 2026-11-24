@@ -67,7 +67,8 @@ pub fn delete_top_level_key(source: &str, key: &str) -> Option<String> {
             }
         }
     } else {
-        // Last entry — strip the preceding comma from the entry before it.
+        // Last entry — strip the preceding comma from the entry before it. What
+        // follows the value is the user's own whitespace and stays (#98).
         let previous = &doc.entries[index - 1];
         if let Some(comma) = find_prev_nonspace(&chars, entry.key_start, previous.value_end) {
             if chars[comma] == ',' {
@@ -487,19 +488,15 @@ fn insert_key(
         ));
     }
 
-    // Append after the last entry's value, before the closing `}`, keeping the
-    // whitespace between them.
+    // Append after the last entry's value, before the closing `}`, and leave the
+    // whitespace between them exactly as it was. That is what makes
+    // `delete_top_level_key` able to give the file back byte for byte: if the
+    // insert added a line break of its own, no delete could tell it from one the
+    // user wrote (#98, found by the E2E-2 gate).
     let last = doc.entries.last()?;
     let prefix: String = chars[..last.value_end].iter().collect();
     let suffix: String = chars[last.value_end..].iter().collect();
-    let tail = &chars[last.value_end..doc.object_content_end];
-    let has_newline = tail.contains(&'\n');
-    let inserted = if has_newline {
-        format!(",\n{key_indent}{entry}")
-    } else {
-        format!(",\n{key_indent}{entry}\n{closing_indent}")
-    };
-    Some(prefix + &inserted + &suffix)
+    Some(format!("{prefix},\n{key_indent}{entry}{suffix}"))
 }
 
 fn escape(source: &str) -> String {

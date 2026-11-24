@@ -29,6 +29,7 @@ pub mod lock;
 pub mod media;
 pub mod pointer;
 pub mod process;
+pub mod sound;
 pub mod terminal;
 pub mod toast;
 pub mod volume;

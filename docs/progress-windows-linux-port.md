@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
-**Status:** fase 0–5 **sudah di `main`**. Stack #55 (28 PR) merge sebagai `90cdbbf`; setelahnya #115, #117, #123, #127, #161 dan #169 masuk. **25 tiket tertutup otomatis** + #84/#85/#90/#92/#78 ditutup menyusul. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-21 — stack #55 merge; yang tersisa hanya gate hardware (#91 E2E-1, L-011, W-001…W-009), #118 (replay monorepo), dan #110 (izin maintainer).
+**Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
+**Checkpoint terakhir:** 2026-11-22 — audit #240 dan dua slice remediasi pertama. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan delapan sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -28,49 +28,56 @@ Status: `belum` · `sedang` · `PR dibuka` · `revisi` · `merged` · `gagal` ·
 
 | Fase | PR / tiket | Isi | Status | Gate |
 |---|---|---|---|---|
-| — | PR #49 | `docs(#33)`: ADR, glossary, plan, handoff, setup agent skills | `PR dibuka` — konflik dengan `main` (#119), tertahan guard #124 (fix PR #126) | — |
-| 0 | PR #50 | `test(#33)`: ekspor golden fixtures bridge + schema | `PR dibuka`, approved | `BridgeGoldenTests` hijau; schema memvalidasi semua fixture |
+| — | PR #49 | `docs(#33)`: ADR, glossary, plan, handoff, setup agent skills | `merged` (`cad7ba7`) | — |
+| 0 | PR #50 | `test(#33)`: ekspor golden fixtures bridge + schema | `merged` | `BridgeGoldenTests` hijau; schema memvalidasi semua fixture |
 | 0 | PR #51 | `fix(#33)`: hook Claude Windows tanpa `--source`, precedence = Swift | `merged` (`b314f9c`, 2026-11-20) | `windows/Morrow.Core.Tests` hijau |
 | 0 | PR #52 | `ci(#33)`: pipefail XCTest | `dilewati` — ditutup, digantikan #111 | — |
-| 0 | #78 → PR #161 | `fix(#78)`: plugin resolve socket saat kirim (morrow → legacy), versi plugin dinaikkan, remote pakai placeholder | `PR dibuka` ke `main` (di luar stack) | bun 99 lulus (termasuk 6 test default per plugin); swift 84 lulus |
+| 0 | #78 → PR #161 | `fix(#78)`: plugin resolve socket saat kirim (morrow → legacy), versi plugin dinaikkan, remote pakai placeholder | `merged` | bun 99 lulus (termasuk 6 test default per plugin); swift 84 lulus |
 | 0.5 | #83 → PR #114 | skrip CI macOS `test`/`package`/`manifest` | `merged` (`c695753`, 2026-11-20) | pipeline hijau + satu run sengaja merah |
 | 0.5 | #124 → PR #126 | guard `verify-local.sh` mengizinkan merge yang membawa CI upstream | `merged` (`f812e7b`, 2026-11-20) | merge `main` → branch fitur tidak diblokir lagi |
-| 0.5 | #84 → PR #115 | kontrak endpoint + 38 kasus | `APPROVED` — keputusan tercatat di dokumen (`d947166`) | Swift `SocketPath.resolve` lulus kasus macOS |
-| 0.5 | #85 → PR #117 | eksperimen Opsi E | `PR dibuka` — hijau 96,8%, tapi **ditolak → Rust** | ADR-0003 `rejected`, keputusan di ADR-0001 |
-| 0.5 | #86 → PR #118 | layout monorepo (skrip replay) | `PR dibuka` (draft) — dijalankan ulang setelah PR lain merge; bagian `.woodpecker.yaml` perlu @aazhrt | `swift test` + DMG hijau, nol perubahan perilaku |
-| 1 | #87 → PR #120 | workspace Rust + `morrow-protocol` + purity check | `PR dibuka` | 300 payload round-trip identik; `cargo tree` bersih |
-| 1 | #88 → PR #121 | `morrow-ipc` UDS | `PR dibuka` (membawa #115 via merge) | 38 kasus endpoint + 11 test integrasi |
-| 1 | #89 → PR #122 | `morrow-bridge` Claude Code | `PR dibuka` | 23 fixture claude; exit tanpa listener <10 ms (0,2–1,3 ms) |
-| 1 | #90 → PR #123 | shell Tauri X11 tight-fit, nonactivating | `PR dibuka` | smoke Xvfb 17/17 |
-| 1 | #91 → PR #125 | kartu approval dua arah | `PR dibuka` — menunggu run di X11 nyata (@aazhrt) | **`E2E-1`**: 27/27 di Xvfb, approve 35 ms, deny 13 ms |
-| 2 | #92 → PR #127 | ekspor fixture reducer + `AttentionPolicy` | `PR dibuka` | 80 kasus reducer (161 step), 56 attention; `Sources/` tidak berubah |
-| 2 | #93 → PR #128 | `HookIntake` → `morrow-core`; bridge memakainya | `PR dibuka` | 84/84 neutral, 84/84 linux |
-| 2 | #94 → PR #130 | port reducer + `HookEventFacts` + wire morrow-app | `PR dibuka` (stacked on #128) | 80/80 kasus (161 step) fixture reducer identik, gate E2E-1 27/27 |
-| 2 | #95 → PR #131 | `AttentionPolicy.intents` + `EventSoundRouting` + `reduce_event` | `PR dibuka` (stacked on #130) | 56/56 kasus attention; 80/80 + 161 step reducer termasuk intents; `morrow-app` 12/12 |
-| 2 | #96 → PR #132 | `GitBranchReader` + `MarkdownBlockParser` | `PR dibuka` (stacked on #131) | 53/53 test markdown + 9/9 test git diport 1:1; `linux-test.sh` hijau |
-| 2 | #97 → PR #133 | transcript tail: parser JSONL + `TailState` di core | `PR dibuka` (stacked on #132) | 70 test port (2 test `DispatchSource` milik watcher); file diganti → replay sekali lalu live |
-| 2 | #135 → PR #137 | sisa #97: `SessionRecap` + `ModelObservation`/`ModelLabel` + `parseISO8601`, termasuk penyerapan delta ke snapshot | `PR dibuka` (stacked on #133) | 22 `ModelLabelTests` + 38/39 `SessionRecapTests`; delta & snapshot lengkap |
-| 2 | #136 → PR #140 | sisa #97: parsing checklist (`AgentTaskTool`, event hook/transcript, `scan` backfill) | `PR dibuka` (stacked on #137) | 9 test parsing; `ScanDelta.task_events` terisi urut |
-| 2 | #139 → PR #142 | `AgentTaskList` (dedupe, park, undo, pensiun plan per-turn, linger, rebuild attach, persistensi) + `Snapshot.agent_tasks` | `PR dibuka` (stacked on #140) | 38/39 test list-side; `scanFile` tetap di platform |
-| 3 | #98 → PR #145/#146 | installer hook Claude Code: editor + rencana (#144), lalu crate `morrow-platform` + kartu Settings | `PR dibuka` (stacked #142 → #145 → #146) | 14 + 18 + 9 test; sisa hanya **E2E-2** di desktop Linux nyata |
-| 3 | #99 → PR #147/#148 | **sembilan target** hook (Claude, 7 JSON, OpenCode) + flag TOML Codex, semua dari kartu Settings | `PR dibuka` (stacked #142→#148) | 19+15+2(40 fixture)+10+8 test; sisa hanya E2E di desktop Linux |
-| 3 | #100 → PR #149 | source TOML (Kimi) + baris cakupan per agent di Settings | `PR dibuka` (stacked #142→#149) — `Fixes #100` | 8 + 5 test; L-002 lulus untuk JSON + TOML |
-| 3 | #151 → PR #152 | source YAML (Hermes, TraeCli) sebagai blok terkelola — komentar utuh | `PR dibuka` (stacked #142→#152) | 14 + 6 test; keputusan **B** tercatat di tiket |
-| 3 | #101 → PR #153 | Capability table 21 adapter + autostart + settings + **tray + global hotkey** | `PR dibuka` (stacked #142→#153) | 11 test + clippy bersih; **sisa hanya L-006…L-012 di desktop nyata** |
-| 3 | #102 → PR #154 | kartu musik: MPRIS, ekstrapolasi posisi, lirik lrclib, volume | `PR dibuka` (stacked #142→#154) | 17 + 11 test; sisa: menggambar kartunya (pekerjaan panel) + L-003/L-004 |
-| 3 | #103 → PR #155 | terminal jump (L-009), process watch, screen lock, notifikasi | `PR dibuka` (stacked #142→#155) | 14 test; sisa: perilaku panel yang memakainya |
-| 3 | #104 → PR #156 | packaging deb/rpm/AppImage + feed per format + bridge di luar paket | `PR dibuka` (stacked #142→#156) | skrip + 5 test; sisa: L-011 smoke & `E2E-2` di host Debian |
+| 0.5 | #84 → PR #115 | kontrak endpoint + 38 kasus | `merged` — keputusan tercatat di dokumen (`d947166`) | Swift `SocketPath.resolve` lulus kasus macOS |
+| 0.5 | #85 → PR #117 | eksperimen Opsi E | `merged` — Opsi E ditolak; core = Rust (ADR-0001) | ADR-0003 `rejected`, keputusan di ADR-0001 |
+| 0.5 | #86 → PR #118 | layout monorepo (skrip replay) | `merged` — PR #118 ditutup; pekerjaan masuk lewat `9680d4a` | `swift test` + DMG hijau, nol perubahan perilaku |
+| 1 | #87 → PR #120 | workspace Rust + `morrow-protocol` + purity check | `merged` | 300 payload round-trip identik; `cargo tree` bersih |
+| 1 | #88 → PR #121 | `morrow-ipc` UDS | `merged` | 38 kasus endpoint + 11 test integrasi |
+| 1 | #89 → PR #122 | `morrow-bridge` Claude Code | `merged` | 23 fixture claude; exit tanpa listener <10 ms (0,2–1,3 ms) |
+| 1 | #90 → PR #123 | shell Tauri X11 tight-fit, nonactivating | `merged` | smoke Xvfb 17/17 |
+| 1 | #91 → PR #125 | kartu approval dua arah | `merged` — PR #125 ditutup; kartu approval masuk lewat #219 (panel). Gate E2E-1 tetap terbuka | **`E2E-1`**: 27/27 di Xvfb, approve 35 ms, deny 13 ms |
+| 2 | #92 → PR #127 | ekspor fixture reducer + `AttentionPolicy` | `merged` | 80 kasus reducer (161 step), 56 attention; `Sources/` tidak berubah |
+| 2 | #93 → PR #128 | `HookIntake` → `morrow-core`; bridge memakainya | `merged` | 84/84 neutral, 84/84 linux |
+| 2 | #94 → PR #130 | port reducer + `HookEventFacts` + wire morrow-app | `merged` | 80/80 kasus (161 step) fixture reducer identik, gate E2E-1 27/27 |
+| 2 | #95 → PR #131 | `AttentionPolicy.intents` + `EventSoundRouting` + `reduce_event` | `merged` | 56/56 kasus attention; 80/80 + 161 step reducer termasuk intents; `morrow-app` 12/12 |
+| 2 | #96 → PR #132 | `GitBranchReader` + `MarkdownBlockParser` | `merged` | 53/53 test markdown + 9/9 test git diport 1:1; `linux-test.sh` hijau |
+| 2 | #97 → PR #133 | transcript tail: parser JSONL + `TailState` di core | `merged` | 70 test port (2 test `DispatchSource` milik watcher); file diganti → replay sekali lalu live |
+| 2 | #135 → PR #137 | sisa #97: `SessionRecap` + `ModelObservation`/`ModelLabel` + `parseISO8601`, termasuk penyerapan delta ke snapshot | `merged` | 22 `ModelLabelTests` + 38/39 `SessionRecapTests`; delta & snapshot lengkap |
+| 2 | #136 → PR #140 | sisa #97: parsing checklist (`AgentTaskTool`, event hook/transcript, `scan` backfill) | `merged` | 9 test parsing; `ScanDelta.task_events` terisi urut |
+| 2 | #139 → PR #142 | `AgentTaskList` (dedupe, park, undo, pensiun plan per-turn, linger, rebuild attach, persistensi) + `Snapshot.agent_tasks` | `merged` | 38/39 test list-side; `scanFile` tetap di platform |
+| 3 | #98 → PR #145/#146 | installer hook Claude Code: editor + rencana (#144), lalu crate `morrow-platform` + kartu Settings | `merged` — sisa hanya E2E-2 | 14 + 18 + 9 test; sisa hanya **E2E-2** di desktop Linux nyata |
+| 3 | #99 → PR #147/#148 | **sembilan target** hook (Claude, 7 JSON, OpenCode) + flag TOML Codex, semua dari kartu Settings | `merged` — sisa hanya E2E di desktop Linux | 19+15+2(40 fixture)+10+8 test; sisa hanya E2E di desktop Linux |
+| 3 | #100 → PR #149 | source TOML (Kimi) + baris cakupan per agent di Settings | `merged` | 8 + 5 test; L-002 lulus untuk JSON + TOML |
+| 3 | #151 → PR #152 | source YAML (Hermes, TraeCli) sebagai blok terkelola — komentar utuh | `merged` | 14 + 6 test; keputusan **B** tercatat di tiket |
+| 3 | #101 → PR #153 | Capability table 21 adapter + autostart + settings + **tray + global hotkey** | `merged` — sisa L-006…L-012 di desktop nyata | 11 test + clippy bersih; **sisa hanya L-006…L-012 di desktop nyata** |
+| 3 | #102 → PR #154 | kartu musik: MPRIS, ekstrapolasi posisi, lirik lrclib, volume | `merged` — sisa L-003/L-004 | 17 + 11 test; sisa: menggambar kartunya (pekerjaan panel) + L-003/L-004 |
+| 3 | #103 → PR #155 | terminal jump (L-009), process watch, screen lock, notifikasi | `merged` | 14 test; sisa: perilaku panel yang memakainya |
+| 3 | #104 → PR #156 | packaging deb/rpm/AppImage + feed per format + bridge di luar paket | `merged` — sisa L-011 + E2E-2 di host Debian | skrip + 5 test; sisa: L-011 smoke & `E2E-2` di host Debian |
 | 3 | #98 (lanjutan) | E2E-2: `claude` asli → kartu → Approve/Deny, tanpa event dobel | `belum` — butuh desktop Linux nyata | satu-satunya sisa #98 |
-| 4 | #105 → PR #157 | named pipe Windows (DACL, cek SID server) + lane kompilasi | `PR dibuka` (stacked #142→#157) | ter-compile MSVC; sisa **W-001** di host Windows |
-| 4 | #106 → PR #158 | panel Windows: hit-test sudut, no-activate, keyboard Question, spike input region | `PR dibuka` (stacked #142→#158) | shell ter-compile Windows; sisa **W-005** + pilihan click-through |
-| 4 | #107 → PR #159 | sembilan adapter Windows + tabel Capability per-OS | `PR dibuka` (stacked #142→#159) | ter-compile + 13 test keputusan; sisa **W-006/7/9** |
-| 4 | #108 → PR #160 | installer hook Windows (`.cmd`, `%USERPROFILE%`) + NSIS per-user | `PR dibuka` (stacked #142→#160) | 6 test installer; sisa **W-002/4/8**, build rilis, E2E-2 |
-| 5 | #109 → PR #162 | anchoring: deteksi compositor, degradasi GNOME, baris Capability | `PR dibuka` (stacked #142→#162) | 8 test; **layer surface/input region/Portal menunggu keputusan fork tao** |
+| 4 | #105 → PR #157 | named pipe Windows (DACL, cek SID server) + lane kompilasi | `merged` — sisa W-001 di host Windows | ter-compile MSVC; sisa **W-001** di host Windows |
+| 4 | #106 → PR #158 | panel Windows: hit-test sudut, no-activate, keyboard Question, spike input region | `merged` — sisa W-005 | shell ter-compile Windows; sisa **W-005** + pilihan click-through |
+| 4 | #107 → PR #159 | sembilan adapter Windows + tabel Capability per-OS | `merged` — sisa W-006/7/9 | ter-compile + 13 test keputusan; sisa **W-006/7/9** |
+| 4 | #108 → PR #160 | installer hook Windows (`.cmd`, `%USERPROFILE%`) + NSIS per-user | `merged` — sisa W-002/4/8 + build rilis + E2E-2 | 6 test installer; sisa **W-002/4/8**, build rilis, E2E-2 |
+| 5 | #109 → PR #162 | anchoring: deteksi compositor, degradasi GNOME, baris Capability | `merged` — layer surface/input region/Portal menunggu keputusan fork tao | 8 test; **layer surface/input region/Portal menunggu keputusan fork tao** |
 | 6 | #110 | Hapus core C# setelah migrasi | `tidak bisa dikerjakan agen` | butuh **izin tertulis maintainer `windows/`** + #108 lulus |
+| 6 | #180–#202 → PR #203 | panel UI: 18 komponen, kartu sesi/approval/musik/Question/completion, drag, Settings | `PR dibuka` (draft) — **tidak** di `main` | oxlint/svelte-check bersih, 209 test frontend, 632 test Rust, clippy bersih; L-001…L-012 + W-001…W-009 belum dinilai |
+| 6 | #235 → PR #249 | Capability jujur: 11 baris Linux / 8 Windows turun ke `Unsupported(reason)`, registry `ADAPTERS` + test penjaga | `PR dibuka` (stacked #203) | 635 test Rust; guard merah dulu untuk 11 baris |
+| 6 | #241 → PR #250 | outlet suara: `PlaySound` diputar, tabel cue, `PlaySoundW` di Windows, halaman Settings → Sound | `PR dibuka` (stacked #249) | 643 test Rust, 211 frontend, `windows/ci/check.sh` PASS |
+| 6 | #242 → PR #251 | dokumen status cocok dengan kode: 33 baris papan, kolom Status §5.1/§5.2 | `PR dibuka` (stacked #250) | `rg` tidak menemukan klaim yang dibantah |
+| 6 | #243 → PR #253 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `revisi` (stacked #251) | self-check 14/14 di checkout bersih; gate penuh **belum jalan** di host mana pun |
 
 Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge commit*, hapus branch setelah merge.
 
 ### Snapshot 2026-11-20 (sama dengan komentar di Spec #82)
+
+> Snapshot historis. Sejak itu seluruh stack merge sebagai `90cdbbf`; papan status di atas dan Log Checkpoint yang berlaku.
 
 | | |
 |---|---|
@@ -87,10 +94,16 @@ Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge com
 
 ## Gate end-to-end
 
-| Gate | Fase | Input | Membuktikan | Dinilai di |
-|---|---|---|---|---|
-| `E2E-1` | 1 | hook JSON sintetis | kabel tersambung dua arah | Xvfb (smoke) → host Debian X11 (final) |
-| `E2E-2` | 3, 4 | `claude` asli + hook terinstall | produk bekerja terhadap CLI nyata | host Debian; Windows QEMU/hardware |
+| Gate | Fase | Input | Membuktikan | Dinilai di | Skrip |
+|---|---|---|---|---|---|
+| `E2E-1` | 1 | hook JSON sintetis | kabel tersambung dua arah | Xvfb (smoke) → host Debian X11 (final) | `linux/ci/e2e1.sh` |
+| `E2E-2` | 3, 4 | `claude` asli + hook terinstall | produk bekerja terhadap CLI nyata | host Debian; Windows QEMU/hardware | `linux/ci/e2e2.sh` · `windows/ci/e2e2.ps1` |
+
+`linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude`, tanpa frontend, dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Ia tidak memanggil `x11_binaries`/`x11_workdir`, jadi jalan di checkout bersih asal ada biner aplikasi (`MORROW_APP`, atau `target/debug/morrow-app`) — Tauri memerlukan `dist` saat mengompilasi, jadi skrip tidak lagi membangunnya sendiri. 14 pemeriksaan (11 installer + 3 untuk logika file marker). Separuh panel (CLI asli + klik) tetap butuh host.
+
+`windows/ci/e2e2.ps1` **ditulis tetapi belum pernah dijalankan di host Windows mana pun**. Bagian installer-nya otomatis; bagian panel masih manual dan tercetak sebagai langkah di blok Evidence-nya. Baris `PASS` skrip itu hanya untuk separuh installer, bukan untuk gate.
+
+**Merge Danger:** AC "hasil satu kali jalan nyata ditempel di #98/#108" masih **terbuka di kedua OS**. Skrip sudah ditulis dan separuh installernya terbukti; gate E2E-2 belum pernah berjalan di host Linux X11 maupun Windows. Jangan klaim sebaliknya di PR atau tiket.
 
 ---
 
@@ -115,6 +128,27 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-23 (revisi review #253) — gate kini bisa gagal, dan jalan di checkout bersih
+
+- **Sudah:** menanggapi `CHANGES_REQUESTED` fzrsahi di #253. (1) Efek tool sekarang berupa **file marker per-run**: prompt memuat path (`__MARKER_FILE__`), approve memeriksa isi file itu, deny memeriksa ketiadaannya — bukan lagi `grep` pada pane yang menggemaikan prompt; `pipe-pane` dipasang sebelum `send-keys`, dan pengecekan efek dilakukan setelah kartu hilang. (2) `--self-check` tidak lagi memanggil `x11_binaries`/`x11_workdir`: tidak butuh frontend, display, socket, atau bridge. (3) `windows/ci/e2e2.ps1` jujur: "ditulis tetapi belum pernah dijalankan di host Windows", default biner rilis, `try/finally` membersihkan `%TEMP%\e2e2-*`, dan `PASS`-nya hanya untuk separuh installer. (4) Baris papan diperbaiki ke #253; AC jalan nyata di #98/#108 dinyatakan masih terbuka di Merge Danger.
+- **Bukti:** `bash -n linux/ci/e2e2.sh linux/ci/x11-lib.sh` bersih; tiga asersi marker dijalankan sebagai bagian dari self-check.
+- **Berikutnya:** re-review #253; setelah itu #232 → #245.
+- **Blocker:** gate E2E-2 penuh **belum pernah jalan** di host Linux X11 maupun Windows; AC #98/#108 masih terbuka.
+
+### 2026-11-22 (lanjutan) — gate E2E-2, dan bug installer yang ia temukan
+
+- **Sudah:** `linux/ci/e2e2.sh` (dengan mode `--self-check` yang jalan tanpa `claude` dan tanpa display), `windows/ci/e2e2.ps1` (belum pernah dijalankan di host Windows), dan `morrow-app --hooks status|install|uninstall|install-all|uninstall-all` sebagai jalur installer tanpa GUI — prasyarat agar gate bisa memasang hook tanpa mengklik Settings. **Gate itu langsung menemukan dua bug:** `delete_top_level_key` meninggalkan baris baru sehingga uninstall tidak mengembalikan `settings.json` byte-for-byte (melanggar AC #98), dan `x11_cleanup` gagal dengan `pids[@]: unbound variable` ketika tidak ada proses yang dijalankan. Keduanya diperbaiki; invariannya sekarang: `insert_key` tidak pernah menambah spasi miliknya sendiri.
+- **Bukti:** `linux/ci/e2e2.sh --self-check` 11/11 lulus; `cargo test --workspace` 647 lulus (643 sebelum); `windows/ci/check.sh` PASS ketiga crate; `bun test` 211 lulus.
+- **Berikutnya:** #232 → #245 (decoder core batch 1 + fixture dari Swift), lalu #244, #247, #246, #248.
+- **Blocker:** gate E2E-2 penuh butuh host dengan `claude` terpasang dan login — tidak ada di mesin pengembangan ini.
+
+### 2026-11-22 — audit paritas #240 dan dua slice remediasi
+
+- **Sudah:** audit menyeluruh Swift → Rust (#240) dengan 8 sub-issue. Verifikasi ulang di branch PR #203 menemukan **11 baris Capability** yang mengaku punya adapter (bukan 8), `SideEffect::PlaySound` yang dibuang di `feed.rs`, dan #238/#239 yang mengukur `main` sebelum seri panel mendarat. Dua slice pertama mendarat: **#235 → PR #249** (registry `ADAPTERS` + test penjaga; 11 baris Linux / 8 Windows turun ke `Unsupported(reason)`) dan **#241 → PR #250** (outlet suara: tabel cue, `pw-play`/`paplay`/`canberra-gtk-play` di Unix, `PlaySoundW` di Windows, halaman Settings → Sound).
+- **Bukti:** `cargo test --workspace` 643 lulus (632 sebelum), `cargo clippy --workspace --all-targets` bersih, `bun test` 211 lulus, `svelte-check` 0 error/0 warning, `windows/ci/check.sh` PASS ketiga crate, `verify-local.sh` hijau.
+- **Berikutnya:** #242 (dokumen ini + §5.1/§5.2 plan), #243 (`e2e2.sh`), lalu #232 dipecah ke #244–#248.
+- **Blocker:** gate hardware tidak berubah — E2E-1, E2E-2, L-001…L-012, W-001…W-009 tetap butuh host Debian/Windows.
 
 ### 2026-11-21 — #86, tata letak monorepo dipindahkan
 
