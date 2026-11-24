@@ -6,8 +6,33 @@
 //! UI states, not a crash — and the injected trait keeps every adapter testable
 //! without a desktop behind it.
 
+use std::path::Path;
+use std::process::Command;
 use std::io::Write;
 use std::process::{Command, Stdio};
+
+/// Whether `path` is a regular file the shell could actually spawn as a tool.
+///
+/// A file that is not executable must not make a capability row promise
+/// something the feed cannot run. The Capability probe and the sound player
+/// share this one answer so they cannot disagree about what is on `PATH`.
+/// On Windows there is no Unix executable bit, so a regular file is enough —
+/// the same rule the player applies there.
+pub(crate) fn is_executable_tool(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    if !metadata.is_file() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    true
+}
 
 /// Runs a program and gives back its stdout. An error is the sentence the card
 /// shows, not a panic.
@@ -66,5 +91,39 @@ impl Runner for SystemRunner {
             ));
         }
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_executable_tool;
+
+    #[test]
+    #[cfg(unix)]
+    fn only_an_executable_regular_file_is_a_tool() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("a clock")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("morrow-tool-{}-{nanos}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let tool = dir.join("pw-play");
+
+        std::fs::write(&tool, "#!/bin/sh\n").expect("write");
+        assert!(
+            !is_executable_tool(&tool),
+            "a non-executable file is not a tool"
+        );
+
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+        assert!(
+            is_executable_tool(&tool),
+            "the same file once it is executable"
+        );
+
+        std::fs::remove_dir_all(&dir).expect("cleanup");
     }
 }
