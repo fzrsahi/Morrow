@@ -99,6 +99,23 @@ pub fn hook_script() -> String {
         + "\r\n"
 }
 
+/// Make sure the `.cmd` exists and is current. `true` when it was written.
+///
+/// Separate from `install` because more than one file names this script: Claude's
+/// own hooks, and every target a fork installs (#234). A fork installed on a
+/// profile whose Claude hooks were never installed still needs the script, or its
+/// entries point at a path `cmd.exe` cannot run.
+pub fn ensure_script(paths: &Paths) -> Result<bool, Error> {
+    fs::create_dir_all(&paths.codeisland_dir)?;
+    match read_text(&paths.script)? {
+        Some(text) if text.contains(&version_marker()) => Ok(false),
+        _ => {
+            fs::write(&paths.script, hook_script())?;
+            Ok(true)
+        }
+    }
+}
+
 /// Install or repair everything. `bridge_source` is the `.exe` shipped beside
 /// the app; when it is missing the script still lands, and reports it.
 pub fn install(
@@ -113,16 +130,10 @@ pub fn install(
     let plan = claude_hooks::install(existing.as_deref(), &command, version)
         .ok_or_else(|| Error::UnparseableSettings(paths.settings.clone()))?;
 
-    let mut report = Report::default();
-
-    fs::create_dir_all(&paths.codeisland_dir)?;
-    match read_text(&paths.script)? {
-        Some(text) if text.contains(&version_marker()) => {}
-        _ => {
-            fs::write(&paths.script, hook_script())?;
-            report.script_written = true;
-        }
-    }
+    let mut report = Report {
+        script_written: ensure_script(paths)?,
+        ..Report::default()
+    };
 
     if let Some(source) = bridge_source {
         report.bridge_copied = crate::bridge::ensure_at(source, &paths.bridge)?.copied;

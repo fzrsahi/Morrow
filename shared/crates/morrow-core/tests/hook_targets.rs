@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use morrow_core::installer::json_editor::strip_json_comments;
 use morrow_core::installer::targets::{
-    Format, TARGETS, command_for, install, is_installed, target_for, uninstall,
+    Format, Root, TARGETS, command_for, install, is_installed, target_for, uninstall,
 };
 
 const BRIDGE: &str = "~/.codeisland/codeisland-hook.sh";
@@ -49,7 +49,10 @@ fn every_target_of_the_ticket_is_here() {
             "stepfun",
             "antigravity",
             "workbuddy",
-            "qwen"
+            "qwen",
+            // #234 batch 2: the two whose paths are not a plain home directory.
+            "grok",
+            "traecli-next"
         ]
     );
     // OpenCode is a plugin file, not a hooks key: its own slice.
@@ -77,6 +80,69 @@ fn the_paths_and_keys_are_the_ones_macos_writes() {
     for target in TARGETS {
         assert_eq!(target.key, "hooks");
     }
+}
+
+/// #234 batch 2: Grok's file is not in the user's home. `$GROK_HOME` decides, the
+/// `~` forms expand, and a blank variable is the default rather than an empty
+/// path — the same rule #258 had to fix for Claude's config dir.
+#[test]
+fn groks_file_hangs_from_grok_home_not_from_home() {
+    let grok = target("grok");
+    assert_eq!(grok.root, Root::GrokHome);
+    assert_eq!(grok.path, "hooks/codeisland.json");
+    assert_eq!(grok.format, Format::Nested);
+
+    let home = std::path::Path::new("/home/dev");
+    let file = |value: Option<&str>| {
+        let value = value.map(str::to_owned);
+        grok.file(home, move |name| {
+            (name == "GROK_HOME").then(|| value.clone()).flatten()
+        })
+    };
+    // Unset, blank and whitespace all mean the default.
+    assert_eq!(file(None), home.join(".grok/hooks/codeisland.json"));
+    assert_eq!(file(Some("")), home.join(".grok/hooks/codeisland.json"));
+    assert_eq!(file(Some("   ")), home.join(".grok/hooks/codeisland.json"));
+    // A second account points somewhere else, and that is where hooks go.
+    assert_eq!(
+        file(Some("/work/grok")),
+        std::path::Path::new("/work/grok/hooks/codeisland.json")
+    );
+    // The documented `~` forms reach the process unexpanded.
+    assert_eq!(file(Some("~")), home.join("hooks/codeisland.json"));
+    assert_eq!(file(Some("~/alt")), home.join("alt/hooks/codeisland.json"));
+
+    // Every other target is untouched by this.
+    assert_eq!(target("codex").root, Root::Home);
+    assert_eq!(
+        target("codex").file(home, |_| Some("/ignored".to_owned())),
+        home.join(".codex/hooks.json")
+    );
+}
+
+/// Trae CLI Next is a second config layout for one product, so it reports under
+/// the older CLI's source: two cards for one session would be two cards.
+#[test]
+fn trae_cli_next_reports_under_traecli() {
+    let next = target("traecli-next");
+    assert_eq!(next.path, ".trae/cli/hooks.json");
+    assert_eq!(next.format, Format::Nested);
+    assert_eq!(next.bridge_source(), "traecli");
+    let text = install(next, None, BRIDGE).expect("an install").text;
+    assert!(text.contains("--source traecli"), "{text}");
+    assert!(!text.contains("--source traecli-next"), "{text}");
+    // Grok's events are its own, five events wider than a Claude fork's.
+    let grok = target("grok");
+    let names: Vec<&str> = grok.events.iter().map(|event| event.name).collect();
+    assert!(names.contains(&"PermissionDenied"));
+    assert!(names.contains(&"StopFailure"));
+    assert!(names.contains(&"PostCompact"));
+    assert!(
+        !target("codex")
+            .events
+            .iter()
+            .any(|event| event.name == "StopFailure")
+    );
 }
 
 /// Qwen Code counts milliseconds where every other Claude fork counts seconds.
