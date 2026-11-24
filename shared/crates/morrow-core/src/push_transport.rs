@@ -788,10 +788,11 @@ mod tests {
     #[test]
     fn a_date_form_retry_after_reaches_the_retry_decision() {
         let mut throttled = response(Some(429), "");
-        // "Wed, 21 Oct 2015 07:28:00 GMT" is 120 seconds after this `now`.
+        // "Wed, 21 Oct 2015 07:28:00 GMT" is 120 seconds after this `now`,
+        // capped at RETRY_MAX_DELAY_SECONDS like every other hint.
         let now = 1_445_412_360.0;
         throttled.retry_after_header = Some("Wed, 21 Oct 2015 07:28:00 GMT".to_owned());
-        assert_eq!(retry_delay(&throttled, now), Some(120.0));
+        assert_eq!(retry_delay(&throttled, now), Some(RETRY_MAX_DELAY_SECONDS));
         // A seconds-form header still wins over the parsed float and the body.
         throttled.retry_after_header = Some("7".to_owned());
         assert_eq!(retry_delay(&throttled, now), Some(7.0));
