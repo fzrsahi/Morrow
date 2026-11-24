@@ -1592,7 +1592,11 @@ final class AppState {
     func refreshDerivedState() {
         let summary = deriveSessionSummary(from: sessions)
         let thinking = summary.status == .processing || summary.status == .running
-            || sessions.values.contains { $0.status == .processing || $0.status == .running || $0.currentTool != nil }
+            || sessions.values.contains {
+                $0.status == .processing
+                    || $0.status == .running
+                    || ($0.status != .waitingApproval && $0.status != .waitingQuestion && $0.currentTool != nil)
+            }
         if isThinking != thinking { isThinking = thinking }
         let display = rotatingSessionId ?? activeSessionId ?? sessions.keys.sorted().first
         if displaySessionId != display { displaySessionId = display }

@@ -15,7 +15,8 @@ This specification is strictly mandatory when developing or modifying macOS notc
    - **HUD / Expanded:** `(panelWidth - expandedNotchCutoutWidth) / 2` (~`235 – 265 pt` per wing).
 
 3. **Right Wing Must Not Force-Expand Notch:**
-   - The right wing (`effectiveNaturalRightWidth`) **must not** widen the bar beyond `effectiveNaturalLeftWidth + badgeReserve` during Thinking or Idle states.
+   - The right wing (`effectiveNaturalRightWidth`) **must never** widen the bar beyond `effectiveNaturalLeftWidth` during Thinking, nor exceed the Idle budget (`41 – 56 pt`) during Idle.
+   - Status badges (single-priority: `pendingQuestion > followUpReminder > waitingAttention > completionGlance > quietHours`) must fit inside the existing wing budget (inline in Thinking/Bilateral wings when room permits, or as a 0pt-width corner overlay in Idle and narrow scales).
 
 4. **Calculate Before Modifying UI:**
    - Before adding or adjusting elements in the left/right wings, **calculate first** whether all elements (icon + text + spacing + `badgeReserve`) fit within `maxContentWidth` (`collapsedInnerBudget - totalRightInnerPadding - badgeReserve`).

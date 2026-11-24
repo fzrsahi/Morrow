@@ -312,4 +312,131 @@ final class NotchHoverInteractionTests: XCTestCase {
     func testQuestionFieldTakesFocusWhenTheUserIsAlreadyInThePanel() {
         XCTAssertTrue(NotchCardFocusPolicy.shouldFocusQuestionFieldOnAppear(panelIsKeyWindow: true))
     }
+
+    // MARK: - Single-priority status badges & isThinking (#391)
+
+    func testPrimaryStatusBadgeFollowsSinglePriorityOrderAndBounds() {
+        XCTAssertEqual(
+            NotchWidthMetrics.primaryStatusBadge(
+                hasHiddenPendingQuestion: true,
+                hasFollowUpHint: true,
+                isWaitingAttention: true,
+                hasCompletionGlance: true,
+                inQuietHours: true
+            ),
+            .pendingQuestion
+        )
+        XCTAssertEqual(
+            NotchWidthMetrics.primaryStatusBadge(
+                hasHiddenPendingQuestion: false,
+                hasFollowUpHint: true,
+                isWaitingAttention: true,
+                hasCompletionGlance: true,
+                inQuietHours: true
+            ),
+            .followUpReminder
+        )
+        XCTAssertEqual(
+            NotchWidthMetrics.primaryStatusBadge(
+                hasHiddenPendingQuestion: false,
+                hasFollowUpHint: false,
+                isWaitingAttention: true,
+                hasCompletionGlance: true,
+                inQuietHours: true
+            ),
+            .waitingAttention
+        )
+        XCTAssertEqual(
+            NotchWidthMetrics.primaryStatusBadge(
+                hasHiddenPendingQuestion: false,
+                hasFollowUpHint: false,
+                isWaitingAttention: false,
+                hasCompletionGlance: true,
+                inQuietHours: true
+            ),
+            .completionGlance
+        )
+        XCTAssertEqual(
+            NotchWidthMetrics.primaryStatusBadge(
+                hasHiddenPendingQuestion: false,
+                hasFollowUpHint: false,
+                isWaitingAttention: false,
+                hasCompletionGlance: false,
+                inQuietHours: true
+            ),
+            .quietHours
+        )
+        XCTAssertNil(
+            NotchWidthMetrics.primaryStatusBadge(
+                hasHiddenPendingQuestion: false,
+                hasFollowUpHint: false,
+                isWaitingAttention: false,
+                hasCompletionGlance: false,
+                inQuietHours: false
+            )
+        )
+
+        for badge: NotchWidthMetrics.NotchStatusBadge in [
+            .pendingQuestion,
+            .followUpReminder,
+            .waitingAttention,
+            .completionGlance,
+            .quietHours,
+        ] {
+            XCTAssertLessThanOrEqual(NotchWidthMetrics.statusBadgeWidth(for: badge), 13)
+        }
+        XCTAssertEqual(NotchWidthMetrics.statusBadgeWidth(for: nil), 0)
+    }
+
+    func testFitsInlineStatusBadgeRespectsIdleAndNarrowBudgets() {
+        XCTAssertFalse(
+            NotchWidthMetrics.fitsInlineStatusBadge(
+                isThinking: false,
+                isBilateral: false,
+                availableInnerWidth: 120,
+                badgeReserve: 15
+            )
+        )
+        XCTAssertTrue(
+            NotchWidthMetrics.fitsInlineStatusBadge(
+                isThinking: true,
+                isBilateral: false,
+                availableInnerWidth: 100,
+                badgeReserve: 15
+            )
+        )
+        XCTAssertFalse(
+            NotchWidthMetrics.fitsInlineStatusBadge(
+                isThinking: true,
+                isBilateral: false,
+                availableInnerWidth: 50,
+                badgeReserve: 15
+            )
+        )
+        XCTAssertTrue(
+            NotchWidthMetrics.fitsInlineStatusBadge(
+                isThinking: false,
+                isBilateral: true,
+                availableInnerWidth: 50,
+                badgeReserve: 15
+            )
+        )
+    }
+
+    @MainActor
+    func testSingleWaitingApprovalSessionWithCurrentToolDoesNotSetIsThinking() {
+        let state = AppState()
+        var waiting = SessionSnapshot()
+        waiting.status = .waitingApproval
+        waiting.currentTool = "Bash"
+        state.sessions = ["s1": waiting]
+        state.refreshDerivedState()
+        XCTAssertFalse(state.isThinking)
+
+        var processing = SessionSnapshot()
+        processing.status = .processing
+        state.sessions["s2"] = processing
+        state.refreshDerivedState()
+        XCTAssertTrue(state.isThinking)
+    }
 }
