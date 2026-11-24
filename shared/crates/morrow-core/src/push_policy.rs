@@ -115,6 +115,56 @@ pub fn evaluate(input: &PushGateInput) -> Option<PushSkipReason> {
     None
 }
 
+/// A channel the shell has checked for this event. Kept generic so `morrow-core`
+/// does not need to know the channel implementations.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushChannelInput {
+    pub enabled: bool,
+    pub accepts_event: bool,
+}
+
+impl PushChannelInput {
+    pub fn accepts(enabled: bool, accepts_event: bool) -> Self {
+        Self {
+            enabled,
+            accepts_event,
+        }
+    }
+}
+
+/// Everything the one push decision needs, with the clock and the channel state
+/// injected. The shell builds this from settings, presence and its dedupe/limiter.
+#[derive(Clone, Debug)]
+pub struct PushDecisionInput<'a> {
+    pub gate: PushGateInput,
+    pub channels: &'a [PushChannelInput],
+    /// False when the reminder's request has already been answered.
+    pub pending: bool,
+    pub now: f64,
+}
+
+/// The single decision point: all nine skip reasons can come out of here, and
+/// the global volume cap is enforced for the kinds that may be dropped.
+pub fn decide(input: &PushDecisionInput<'_>, limiter: &PushRateLimiter) -> Option<PushSkipReason> {
+    if let Some(reason) = evaluate(&input.gate) {
+        return Some(reason);
+    }
+    if input.gate.kind == PushEventKind::Reminder && !input.pending {
+        return Some(PushSkipReason::NothingPending);
+    }
+    if !input
+        .channels
+        .iter()
+        .any(|channel| channel.enabled && channel.accepts_event)
+    {
+        return Some(PushSkipReason::NoChannel);
+    }
+    if !must_deliver(input.gate.kind) && limiter.next_slot(input.now) > input.now {
+        return Some(PushSkipReason::RateLimited);
+    }
+    None
+}
+
 /// One moment, not one hook: the same session and kind inside the window is one push.
 #[derive(Clone, Debug)]
 pub struct PushDeduplicator {
@@ -404,6 +454,93 @@ mod tests {
             is_subagent: false,
             interrupted: false,
         }
+    }
+
+    #[test]
+    fn all_nine_skip_reasons_are_reachable_from_the_decision() {
+        let now = 1_000.0;
+        let channel = PushChannelInput::accepts(true, true);
+        let open = PushRateLimiter::new(Vec::new());
+        let decide_with =
+            |gate, channels: &[PushChannelInput], pending, limiter: &PushRateLimiter| {
+                decide(
+                    &PushDecisionInput {
+                        gate,
+                        channels,
+                        pending,
+                        now,
+                    },
+                    limiter,
+                )
+            };
+
+        let mut present = input(PushEventKind::Permission);
+        present.only_when_away = true;
+        assert_eq!(
+            decide_with(present, &[channel], true, &open),
+            Some(PushSkipReason::UserPresent)
+        );
+        let mut suppressed = input(PushEventKind::Permission);
+        suppressed.smart_suppressed = true;
+        assert_eq!(
+            decide_with(suppressed, &[channel], true, &open),
+            Some(PushSkipReason::SmartSuppressed)
+        );
+        let mut subagent = input(PushEventKind::Completion);
+        subagent.is_subagent = true;
+        assert_eq!(
+            decide_with(subagent, &[channel], true, &open),
+            Some(PushSkipReason::Subagent)
+        );
+        let mut interrupted = input(PushEventKind::Completion);
+        interrupted.interrupted = true;
+        assert_eq!(
+            decide_with(interrupted, &[channel], true, &open),
+            Some(PushSkipReason::Interrupted)
+        );
+        assert_eq!(
+            decide_with(input(PushEventKind::Reminder), &[channel], false, &open),
+            Some(PushSkipReason::NothingPending)
+        );
+        assert_eq!(
+            decide_with(input(PushEventKind::Permission), &[], true, &open),
+            Some(PushSkipReason::NoChannel)
+        );
+        assert_eq!(
+            decide_with(
+                input(PushEventKind::Permission),
+                &[PushChannelInput::accepts(false, true)],
+                true,
+                &open
+            ),
+            Some(PushSkipReason::NoChannel)
+        );
+
+        let mut limited = PushRateLimiter::new(vec![PushRateWindow {
+            count: 1,
+            seconds: 60.0,
+        }]);
+        limited.record(now);
+        assert_eq!(
+            decide_with(input(PushEventKind::Completion), &[channel], true, &limited),
+            Some(PushSkipReason::RateLimited)
+        );
+        // An approval is never refused for volume: it is the one that unblocks.
+        assert_eq!(
+            decide_with(input(PushEventKind::Permission), &[channel], true, &limited),
+            None
+        );
+
+        // `Duplicate` still comes from the deduplicator, the other single entry point.
+        let mut dedupe = PushDeduplicator::default();
+        assert_eq!(
+            dedupe.admit(PushEventKind::Permission, "s", Some("1"), now),
+            None
+        );
+        assert_eq!(
+            dedupe.admit(PushEventKind::Permission, "s", Some("1"), now + 1.0),
+            Some(PushSkipReason::Duplicate)
+        );
     }
 
     #[test]
