@@ -11,8 +11,18 @@
 <p align="center">
   <a href="https://github.com/fzrsahi/morrow/releases/latest"><img src="https://img.shields.io/github/v/release/fzrsahi/morrow?style=flat-square&color=4c8bf5&label=release" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-111111?style=flat-square&logo=apple&logoColor=white" alt="macOS 14+">
+  <a href="docs/build-windows-linux.md"><img src="https://img.shields.io/badge/Linux-experimental-3fcc66?style=flat-square&logo=linux&logoColor=white" alt="Linux port: experimental"></a>
+  <a href="docs/build-windows-linux.md"><img src="https://img.shields.io/badge/Windows-experimental-0078d6?style=flat-square&logo=windows&logoColor=white" alt="Windows port: experimental"></a>
+  <img src="https://img.shields.io/badge/Rust-1.98-dea584?style=flat-square&logo=rust&logoColor=white" alt="Rust 1.98">
+  <img src="https://img.shields.io/badge/Tauri-v2-24c8d7?style=flat-square&logo=tauri&logoColor=white" alt="Tauri v2">
+  <img src="https://img.shields.io/badge/Svelte-5-ff3e00?style=flat-square&logo=svelte&logoColor=white" alt="Svelte 5">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/fzrsahi/morrow?style=flat-square&color=8250df" alt="MIT license"></a>
   <a href="https://github.com/fzrsahi/morrow/stargazers"><img src="https://img.shields.io/github/stars/fzrsahi/morrow?style=flat-square&color=e3b341" alt="GitHub stars"></a>
+</p>
+
+<p align="center">
+  Built by <a href="https://github.com/fzrsahi">@fzrsahi</a>, <a href="https://github.com/amaldevice">@amaldevice</a>, <a href="https://github.com/agungdunggio">@agungdunggio</a> and <a href="https://github.com/aazhrt">@aazhrt</a>.<br>
+  Forked from <a href="https://github.com/wxtsky/CodeIsland">wxtsky/CodeIsland</a>.
 </p>
 
 <p align="center">
@@ -20,6 +30,7 @@
   <a href="#highlights">Highlights</a> •
   <a href="#new-features">New Features</a> •
   <a href="#supported-tools">Supported tools</a> •
+  <a href="docs/build-windows-linux.md">Linux / Windows</a> •
   <a href="#build-from-source">Build</a> •
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -406,14 +417,28 @@ open .build/release/Morrow.app
 swift test
 ```
 
+### Linux and Windows (experimental)
+
+From the repository root:
+
+```bash
+(cd shared/desktop && bun install && bun run build)
+cargo build -p morrow-app          # Linux needs GTK3 + WebKitGTK 4.1 dev libs
+```
+
+On Windows, use `cargo tauri build --bundles nsis` after the frontend build. Cross-compile checks from another host run through `./windows/ci/check.sh`.
+
+The full guide, including what is still missing on each platform, is in [docs/build-windows-linux.md](docs/build-windows-linux.md).
+
 ## Contributing
 
 We welcome contributions from everyone! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) for architecture maps, development tips, and pull request guidelines.
 
 ## Requirements
 
-- macOS 14 Sonoma or later
+- macOS 14 Sonoma or later for the finished app
 - Best on a MacBook with a notch; external and notch-less displays work too
+- Linux X11 and Windows are experimental ports. They build and their Rust tests pass, but the real desktop gates have not run. See [Build and run on Linux or Windows](docs/build-windows-linux.md).
 
 ## Acknowledgments
 
