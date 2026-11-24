@@ -130,7 +130,7 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ### 2026-11-22 (keduabelas) — #232 ditutup, kecuali yang tidak bisa dijalankan
 
 - **Sudah:** **#284 → PR #285** cache scan tersambung + gerbang kesegaran. **#286 → PR #287** crate `morrow-watch` (inotify, `ReadDirectoryChangesW`, fallback poll) dan penyambungannya ke tick.
-- **Yang ditemukan saat mengukur:** `ClaudeTranscripts::read` membaca **setiap** transkrip di setiap proyek — 4000 file, empat kali per detik. **1,5 detik per scan.** Gerbang kesegaran sebelum membaca memotongnya jadi 88 ms; cache memotong bacaannya jadi nol pada tick berikutnya. Cache teks memakai `Arc<str>` karena menyerahkan salinan 64 KB × 4000 file berarti 250 MB memcpy per scan.
+- **Yang ditemukan saat mengukur:** `ClaudeTranscripts::read` membaca **setiap** transkrip di setiap proyek — 4000 file, dua kali per detik (~500 ms pada jalur idle). **1,5 detik per scan.** Gerbang kesegaran sebelum membaca memotongnya jadi 88 ms; cache memotong bacaannya jadi nol pada tick berikutnya. Cache teks memakai `Arc<str>` karena menyerahkan salinan 64 KB × 4000 file berarti 250 MB memcpy per scan.
 - **Kekhawatiran saya sendiri yang tidak berdasar:** "O(9 × proses)" yang saya ulang di tiga PR. Diukur: **2,9 ms** terhadap scan 84 ms — 3,4%. Sekarang ada angkanya, bukan penilaian.
 - **Yang tidak selesai:** E2E-2 penuh (#240 kriteria 4) butuh host dengan `claude` asli. Lengan Linux dan Windows `morrow-watch` di-type-check untuk kedua target tapi **belum pernah berjalan** — dinyatakan di dokumentasi crate.
 - **Bukti:** `cargo test --workspace` 848 lulus (843 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS (kini termasuk `morrow-watch`); `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.

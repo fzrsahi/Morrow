@@ -405,8 +405,9 @@ impl Feed {
             .spawn(move || {
                 let mut watcher = feed.watcher();
                 loop {
-                    // A watcher that reports a change wakes the loop early; one
-                    // that does not, or one the OS refused, is a 250 ms sleep.
+                    // A watcher that reports a change wakes the loop early. With
+                    // no change (or no watcher) the wait AND the idle sleep are
+                    // 250 ms, so the real idle cadence is ~500 ms, not 250 ms.
                     let moved = watcher
                         .as_mut()
                         .map(|watcher| watcher.wait(Duration::from_millis(250)))
