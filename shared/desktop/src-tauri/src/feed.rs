@@ -18,6 +18,7 @@ use tauri::ipc::Channel;
 
 use crate::completion::{self, SnapshotCompletion};
 use crate::permissions::{Card, Decision, Permissions};
+use crate::prayer::PrayerSnapshot;
 use crate::prune::{Pid, SessionProcess, Watches};
 use crate::sessions::{Session, Sessions};
 use crate::transcripts::Tails;
@@ -31,6 +32,9 @@ pub struct Snapshot {
     /// The last finished turn's reply, parsed into Markdown blocks by the
     /// core, and its settled presentation. `None` after the next prompt.
     pub completion: Option<SnapshotCompletion>,
+    /// #307: the current prayer schedule. `None` until a city is saved, so a
+    /// fresh install never shows an invented time.
+    pub prayer: Option<PrayerSnapshot>,
 }
 
 /// One push per 1/60 s at most.
@@ -57,6 +61,7 @@ struct State {
     sessions: Sessions,
     permissions: Permissions,
     completion: Option<SnapshotCompletion>,
+    prayer: Option<PrayerSnapshot>,
     watches: Watches,
     channel: Option<Channel<Snapshot>>,
     /// The frontend has not seen the latest snapshot.
@@ -76,6 +81,7 @@ impl Default for State {
             sessions: Sessions::with_home(std::env::var("HOME").unwrap_or_default()),
             permissions: Permissions::default(),
             completion: None,
+            prayer: None,
             watches: Watches::default(),
             channel: None,
             dirty: false,
@@ -98,6 +104,7 @@ impl State {
             sessions: self.sessions.snapshot(),
             permissions: self.permissions.cards(),
             completion: self.completion.clone(),
+            prayer: self.prayer.clone(),
         }
     }
 }
@@ -381,6 +388,18 @@ impl Feed {
             .expect("spawn the feed thread");
     }
 
+    /// Put the prayer schedule on the next snapshot. The prayer commands own
+    /// the calculation; the feed only carries the result to the frontend (#307).
+    pub fn set_prayer(&self, prayer: Option<PrayerSnapshot>) {
+        let mut state = self.lock();
+        if state.prayer == prayer {
+            return;
+        }
+        state.prayer = prayer;
+        state.dirty = true;
+        self.changed.notify_one();
+    }
+
     /// The current snapshot (the pusher uses `State::snapshot` directly).
     #[cfg(test)]
     pub fn snapshot(&self) -> Snapshot {
@@ -593,5 +612,25 @@ mod tests {
             ["b"]
         );
         assert!(!feed.lock().tails.has("a"), "pruning stops its tail too");
+    }
+    #[test]
+    fn snapshot_carries_the_prayer_card_and_can_clear_it() {
+        let feed = Feed::default();
+        assert!(feed.snapshot().prayer.is_none(), "no city, no card");
+        let prayer = crate::prayer::PrayerSnapshot {
+            city_id: "jakarta".to_owned(),
+            city_name: "Jakarta".to_owned(),
+            method: "kemenag".to_owned(),
+            correction_minutes: 0,
+            hijri: "1 Ramadan 1447".to_owned(),
+            times: Vec::new(),
+            next: None,
+            in_minutes: 7,
+            urgent: true,
+        };
+        feed.set_prayer(Some(prayer.clone()));
+        assert_eq!(feed.snapshot().prayer, Some(prayer));
+        feed.set_prayer(None);
+        assert!(feed.snapshot().prayer.is_none());
     }
 }
