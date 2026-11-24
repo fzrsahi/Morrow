@@ -1305,10 +1305,6 @@ struct NotchPanelView: View {
                                 )
                             )
                     )
-                    .overlay(
-                        dynamicIslandShape
-                            .stroke(accent.opacity(0.42), lineWidth: 1.2)
-                    )
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             } else {
@@ -1316,7 +1312,7 @@ struct NotchPanelView: View {
                     .fill(Color.black)
                     .overlay(
                         dynamicIslandShape
-                            .stroke(Color.white.opacity(0.24), lineWidth: 1.2)
+                            .stroke(isToastOnly ? Color.clear : Color.white.opacity(0.24), lineWidth: isToastOnly ? 0 : 1.2)
                     )
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
@@ -1326,7 +1322,7 @@ struct NotchPanelView: View {
                 .fill(Color.black)
                 .overlay(
                     RoundedRectangle(cornerRadius: 7)
-                        .stroke(Color(red: 0.16, green: 0.19, blue: 0.24), lineWidth: 1)
+                        .stroke(isToastOnly ? Color.clear : Color(red: 0.16, green: 0.19, blue: 0.24), lineWidth: isToastOnly ? 0 : 1)
                 )
                 .shadow(color: Color.black.opacity(0.8), radius: 8, y: 4)
         } else {
@@ -1340,14 +1336,7 @@ struct NotchPanelView: View {
                 .overlay(chargingAmbientLayer(for: shape))
                 .overlay(prayerAmbientLayer(for: shape))
                 .overlay(
-                    shape.stroke(
-                        signals.showChargingBanner && !appState.surface.isExpanded
-                            ? chargingAmbientColor.opacity(chargingAmbientStrokeOpacity)
-                            : (signals.showMiniPeekBanner && !appState.surface.isExpanded
-                                ? prayerAmbientAccentColor.opacity(0.22)
-                                : currentStrokeColor),
-                        lineWidth: isToastOnly ? 1.0 : currentStrokeWidth
-                    )
+                    shape.stroke(currentStrokeColor, lineWidth: currentStrokeWidth)
                 )
         }
     }
@@ -1366,19 +1355,6 @@ struct NotchPanelView: View {
             return 0.20
         case .lowBattery:
             return chargingAmbientPulse ? 0.26 : 0.04
-        }
-    }
-
-    private var chargingAmbientStrokeOpacity: Double {
-        switch signals.chargingBannerState {
-        case .charging:
-            return chargingAmbientPulse ? 0.34 : 0.20
-        case .onHold:
-            return chargingAmbientPulse ? 0.28 : 0.18
-        case .fullyCharged:
-            return 0.26
-        case .lowBattery:
-            return chargingAmbientPulse ? 0.38 : 0.08
         }
     }
 
