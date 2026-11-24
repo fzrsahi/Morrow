@@ -23,12 +23,12 @@ The supported tool list did **not** change. The 28-tool grid in our README `:137
 |---|---|
 | Two cores, not one. macOS keeps Swift; Linux and Windows use a Rust core. They share a contract, not code. | ADR-0001 `:5`, `:34`, `:38-39`; ADR-0003 `:3,10` rejects Option E. Cost: two cores kept in step and a port of roughly 37K to 40K lines. |
 | A Tauri v2 and Svelte 5 shell replaces WPF on Windows and serves as the Linux panel. | ADR-0002 `:5,7,9,15-16`; `shared/desktop/src-tauri/tauri.conf.json`. The decision was one shell for two OSes, not performance. |
-| `morrow-core` is pure and guarded by `rust-purity.sh`: no dependency on `windows`, `libc`, `nix`, `zbus`, or `tokio`. | `docs/plan-windows-linux.md:99-105,147,176`; `shared/ci/rust-purity.sh`. Side effects are injected through `Clock`, `CustomSources`, and `FileSystem`. |
-| One capability table is the source of truth. A `Supported` row needs an adapter in `ADAPTERS` or the guard test fails. | `docs/plan-windows-linux.md:218,226`; `capability.rs`; `tests/capability_and_settings.rs`. #235 demoted 11 Linux and 8 Windows rows to `Unsupported(reason)`. |
-| Hook and endpoint contracts are frozen in `shared/contract/`, including golden fixtures and peer verification rules. | ADR-0001 `:5`; `docs/plan-windows-linux.md:56-64,118-130`; `shared/contract/hook-edge-protocol.md`. |
+| `morrow-core` is pure and guarded by `rust-purity.sh`: no dependency on `windows`, `libc`, `nix`, `zbus`, or `tokio`. | `shared/ci/rust-purity.sh`; `docs/memory/2026-11-21.md`. Side effects are injected through `Clock`, `CustomSources`, and `FileSystem`. |
+| One capability table is the source of truth. A `Supported` row needs an adapter in `ADAPTERS` or the guard test fails. | `capability.rs`; `tests/capability_and_settings.rs`; `docs/memory/2026-11-23.md`. #235 demoted 11 Linux and 8 Windows rows to `Unsupported(reason)`. |
+| Hook and endpoint contracts are frozen in `shared/contract/`, including golden fixtures and peer verification rules. | ADR-0001 `:5`; `shared/contract/hook-edge-protocol.md`; `docs/memory/2026-11-21.md`. |
 | Monorepo layout: `macos/`, `shared/`, `linux/`, `windows/`. | #86, PR #171 (`9680d4a5`). 712 files moved without behavior changes. |
-| The Linux panel uses a tight-fit, nonactivating window instead of GTK click-through. | `docs/plan-windows-linux.md:268-303`; ADR-0002 `:20-25`. |
-| Local verification is mandatory before push. Host gates do not run per PR. | `AGENTS.md:54-68`; `docs/plan-windows-linux.md:349,363,463-465`. |
+| The Linux panel uses a tight-fit, nonactivating window instead of GTK click-through. | ADR-0002 `:20-25`; `docs/memory/2026-11-21.md`. |
+| Local verification is mandatory before push. Host gates do not run per PR. | `AGENTS.md:54-68`; `docs/memory/2026-11-23.md`. |
 
 ## Features added in this fork
 
@@ -71,7 +71,7 @@ Do not read the presence of a Rust module as parity with macOS. `morrow-watch`, 
 
 ```sh
 grep -n '^## ' README.md
-grep -n '^## ' docs/plan-windows-linux.md
+grep -rn 'PR #' docs/memory/
 cat docs/adr/0001-two-cores-one-contract.md docs/adr/0002-tauri-v2-shell.md docs/adr/0003-swift-core-sidecar.md
 ./shared/ci/rust-purity.sh
 bash linux/ci/gates.sh --self-check

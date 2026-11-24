@@ -163,6 +163,10 @@ A review exists to catch code that is wrong, not to grade the PR description. Ap
 
 Re-read the latest commit before re-reviewing: do not paste a stale finding the current head already fixes, and acknowledge explicitly what was resolved. Do not repeat the same note across sibling PRs — put it in one issue/PR and link it from the others.
 
+### 5.9. Implementation Memory
+
+Agents must update [`docs/memory/`](docs/memory/README.md) whenever they implement code, not only when a PR merges. Add a dated entry to `docs/memory/YYYY-MM-DD.md` with the issue or PR number, what landed, the paths or modules changed, how it was verified, and what remains open. Old plans and progress boards with the same information were removed, so this folder is the record of what the project actually implemented. Write entries in English. Do not rewrite older dates unless a fact was wrong.
+
 ---
 
 ## 6. Domain-Specific Technical Specifications

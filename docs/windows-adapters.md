@@ -2,7 +2,7 @@
 
 What each adapter uses on Windows, why that and not something else, and what
 only a Windows host can confirm. The Linux answers are in
-[`handoff-windows-linux-port.md`](handoff-windows-linux-port.md); the Capability
+[`docs/memory/`](memory/README.md); the Capability
 table that reports these rows is `morrow-platform::capability`, and it is
 probed per OS (`Environment::os`).
 

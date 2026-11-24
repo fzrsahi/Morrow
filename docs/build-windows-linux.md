@@ -20,6 +20,7 @@ The gap is tracked in [issue #400](https://github.com/fzrsahi/Morrow/issues/400)
 - Bun for the Svelte frontend. Run `bun install` once in `shared/desktop`.
 - Linux: GTK3 and WebKitGTK 4.1 development packages. `linux/ci/Dockerfile` lists the Debian names: `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`.
 - Windows: WebView2 runtime, the MSVC target, and `tauri-cli` (`cargo install tauri-cli --version '^2'`).
+- Cross-checking Windows from a macOS or Linux host: `cargo-xwin` (`cargo install cargo-xwin --locked`). `windows/ci/check.sh` fails without it.
 
 ## Linux
 
@@ -40,6 +41,8 @@ Checks that run without a desktop:
 bash linux/ci/gates.sh --self-check
 ./linux/ci/e2e2.sh --self-check
 ```
+
+`e2e2.sh --self-check` needs an existing app binary: run it after the `cargo build -p morrow-app` above, or point it at one with `MORROW_APP=/path/to/morrow-app`. That build is Tauri's job and requires the frontend `dist` from `bun run build`, so both build steps must come first.
 
 `gates.sh --self-check` only checks the runner's own logic. On a desktop, `bash linux/ci/gates.sh --markdown` produces the real verdict table; the headless run exits 77 because every desktop half is still blocked.
 
@@ -71,7 +74,7 @@ bun run build
 cargo tauri build --bundles nsis
 ```
 
-The NSIS bundle is configured for a per-user install. Beta builds are unsigned, so Windows SmartScreen shows a warning until you choose More info and Run anyway. Signing is tracked in `docs/plan-windows-linux.md` section 9.
+The NSIS bundle is configured for a per-user install. Beta builds are unsigned, so Windows SmartScreen shows a warning until you choose More info and Run anyway. The per-user NSIS decision and deferred beta signing are recorded in `docs/memory/`.
 
 ### Known limits
 
@@ -81,7 +84,7 @@ The NSIS bundle is configured for a per-user install. Beta builds are unsigned, 
 
 ## What to read next
 
-- `docs/plan-windows-linux.md` section 9 for packaging and signing decisions.
+- `docs/memory/` for the packaging and signing decisions.
 - `docs/windows-adapters.md` for the capability table per OS.
 - `shared/desktop/README.md` for the panel and its hook wire format.
 - `AGENTS.md` section 2 before touching `.woodpecker/` or any runner script. Those files belong to @aazhrt.

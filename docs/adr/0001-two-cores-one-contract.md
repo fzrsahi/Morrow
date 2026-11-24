@@ -2,7 +2,7 @@
 
 Status: accepted (2026-11-16), amended 2026-11-18, **core language decided 2026-11-19: Rust** (see the last section).
 
-macOS keeps its Swift core (`Sources/MorrowCore`, 21.699 LOC in 73 files) and SwiftUI shell. Windows and Linux share a second shell. The cores never share code — they share a frozen contract: the hook-event schema, the envelope schema, the golden fixtures exported to JSON, and the IPC endpoint rules (`docs/plan-windows-linux.md` §3.1).
+macOS keeps its Swift core (`Sources/MorrowCore`, 21.699 LOC in 73 files) and SwiftUI shell. Windows and Linux share a second shell. The cores never share code — they share a frozen contract: the hook-event schema, the envelope schema, the golden fixtures exported to JSON, and the IPC endpoint rules (the frozen contract in `shared/contract/`).
 
 Issue #33 aimed for one core across three operating systems. The first version of this ADR said that goal contradicts keeping macOS on Swift. That is only true if the shared core must be something other than Swift. The defensible statement is: running the original plan as written (Rust core while the C# core lives on) would have produced **three** cores, and the realistic choices are a Rust core for Windows/Linux or the Swift core compiled for them.
 
@@ -31,7 +31,7 @@ Until the experiment runs, Rust is the default and no Rust code beyond Phase 1's
 
 ## Decision after the experiment (2026-11-19)
 
-The #85 experiment met the decision rule: `MorrowCore` built on Linux and 96.8% of pure-logic tests passed ([`docs/experiments/option-e-linux.md`](../experiments/option-e-linux.md), ADR-0003). The maintainers nevertheless chose **option B, a Rust core**, in PR #117. The rule was written as a trigger for reconsidering, and it was reconsidered; it does not bind the outcome.
+The #85 experiment met the decision rule: `MorrowCore` built on Linux and 96.8% of pure-logic tests passed ([`docs/memory/2026-11-21.md`](../memory/2026-11-21.md), ADR-0003). The maintainers nevertheless chose **option B, a Rust core**, in PR #117. The rule was written as a trigger for reconsidering, and it was reconsidered; it does not bind the outcome.
 
 The trade-offs weighed (PR #117):
 
@@ -42,5 +42,5 @@ Consequences:
 
 - Tickets #93–#97 (core port) stay as written. The reducer/attention fixture export (#92) is mandatory before #94; a port without it is guesswork.
 - Every provider fix lands in Swift and Rust, fixture first. A PR that changes reducer or attention behaviour in Swift without re-exporting fixtures fails CI.
-- The experiment's shims (`docs/experiments/option-e/`) are not maintained.
+- The experiment shims are not maintained.
 
