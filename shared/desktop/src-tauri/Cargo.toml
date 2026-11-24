@@ -45,3 +45,8 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The OpenCode reader's tests seed a real SQLite store (#270). `rusqlite` is
+# already compiled for `morrow-core` (bundled), so this adds build time to nothing.
+rusqlite.workspace = true
