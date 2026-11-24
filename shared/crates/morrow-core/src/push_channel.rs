@@ -836,6 +836,31 @@ mod tests {
     }
 
     #[test]
+    fn the_signatures_match_the_vendors_published_vectors() {
+        // macos/Tests/MorrowCoreTests/PushSigningAndResponseTests.swift:11-65
+        assert_eq!(
+            PushSigning::dingtalk_signature("SEC1234567890abcdef", 1_700_000_000_000),
+            "RqBq3E1RTBDv3n2QBCh4adZ2WHk9mVklyUoDBLxarjI="
+        );
+        let plus = PushSigning::dingtalk_signature("this is secret", 1_577_262_236_757);
+        assert_eq!(plus, "hmPWwU+7lVdm3ZZz0r9tSfx0L4Q26jWOZr9+Gs6EZQM=");
+        assert_eq!(
+            PushSigning::form_url_encoded(&plus),
+            "hmPWwU%2B7lVdm3ZZz0r9tSfx0L4Q26jWOZr9%2BGs6EZQM%3D"
+        );
+        assert_eq!(PushSigning::form_url_encoded("a/b c"), "a%2Fb+c");
+        assert_eq!(PushSigning::form_url_encoded("é"), "%C3%A9");
+        assert_eq!(
+            PushSigning::feishu_signature("demo-secret", 1_599_360_473),
+            "3/MaVZ8JLIy4TUG+7KSFJqvUkTKd+HWY8g+56DZWq8s="
+        );
+        assert_eq!(
+            PushSigning::feishu_signature("abcDEF123", 1_700_000_000),
+            "qimCYnXKTZRVfEDjgpOq1ke9awsBuC3tn/n151vIck8="
+        );
+    }
+
+    #[test]
     fn a_channel_that_cannot_send_says_why_before_trying() {
         assert_eq!(
             channel(PushChannelKind::Bark).problem(),

@@ -21,7 +21,10 @@
 //!   useful, one ten minutes late mostly is not.
 
 use crate::push::{PushEventKind, truncated};
+use crate::push_channel::PushChannelConfig;
 use crate::push_policy::PushChannelKind;
+use crate::reduce::hook_event::sanitized_summary;
+use url::Url;
 
 /// Raw outcome of one HTTP exchange, before the channel interprets the body.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -58,6 +61,60 @@ pub struct PushDeliveryResult {
 }
 
 impl PushDeliveryResult {
+    /// The verdict as it may be written to a log or shipped in a diagnostics
+    /// export. Servers echo what we sent them (a device key, a public IP), so
+    /// this channel's own credentials are removed before the generic redaction.
+    pub fn loggable_summary(&self, channel: &PushChannelConfig) -> String {
+        let mut text = format!(
+            "{} · {}",
+            self.status_code.unwrap_or_default(),
+            self.message
+        );
+        let mut secrets = vec![
+            channel.target.clone(),
+            channel.token.clone(),
+            channel.secret.clone(),
+        ];
+        if let Some(token) = channel.token.strip_prefix("bot") {
+            secrets.push(token.to_owned());
+        }
+        if let Ok(url) = Url::parse(channel.endpoint.trim()) {
+            if let Some(password) = url.password() {
+                secrets.push(password.to_owned());
+            }
+            for segment in url.path().split('/') {
+                if segment.len() >= 8 {
+                    secrets.push(segment.to_owned());
+                }
+            }
+            for (key, value) in url.query_pairs() {
+                let _ = key;
+                secrets.push(value.into_owned());
+            }
+        }
+        let mut values: Vec<String> = secrets
+            .into_iter()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| value.len() >= 4)
+            .collect();
+        values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+        values.dedup();
+        for secret in values {
+            text = text.replace(&secret, "[REDACTED]");
+        }
+        let patterns = [
+            r"\b(?:\d{1,3}\.){3}\d{1,3}\b",
+            r"\b(?:[0-9A-Fa-f]{1,4}:){4,7}[0-9A-Fa-f]{1,4}\b",
+            r"\b[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*::(?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?",
+        ];
+        for pattern in patterns {
+            if let Ok(re) = regex::Regex::new(pattern) {
+                text = re.replace_all(&text, "[IP]").into_owned();
+            }
+        }
+        sanitized_summary(&text, 400).unwrap_or_default()
+    }
+
     /// The channel's verdict on a transport outcome.
     pub fn from_response(
         response: &PushTransportResponse,
@@ -669,6 +726,34 @@ mod tests {
         );
         assert!(RedirectRefusal::Downgrade.names_a_new_address());
         assert!(!RedirectRefusal::TooManyHops.names_a_new_address());
+    }
+
+    #[test]
+    fn a_loggable_summary_never_carries_credentials_or_ips() {
+        let mut channel = PushChannelConfig::new(PushChannelKind::Bark);
+        channel.target = "DEVICE-KEY-1234".to_owned();
+        channel.token = "bot123:ABC".to_owned();
+        channel.endpoint =
+            "https://user:password@api.day.app/DEVICE-KEY-1234?token=topsecret".to_owned();
+        let result = PushDeliveryResult {
+            ok: false,
+            status_code: Some(403),
+            message:
+                "DEVICE-KEY-1234 rejected from 203.0.113.9 via bot123:ABC / topsecret / password"
+                    .to_owned(),
+            ..PushDeliveryResult::default()
+        };
+        let summary = result.loggable_summary(&channel);
+        for secret in [
+            "DEVICE-KEY-1234",
+            "bot123:ABC",
+            "topsecret",
+            "password",
+            "203.0.113.9",
+        ] {
+            assert!(!summary.contains(secret), "{summary}");
+        }
+        assert!(summary.contains("403"), "{summary}");
     }
 
     #[test]
