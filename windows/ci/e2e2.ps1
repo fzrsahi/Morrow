@@ -5,6 +5,18 @@
 # CLI, with the hook installed by the product's own installer, asks the panel
 # for permission and obeys the answer.
 #
+<<<<<<< HEAD
+# **Never run on a Windows host.** It was written against the same flow the
+# Linux script automates and the same `morrow-app --hooks` commands; treat the
+# first run as the acceptance test for this file. What it does automate is the
+# installer round-trip (install → status → settings.json carries the hook →
+# uninstall → byte for byte), which is the half that can go wrong quietly.
+#
+# Usage, in a PowerShell on the Windows host, from the repo root:
+#   windows\ci\e2e2.ps1
+# Env: MORROW_APP (default: target\debug\morrow-app.exe), CLAUDE_BIN.
+# Exit: 0 when every automated check passed.
+=======
 # **Written but not yet exercised on a Windows host.** It was written against
 # the same flow the Linux script automates and the same `morrow-app --hooks`
 # commands; treat the first run on a host as the acceptance test for this file.
@@ -18,12 +30,19 @@
 # Env: MORROW_APP (default: target\release\morrow-app.exe), CLAUDE_BIN.
 # Exit: 0 when every automated installer check passed. This script does not
 #       decide whether the E2E-2 gate passed.
+>>>>>>> origin/main
+
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location $root
 
+<<<<<<< HEAD
+$app = if ($env:MORROW_APP) { $env:MORROW_APP } else { Join-Path $root 'target\debug\morrow-app.exe' }
 $app = if ($env:MORROW_APP) { $env:MORROW_APP } else { Join-Path $root 'target\release\morrow-app.exe' }
+=======
+$app = if ($env:MORROW_APP) { $env:MORROW_APP } else { Join-Path $root 'target\release\morrow-app.exe' }
+>>>>>>> origin/main
 $claude = if ($env:CLAUDE_BIN) { $env:CLAUDE_BIN } else { 'claude' }
 $results = @()
 $failed = 0
@@ -33,12 +52,62 @@ function Check([string]$name, [scriptblock]$test) {
     else { $script:results += "FAIL  $name"; $script:failed = 1 }
 }
 
+<<<<<<< HEAD
+if (-not (Test-Path $app)) { throw "no $app : build it first (cargo build -p morrow-app)" }
 if (-not (Test-Path $app)) { throw "no $app : build it first (cargo build --release -p morrow-app)" }
+=======
+if (-not (Test-Path $app)) { throw "no $app : build it first (cargo build --release -p morrow-app)" }
+>>>>>>> origin/main
 
 # A scratch USERPROFILE: the installer writes to %USERPROFILE%\.claude and
 # %USERPROFILE%\.codeisland, and the developer's real config is not a fixture.
 $work = Join-Path $env:TEMP ("e2e2-" + [guid]::NewGuid().ToString('N'))
 $home = Join-Path $work 'home'
+<<<<<<< HEAD
+New-Item -ItemType Directory -Force -Path (Join-Path $home '.claude') | Out-Null
+$env:USERPROFILE = $home
+$env:HOME = $home
+$env:CLAUDE_CONFIG_DIR = Join-Path $home '.claude'
+$settings = Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'
+
+$before = if (Test-Path $settings) { (Get-FileHash $settings -Algorithm SHA256).Hash } else { 'absent' }
+
+$installOut = & $app --hooks install claude 2>&1 | Out-String
+Check 'install_claude' { $installOut -match '^claude: changed=' }
+Check 'settings_written' { (Test-Path $settings) -and ((Get-Content $settings -Raw) -match 'codeisland-hook\.sh') }
+Check 'status_says_installed' { (& $app --hooks status | Out-String) -match '(?m)^claude: installed$' }
+
+# A config the user already had: install must add our hook without touching the
+# rest, and uninstall must give the file back byte for byte.
+Remove-Item $settings -Force -ErrorAction SilentlyContinue
+'{"theme":"dark","permissions":{"allow":["Bash(ls:*)"]}}' | Set-Content -NoNewline -Path $settings
+$userBefore = (Get-FileHash $settings -Algorithm SHA256).Hash
+& $app --hooks install claude | Out-Null
+Check 'user_keys_kept' { (Get-Content $settings -Raw) -match '"theme":"dark"' }
+& $app --hooks uninstall claude | Out-Null
+Check 'user_settings_byte_for_byte' { (Get-FileHash $settings -Algorithm SHA256).Hash -eq $userBefore }
+
+Check 'status_says_absent' { (& $app --hooks status | Out-String) -match '(?m)^claude: absent$' }
+
+Write-Output ''
+Write-Output '=== Evidence: windows/ci/e2e2.ps1 (gate E2E-2) ==='
+Write-Output "date:      $(Get-Date -Format o)"
+Write-Output "commit:    $(git rev-parse --short HEAD 2>$null)"
+Write-Output "os:        $([System.Environment]::OSVersion.VersionString)"
+Write-Output "app:       $app"
+Write-Output "claude:    $((& $claude --version 2>&1 | Select-Object -First 1))"
+Write-Output "home:      $home (scratch; the developer's config was not touched)"
+Write-Output "install:   $($installOut.Trim())"
+Write-Output "settings:  before=$before after=$(if (Test-Path $settings) { (Get-FileHash $settings -Algorithm SHA256).Hash } else { 'absent' })"
+Write-Output '--- manual, and required before this gate can pass ---'
+Write-Output '1. Start the island:  $env:MORROW_SMOKE=1; & $app'
+Write-Output '2. In another window:  claude   then ask it to run:  echo e2e2-ok'
+Write-Output '3. Click Approve on the card. The CLI must run the command.'
+Write-Output '4. Repeat with Deny. The command must not run.'
+Write-Output '5. Paste the console output here as the Evidence for W-002/W-004/W-008.'
+$results | ForEach-Object { Write-Output $_ }
+Write-Output ("result:    " + $(if ($failed -eq 0) { "PASS ($($results.Count) automated checks; the panel half is manual above)" } else { 'FAIL' }))
+=======
 try {
     New-Item -ItemType Directory -Force -Path (Join-Path $home '.claude') | Out-Null
     $env:USERPROFILE = $home
@@ -88,4 +157,6 @@ try {
 finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }
+>>>>>>> origin/main
+
 exit $failed

@@ -306,6 +306,74 @@ pub fn normalize(raw: Option<&str>, home_dir: &str, style: PathStyle) -> Option<
     Some(trimmed.to_owned())
 }
 
+/// The real filesystem probe: is `path` a directory, a file, or nothing?
+///
+/// Mirrors `ConfigDirEntryKind.probe`, and follows symlinks — a symlinked config
+/// dir (a common multi-account setup) counts as a directory.
+pub fn probe_entry(path: &str) -> EntryKind {
+    match std::fs::metadata(path) {
+        Ok(metadata) if metadata.is_dir() => EntryKind::Directory,
+        Ok(_) => EntryKind::File,
+        Err(_) => EntryKind::Missing,
+    }
+}
+
+/// A directory only counts as a live Claude config dir if it holds `projects/`,
+/// which is written only by Claude Code itself.
+///
+/// `settings.json` deliberately does **not** count: CodeIsland's own installer
+/// creates it, so treating it as evidence would let us manufacture the very
+/// signal we then read back — an empty `~/.claude` containing nothing but a
+/// hook file of ours would outrank the user's real config dir forever.
+///
+/// It asks whether `projects` is a *directory*, not merely that the path exists
+/// — a stray regular file of that name must not mark a root live.
+pub fn is_live_config_dir(
+    path: &str,
+    style: PathStyle,
+    kind_of: impl Fn(&str) -> EntryKind,
+) -> bool {
+    kind_of(&style.join(path, "projects")) == EntryKind::Directory
+}
+
+/// `ClaudeConfigPaths.resolve`: which Claude root to use, in the order that
+/// decides it.
+///
+/// A live `~/.claude` wins over the XDG probe, because Claude Code itself has no
+/// XDG rung — it reads `$CLAUDE_CONFIG_DIR`, else `~/.claude`. Preferring a stale
+/// `~/.config/claude-code` would silently repoint us away from the directory
+/// Claude Code actually reads.
+///
+/// When nothing is live the answer is still `~/.claude`: the installer creates
+/// it. A missing directory is not an error.
+pub fn resolve(
+    preference: Option<&str>,
+    environment: Option<&str>,
+    home_dir: &str,
+    style: PathStyle,
+    kind_of: impl Fn(&str) -> EntryKind,
+) -> String {
+    if let Some(preference) = normalize(preference, home_dir, style) {
+        return preference;
+    }
+    if let Some(environment) = normalize(environment, home_dir, style) {
+        return environment;
+    }
+    let dot_claude = style.join(home_dir, ".claude");
+    if is_live_config_dir(&dot_claude, style, &kind_of) {
+        return dot_claude;
+    }
+    // Both spellings exist in the wild: ccusage & co. default to
+    // ~/.config/claude, older setups used ~/.config/claude-code.
+    for name in ["claude", "claude-code"] {
+        let path = style.join(&style.join(home_dir, ".config"), name);
+        if is_live_config_dir(&path, style, &kind_of) {
+            return path;
+        }
+    }
+    dot_claude
+}
+
 /// `ExtraConfigDirs.roots`: primary first, then the extras, without duplicates.
 ///
 /// `identity` decides "the same root" (symlink, case, normalization). A
@@ -469,6 +537,140 @@ mod tests {
         assert_eq!(
             normalize(Some(r"C:\Users\dev\.claude"), "/home/dev", style()),
             None
+        );
+    }
+
+    #[test]
+    fn a_directory_is_live_only_when_projects_is_a_directory() {
+        let live = |path: &str| -> EntryKind {
+            if path == "/home/dev/.claude/projects" {
+                EntryKind::Directory
+            } else {
+                EntryKind::Missing
+            }
+        };
+        assert!(is_live_config_dir("/home/dev/.claude", style(), live));
+        assert!(!is_live_config_dir("/home/dev/other", style(), live));
+
+        // A stray regular file named `projects` is not evidence.
+        let stray = |path: &str| -> EntryKind {
+            if path == "/home/dev/.claude/projects" {
+                EntryKind::File
+            } else {
+                EntryKind::Missing
+            }
+        };
+        assert!(!is_live_config_dir("/home/dev/.claude", style(), stray));
+    }
+
+    #[test]
+    fn the_preference_beats_the_environment_which_beats_the_ladder() {
+        let live_xdg = |path: &str| -> EntryKind {
+            if path == "/home/dev/.config/claude-code/projects" {
+                EntryKind::Directory
+            } else {
+                EntryKind::Missing
+            }
+        };
+        assert_eq!(
+            resolve(
+                Some("/opt/pref"),
+                Some("/opt/env"),
+                "/home/dev",
+                style(),
+                live_xdg
+            ),
+            "/opt/pref"
+        );
+        assert_eq!(
+            resolve(None, Some("/opt/env"), "/home/dev", style(), live_xdg),
+            "/opt/env"
+        );
+        assert_eq!(
+            resolve(None, None, "/home/dev", style(), live_xdg),
+            "/home/dev/.config/claude-code"
+        );
+    }
+
+    /// The bug this closes: `~/.claude` holding only `settings.json` — which our
+    /// own installer wrote — must not outrank a real config dir.
+    #[test]
+    fn a_dot_claude_with_only_a_settings_file_is_not_live() {
+        let ours_only = |path: &str| -> EntryKind {
+            match path {
+                "/home/dev/.claude/settings.json" => EntryKind::File,
+                "/home/dev/.config/claude/projects" => EntryKind::Directory,
+                _ => EntryKind::Missing,
+            }
+        };
+        assert_eq!(
+            resolve(None, None, "/home/dev", style(), ours_only),
+            "/home/dev/.config/claude",
+            "our own hook file must not become the reason we pick that folder"
+        );
+    }
+
+    #[test]
+    fn a_live_dot_claude_wins_over_the_xdg_probe() {
+        let both = |path: &str| -> EntryKind {
+            if path == "/home/dev/.claude/projects"
+                || path == "/home/dev/.config/claude-code/projects"
+            {
+                EntryKind::Directory
+            } else {
+                EntryKind::Missing
+            }
+        };
+        assert_eq!(
+            resolve(None, None, "/home/dev", style(), both),
+            "/home/dev/.claude"
+        );
+    }
+
+    #[test]
+    fn nothing_live_ends_at_the_default_that_the_installer_creates() {
+        assert_eq!(
+            resolve(None, None, "/home/dev", style(), |_| EntryKind::Missing),
+            "/home/dev/.claude"
+        );
+    }
+
+    /// `claude` is probed before `claude-code`, because that is the spelling
+    /// ccusage and its followers use today.
+    #[test]
+    fn the_newer_xdg_spelling_wins_when_both_exist() {
+        let both = |path: &str| -> EntryKind {
+            if path == "/home/dev/.config/claude/projects"
+                || path == "/home/dev/.config/claude-code/projects"
+            {
+                EntryKind::Directory
+            } else {
+                EntryKind::Missing
+            }
+        };
+        assert_eq!(
+            resolve(None, None, "/home/dev", style(), both),
+            "/home/dev/.config/claude"
+        );
+    }
+
+    #[test]
+    fn the_ladder_reads_windows_paths_on_windows() {
+        let windows = PathStyle::Windows;
+        let live = |path: &str| -> EntryKind {
+            if path == r"C:\Users\dev\.config\claude\projects" {
+                EntryKind::Directory
+            } else {
+                EntryKind::Missing
+            }
+        };
+        assert_eq!(
+            resolve(None, None, r"C:\Users\dev", windows, live),
+            r"C:\Users\dev\.config\claude"
+        );
+        assert_eq!(
+            resolve(None, None, r"C:\Users\dev", windows, |_| EntryKind::Missing),
+            r"C:\Users\dev\.claude"
         );
     }
 

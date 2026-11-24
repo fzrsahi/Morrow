@@ -27,6 +27,7 @@
 //!   refresh policy, with the clock and credentials handed in.
 #![forbid(unsafe_code)]
 
+pub mod agent_process;
 pub mod agent_tasks;
 pub mod attention;
 pub mod config_roots;
@@ -42,6 +43,7 @@ pub mod prayer;
 pub mod quota;
 pub mod path_identity;
 pub mod reduce;
+pub mod scan_policy;
 pub mod session_recap;
 pub mod sqlite;
 pub mod time;

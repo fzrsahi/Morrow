@@ -61,6 +61,11 @@ pub struct Feed {
     /// condvar so a single hook cannot wake only the wrong waiter.
     prune_changed: Condvar,
     sound: Option<SoundOutlet>,
+    /// What the last scan read, kept **across** ticks: a cache built inside one
+    /// scan would read everything and forget it (#284). On the `Feed` rather than
+    /// in `State` because a scan runs outside the state lock and this is
+    /// internally synchronised on its own.
+    scan_cache: morrow_core::scan_policy::TextCache,
 }
 
 impl Default for Feed {
@@ -70,6 +75,9 @@ impl Default for Feed {
             changed: Condvar::new(),
             prune_changed: Condvar::new(),
             sound: None,
+            scan_cache: morrow_core::scan_policy::TextCache::new(
+                morrow_core::scan_policy::SCAN_CACHE_CAPACITY,
+            ),
         }
     }
 }
@@ -90,6 +98,9 @@ struct State {
     /// window. Independent of `visible` so fullscreen hiding is unchanged.
     probes_active: bool,
     tails: Tails,
+    /// The scan policy's clock (#259): how often a visible panel may look for
+    /// sessions, and the one place the gap is defined.
+    discovery: morrow_core::scan_policy::ScanThrottle,
 }
 
 impl Default for State {
@@ -105,6 +116,9 @@ impl Default for State {
             visible: true,
             probes_active: true,
             tails: Tails::default(),
+            discovery: morrow_core::scan_policy::ScanThrottle::new(
+                morrow_core::scan_policy::MINIMUM_GAP_MS,
+            ),
         }
     }
 }
@@ -323,15 +337,183 @@ impl Feed {
 
     /// Sends snapshots to `channel` from now on, the current one first. A
     /// reloaded frontend subscribes again and replaces the old channel.
+    ///
+    /// **Attach is when discovery runs** (#261). A panel that just appeared has
+    /// nothing to show and every session an agent already has is invisible until
+    /// its next hook, so the scan happens here rather than on a timer: the store
+    /// is read when somebody is looking, and not otherwise.
     pub fn subscribe(&self, channel: Channel<Snapshot>) {
-        let mut state = self.lock();
-        state.channel = Some(channel);
-        state.dirty = true;
-        self.changed.notify_one();
+        {
+            let mut state = self.lock();
+            state.channel = Some(channel);
+            state.dirty = true;
+            self.changed.notify_one();
+        }
+        self.backfill();
     }
 
-    /// One liveness round. The adapters are injected so the decision can be
-    /// exercised without real processes; `prune_dead` supplies the shell's.
+    /// One discovery tick: scan, if the policy says this is when (#248).
+    ///
+    /// A **hidden or locked panel does not scan at all** — `probes_active` is the
+    /// frontend's lock watch (#197), and this is the same gate the transcript
+    /// tailer uses. That is the discovery half of what the policy promises: an
+    /// unattended panel costs nothing.
+    ///
+    /// A visible one scans at most once per `MINIMUM_GAP_MS`, and the gap lives in
+    /// `scan_policy` rather than here so there is one number, not two.
+    ///
+    /// This is a **poll**, not an event watcher: macOS reacts to FSEvents, and
+    /// Linux/Windows have no watch in this shell yet. The cost is bounded by the
+    /// gap and, for the stores a reader can re-read, by `ScanCache` — which the
+    /// readers do not use yet, which is why the gap is five seconds and not one.
+    pub fn tick_discovery(&self, now_ms: u64) -> usize {
+        self.tick_discovery_with(now_ms, |_home| self.scan_stores())
+    }
+
+    /// `tick_discovery` with the scan injected, so a test drives the policy
+    /// without reading a real `~`.
+    pub fn tick_discovery_with(
+        &self,
+        now_ms: u64,
+        scan: impl FnOnce(&str) -> morrow_core::discovery::scan::ScanResult,
+    ) -> usize {
+        let allowed = {
+            let mut state = self.lock();
+            if !state.probes_active || !state.visible {
+                // Forget the clock: coming back to a visible panel scans at once
+                // rather than waiting out a gap that started while it was hidden.
+                state.discovery.reset();
+                return 0;
+            }
+            match state.discovery.decide(true, now_ms) {
+                morrow_core::scan_policy::Decision::ScanNow => {
+                    state.discovery.note_scan_started(now_ms);
+                    true
+                }
+                _ => false,
+            }
+        };
+        if !allowed {
+            return 0;
+        }
+        self.backfill_with(scan)
+    }
+
+    /// Asks the policy forever, woken by the stores themselves where the OS allows
+    /// it (#286).
+    ///
+    /// The watcher is not a replacement for the clock: an append inside a file
+    /// already on disk may not be reported (the fallback arm cannot see it, and
+    /// inotify's `IN_MODIFY` is not a promise about a finished write). So the loop
+    /// keeps its own tick, and a change only brings the next question forward.
+    pub fn spawn_discovery(feed: Arc<Self>) {
+        thread::Builder::new()
+            .name("morrow-discovery".into())
+            .spawn(move || {
+                let mut watcher = feed.watcher();
+                loop {
+                    // A watcher that reports a change wakes the loop early; one
+                    // that does not, or one the OS refused, is a 250 ms sleep.
+                    let moved = watcher
+                        .as_mut()
+                        .map(|watcher| watcher.wait(Duration::from_millis(250)))
+                        .unwrap_or_else(|| {
+                            thread::sleep(Duration::from_millis(250));
+                            false
+                        });
+                    if !moved {
+                        thread::sleep(Duration::from_millis(250));
+                    }
+                    feed.tick_discovery(now_ms());
+                }
+            })
+            .expect("spawn the discovery thread");
+    }
+
+    /// An event source over every store a reader knows about, or `None` where the
+    /// OS refuses — in which case the timer is the whole answer and discovery
+    /// still works, only later.
+    fn watcher(&self) -> Option<morrow_watch::Watcher> {
+        let home = std::path::PathBuf::from(self.lock().sessions.home_directory());
+        let config_dir = crate::hooks::claude_config_dir(
+            &home,
+            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+        )
+        .unwrap_or_else(|| home.join(".claude"));
+        let roots = morrow_watch::default_roots(&home, &config_dir);
+        morrow_watch::Watcher::new(&roots).ok()
+    }
+
+    /// One discovery scan, integrated as ordinary sessions.
+    ///
+    /// Deliberately outside the lock while it reads the stores — a scan walks
+    /// `~/.claude/projects` and reads tails — and inside it only to insert. A hook
+    /// that arrives during the scan wins: `insert_discovered` refuses a session
+    /// that already exists, so a WORKING card is never taken back to IDLE by a
+    /// row the scan read a moment ago.
+    ///
+    /// Returns how many sessions were added, which is what the test asserts.
+    pub fn backfill(&self) -> usize {
+        self.backfill_with(|home| self.scan_stores_in(std::path::Path::new(home)))
+    }
+
+    /// The real stores, from the home `backfill_with` was given.
+    fn scan_stores(&self) -> morrow_core::discovery::scan::ScanResult {
+        let home = self.lock().sessions.home_directory();
+        self.scan_stores_in(std::path::Path::new(&home))
+    }
+
+    fn scan_stores_in(&self, home: &std::path::Path) -> morrow_core::discovery::scan::ScanResult {
+        // Claude Code's config dir comes from the installer's own ladder (#258),
+        // so discovery reads the folder the hooks were written into.
+        let config_dir = crate::hooks::claude_config_dir(
+            home,
+            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+        )
+        .unwrap_or_else(|| home.join(".claude"));
+        crate::discovery::scan_once(&config_dir, home, &self.scan_cache)
+    }
+
+    /// One discovery scan, integrated as ordinary sessions.
+    ///
+    /// Deliberately outside the lock while it reads the stores — a scan walks
+    /// `~/.claude/projects`, reads tails and opens SQLite — and inside it only to
+    /// insert. A hook that arrives during the scan wins: `insert_discovered`
+    /// refuses a session that already exists, so a WORKING card is never taken
+    /// back to IDLE by a row the scan read a moment ago.
+    ///
+    /// Returns how many sessions were added, which is what the test asserts.
+    pub fn backfill_with(
+        &self,
+        scan: impl FnOnce(&str) -> morrow_core::discovery::scan::ScanResult,
+    ) -> usize {
+        let home = {
+            let state = self.lock();
+            state.sessions.home_directory()
+        };
+        let mut result = scan(&home);
+        // #267: a discovered session without a pid is a card that can never be
+        // pruned. The table is read here, once, and only when something needs it.
+        crate::discovery::correlate_pids(&mut result.hits);
+        let mut state = self.lock();
+        let mut added = 0;
+        for hit in &result.hits {
+            if state.sessions.insert_discovered(hit) {
+                added += 1;
+            }
+        }
+        if added > 0 {
+            state.dirty = true;
+            // A discovered session with a pid deserves the same liveness watch a
+            // hook-born one gets (#198); one without keeps its card until the
+            // store stops changing, which is what `Watches` already does for a
+            // session that has no capturable pid.
+            self.prune_changed.notify_one();
+            self.changed.notify_one();
+        }
+        added
+    }
+
     fn prune_with(
         &self,
         capture: impl FnMut(Pid) -> Option<Watch>,
@@ -475,6 +657,169 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+
+    /// The AC of #261, at the feed: a panel that has just appeared shows the
+    /// sessions the agent already has, **before** any hook arrives.
+    #[test]
+    fn backfill_shows_sessions_before_any_hook_arrives() {
+        let feed = Feed::default();
+        assert!(feed.snapshot().sessions.is_empty(), "nothing to show yet");
+
+        let added = feed.backfill_with(|_home| morrow_core::discovery::scan::ScanResult {
+            hits: vec![
+                discovered("found-a", "/home/u/a"),
+                discovered("found-b", "/home/u/b"),
+            ],
+            ..Default::default()
+        });
+
+        assert_eq!(added, 2);
+        let rows = feed.snapshot().sessions;
+        let mut ids: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["found-a", "found-b"]);
+        assert!(
+            rows.iter().all(|row| row.last_event.is_empty()),
+            "a discovered session has no hook event, and the card must not claim one"
+        );
+    }
+
+    /// A hook that lands during the scan owns the card: the scan must not take a
+    /// WORKING session back to DONE.
+    #[test]
+    fn a_hook_that_lands_first_survives_the_backfill() {
+        let feed = Feed::default();
+        feed.record(
+            &decode_payload(
+                br#"{"session_id":"found-a","hook_event_name":"PreToolUse","cwd":"/home/u/a","tool_name":"Bash"}"#,
+            )
+            .unwrap(),
+        );
+
+        let added = feed.backfill_with(|_home| morrow_core::discovery::scan::ScanResult {
+            hits: vec![discovered("found-a", "/home/u/elsewhere")],
+            ..Default::default()
+        });
+
+        assert_eq!(added, 0, "the discovered row is the older witness");
+        let rows = feed.snapshot().sessions;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].last_event, "PreToolUse");
+    }
+
+    /// #248: the policy decides when a discovery tick may scan. A hidden or locked
+    /// panel does not scan at all — that is the whole point of the gate.
+    #[test]
+    fn a_hidden_or_locked_panel_never_scans() {
+        let feed = Feed::default();
+        let scans = std::sync::Arc::new(Mutex::new(0usize));
+        let counted = Arc::clone(&scans);
+
+        // Locked: `probes_active` false.
+        feed.set_probes_active(false);
+        assert_eq!(
+            feed.tick_discovery_with(0, move |_home| {
+                *counted.lock().unwrap() += 1;
+                morrow_core::discovery::scan::ScanResult::default()
+            }),
+            0
+        );
+        assert_eq!(*scans.lock().unwrap(), 0, "a locked panel must not scan");
+
+        // Visible but not showing.
+        feed.set_probes_active(true);
+        feed.set_visible(false);
+        let counted = Arc::clone(&scans);
+        assert_eq!(
+            feed.tick_discovery_with(0, move |_home| {
+                *counted.lock().unwrap() += 1;
+                morrow_core::discovery::scan::ScanResult::default()
+            }),
+            0
+        );
+        assert_eq!(*scans.lock().unwrap(), 0, "a hidden panel must not scan");
+    }
+
+    /// A visible panel scans once per gap, not once per tick: the tick runs four
+    /// times a second.
+    #[test]
+    fn a_visible_panel_scans_once_per_gap() {
+        let feed = Feed::default();
+        let scans = Arc::new(Mutex::new(0usize));
+        let gap = morrow_core::scan_policy::MINIMUM_GAP_MS;
+
+        for now in [0, 100, 200, 400, gap - 1] {
+            let counted = Arc::clone(&scans);
+            feed.tick_discovery_with(now, move |_home| {
+                *counted.lock().unwrap() += 1;
+                morrow_core::discovery::scan::ScanResult::default()
+            });
+        }
+        assert_eq!(
+            *scans.lock().unwrap(),
+            1,
+            "five ticks inside one gap, one scan"
+        );
+
+        let counted = Arc::clone(&scans);
+        feed.tick_discovery_with(gap, move |_home| {
+            *counted.lock().unwrap() += 1;
+            morrow_core::discovery::scan::ScanResult::default()
+        });
+        assert_eq!(*scans.lock().unwrap(), 2, "the gap has passed");
+    }
+
+    /// Coming back to a visible panel scans at once, rather than waiting out a gap
+    /// that started while it was hidden.
+    #[test]
+    fn a_panel_that_comes_back_scans_at_once() {
+        let feed = Feed::default();
+        let scans = Arc::new(Mutex::new(0usize));
+
+        let counted = Arc::clone(&scans);
+        feed.tick_discovery_with(1_000, move |_home| {
+            *counted.lock().unwrap() += 1;
+            morrow_core::discovery::scan::ScanResult::default()
+        });
+        assert_eq!(*scans.lock().unwrap(), 1);
+
+        feed.set_visible(false);
+        feed.tick_discovery(1_100);
+        feed.set_visible(true);
+
+        let counted = Arc::clone(&scans);
+        feed.tick_discovery_with(1_200, move |_home| {
+            *counted.lock().unwrap() += 1;
+            morrow_core::discovery::scan::ScanResult::default()
+        });
+        assert_eq!(
+            *scans.lock().unwrap(),
+            2,
+            "the clock was forgotten while hidden"
+        );
+    }
+
+    /// A store that is not there adds nothing and does not mark the feed dirty.
+    #[test]
+    fn an_empty_scan_changes_nothing() {
+        let feed = Feed::default();
+        assert_eq!(
+            feed.backfill_with(|_home| morrow_core::discovery::scan::ScanResult::default()),
+            0
+        );
+        assert!(feed.snapshot().sessions.is_empty());
+    }
+
+    fn discovered(session_id: &str, cwd: &str) -> morrow_core::discovery::DiscoveryHit {
+        morrow_core::discovery::DiscoveryHit {
+            session_id: session_id.to_owned(),
+            source: "claude",
+            cwd: cwd.to_owned(),
+            modified_at: Some(1_000),
+            transcript_path: Some(format!("/roots/{session_id}.jsonl")),
+            ..morrow_core::discovery::DiscoveryHit::default()
+        }
+    }
 
     const REPLY: &str =
         r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Adding filters"}]}}"#;
