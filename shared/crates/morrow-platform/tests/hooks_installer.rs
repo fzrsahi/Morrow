@@ -654,3 +654,150 @@ fn cline_is_not_detected_on_a_machine_without_it() {
         "nothing created"
     );
 }
+
+/// #234 batch 5: MiMo is OpenCode's plugin re-labelled. An artefact that lost its
+/// source line must be refused, not shipped as OpenCode's own file under MiMo's name.
+#[test]
+fn mimo_writes_the_relabelled_plugin_and_nothing_else() {
+    let home = Home::new("mimo");
+    let paths = home.paths();
+    fs::create_dir_all(home.root.join(".config/mimocode")).expect("mimo");
+    let plugin = home.root.join(".config/mimocode/plugins/morrow.js");
+
+    hooks::install_target(&paths, "mimo", STAMP).expect("install");
+    let text = home.read(&plugin);
+    assert!(text.contains(r#"const SOURCE = "mimo";"#), "re-labelled");
+    assert!(!text.contains(r#"const SOURCE = "opencode";"#));
+    // The rest of the plugin is OpenCode's, untouched: one line changes.
+    assert!(
+        text.len() > 1_000,
+        "the whole plugin is written, not a stub"
+    );
+
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "mimo")
+            .expect("a mimo row")
+            .installed
+    );
+
+    // Idempotent, then gone.
+    let again = hooks::install_target(&paths, "mimo", STAMP)
+        .expect("reinstall")
+        .expect("a report");
+    assert!(!again.settings_changed);
+    hooks::uninstall_target(&paths, "mimo").expect("uninstall");
+    assert!(!plugin.exists());
+}
+
+/// AiWork has no hooks at all: the row is the feature, and an install writes nothing.
+#[test]
+fn aiwork_installs_nothing_because_it_has_no_hooks() {
+    let home = Home::new("aiwork");
+    let paths = home.paths();
+    let status = hooks::targets_status(&paths);
+    let row = status
+        .iter()
+        .find(|row| row.source == "aiwork")
+        .expect("an aiwork row");
+    assert!(!row.detected);
+
+    // Installing on a machine without AiWork is a no-op, and it writes nothing.
+    let before: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    hooks::install_target(&paths, "aiwork", STAMP).expect("no-op");
+    let after: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    assert_eq!(before.len(), after.len(), "nothing created");
+    // And there is nothing to take back out.
+    assert!(
+        hooks::uninstall_target(&paths, "aiwork")
+            .expect("no-op")
+            .is_none()
+    );
+}
+
+/// #234 batch 4b: the three TypeScript extensions all hard-code the **macOS** bridge
+/// path. Shipping one unchanged is a plugin that loads, looks for a binary that is
+/// not there, and reports nothing — while the card says "installed".
+#[test]
+fn an_extension_is_rewritten_for_this_platforms_bridge() {
+    let home = Home::new("pi-extension");
+    let paths = home.paths();
+    cli_dir(&home, ".pi");
+    let extension = home.root.join(".pi/agent/extensions/codeisland.ts");
+
+    hooks::install_target(&paths, "pi", STAMP)
+        .expect("install")
+        .expect("a report");
+    let text = home.read(&extension);
+    assert!(text.len() > 10_000, "the whole extension lands, not a stub");
+    // The *line* is rewritten; the artefact's own prose still names the macOS
+    // binary, and that is fine — a comment cannot be executed.
+    assert!(
+        !text.contains("const BRIDGE_PATH = `${homedir()}/.codeisland/codeisland-bridge`;"),
+        "the bridge line must be gone"
+    );
+    assert!(
+        text.contains(&format!(
+            "const BRIDGE_PATH = \"{}\";",
+            paths.bridge.display()
+        )),
+        "the bridge path must name this platform's binary"
+    );
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "pi")
+            .expect("a pi row")
+            .installed
+    );
+
+    // Idempotent, then gone.
+    let again = hooks::install_target(&paths, "pi", STAMP)
+        .expect("reinstall")
+        .expect("a report");
+    assert!(!again.settings_changed);
+    hooks::uninstall_target(&paths, "pi").expect("uninstall");
+    assert!(!extension.exists());
+}
+
+/// A user who put their own `codeisland.ts` there keeps it: neither install
+/// (replacing it) nor uninstall (deleting it) is ours to do (#311).
+#[test]
+fn a_users_own_extension_is_not_ours_to_replace_or_delete() {
+    let home = Home::new("pi-own");
+    let paths = home.paths();
+    cli_dir(&home, ".pi");
+    let extension = home.root.join(".pi/agent/extensions/codeisland.ts");
+    let mine = "// my own extension\nexport {};\n";
+    home.write(&extension, mine);
+
+    let refused = hooks::install_target(&paths, "pi", STAMP);
+    assert!(
+        refused.is_err(),
+        "install must refuse a file we did not write"
+    );
+    assert_eq!(home.read(&extension), mine, "install left it byte for byte");
+
+    hooks::uninstall_target(&paths, "pi").expect("uninstall");
+    assert_eq!(
+        home.read(&extension),
+        mine,
+        "uninstall left it byte for byte"
+    );
+}
+
+/// DSH is bridged by a third-party plugin, so there is nothing to install.
+#[test]
+fn dsh_is_a_row_and_nothing_more() {
+    let home = Home::new("dsh");
+    let paths = home.paths();
+    let before: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    assert!(
+        hooks::install_target(&paths, "dsh", STAMP)
+            .expect("no-op")
+            .is_none()
+    );
+    let after: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    assert_eq!(before.len(), after.len(), "nothing written");
+}
