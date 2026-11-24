@@ -115,6 +115,97 @@ pub mod claude {
     }
 }
 
+/// What a [CC] transcript tail says about its session, without a hook.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TranscriptSummary {
+    pub session_id: String,
+    /// The working directory the CLI recorded, which is what a card shows.
+    pub cwd: String,
+    pub model: Option<String>,
+    /// The last few turns, oldest first.
+    pub recent_messages: Vec<ChatMessage>,
+}
+
+/// `ClaudeDiscovery`'s session read, from the tail of one transcript (#261).
+///
+/// The tail is what the shell already reads for a live session (`read_tail`,
+/// last 64 KB), so backfill costs one read of the same bytes and no second
+/// parser. `file_name` carries the session id: Claude Code names a transcript
+/// after the session it records.
+///
+/// `None` when the tail holds nothing usable — a half-written first line, an
+/// empty file, a store from a version this does not understand. The caller
+/// skips it rather than inventing a session.
+pub fn read_transcript_tail(tail: &str, file_name: &str) -> Option<TranscriptSummary> {
+    let session_id = file_name.strip_suffix(".jsonl")?;
+    if session_id.is_empty() {
+        return None;
+    }
+    let mut summary = TranscriptSummary {
+        session_id: session_id.to_owned(),
+        ..TranscriptSummary::default()
+    };
+    let mut turns: Vec<ChatMessage> = Vec::new();
+
+    for line in tail.split('\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        // `cwd` is repeated on every row; the first one is as good as the last.
+        if summary.cwd.is_empty() {
+            if let Some(cwd) = json.get("cwd").and_then(|value| value.as_str()) {
+                summary.cwd = cwd.to_owned();
+            }
+        }
+        if summary.model.is_none() {
+            summary.model = json
+                .get("message")
+                .and_then(|message| message.get("model"))
+                .and_then(|model| model.as_str())
+                .filter(|model| !model.is_empty())
+                .map(str::to_owned);
+        }
+        let Some(kind) = json.get("type").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        let is_user = match kind {
+            "user" => true,
+            "assistant" => false,
+            // `summary`, `system`, `queue-operation` and the rest are not turns.
+            _ => continue,
+        };
+        let content = json
+            .get("message")
+            .and_then(|message| message.get("content"));
+        let Some(text) = extract_text_content(content) else {
+            continue;
+        };
+        // A tool result is a user row but not something the user said: it is
+        // the reply to a tool the assistant called, and showing it as a prompt
+        // would put JSON on the card.
+        if is_user && looks_like_tool_result(&text) {
+            continue;
+        }
+        turns.push(ChatMessage::new(is_user, &text));
+    }
+
+    if summary.cwd.is_empty() && turns.is_empty() {
+        return None;
+    }
+    let start = turns.len().saturating_sub(3);
+    summary.recent_messages = turns.split_off(start);
+    Some(summary)
+}
+
+/// Whether a `user` row's text is a tool result rather than a prompt.
+fn looks_like_tool_result(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    trimmed.starts_with("[{") || trimmed.starts_with("{\"type\":\"tool_result\"")
+}
+
 /// `CursorDiscovery.readRecentFromCursorTranscript`: the last three turns of a
 /// Cursor agent transcript, in the order they were written.
 pub mod cursor {
@@ -347,6 +438,108 @@ pub mod transcript_files {
                 Some(start) => file.modified_ms + START_SLACK_MS >= start,
             })
             .max_by_key(|file| file.modified_ms)
+    }
+}
+
+#[cfg(test)]
+mod transcript_summary_tests {
+    use super::read_transcript_tail;
+
+    const TAIL: &str = r#"{"type":"user","cwd":"/home/dev/project","sessionId":"abc","message":{"role":"user","content":"Add a filter bar"}}
+{"type":"assistant","cwd":"/home/dev/project","message":{"model":"claude-sonnet-4","content":[{"type":"text","text":"Added the bar"}],"role":"assistant"}}
+{"type":"user","cwd":"/home/dev/project","message":{"role":"user","content":[{"type":"tool_result","content":"ok"}]}}
+{"type":"assistant","cwd":"/home/dev/project","message":{"content":[{"type":"text","text":"Anything else?"}]}}
+"#;
+
+    #[test]
+    fn a_transcript_tail_names_its_session_and_working_directory() {
+        let summary = read_transcript_tail(TAIL, "abc.jsonl").expect("a summary");
+        assert_eq!(summary.session_id, "abc");
+        assert_eq!(summary.cwd, "/home/dev/project");
+        assert_eq!(summary.model.as_deref(), Some("claude-sonnet-4"));
+    }
+
+    /// The model is on the assistant rows, and an empty one is not a name.
+    #[test]
+    fn the_model_comes_from_the_first_row_that_names_one() {
+        let tail = r#"{"type":"assistant","cwd":"/w","message":{"model":"","content":"Hi"}}
+{"type":"assistant","cwd":"/w","message":{"model":"model-x","content":"Later"}}
+"#;
+        assert_eq!(
+            read_transcript_tail(tail, "s.jsonl")
+                .expect("a summary")
+                .model
+                .as_deref(),
+            Some("model-x")
+        );
+    }
+
+    /// A tool result is a `user` row but not something the user said. Showing it
+    /// would put JSON on the card.
+    #[test]
+    fn a_tool_result_is_not_a_turn() {
+        let summary = read_transcript_tail(TAIL, "abc.jsonl").expect("a summary");
+        let texts: Vec<&str> = summary
+            .recent_messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            vec!["Add a filter bar", "Added the bar", "Anything else?"]
+        );
+        let kinds: Vec<bool> = summary
+            .recent_messages
+            .iter()
+            .map(|message| message.is_user)
+            .collect();
+        assert_eq!(kinds, vec![true, false, false]);
+    }
+
+    #[test]
+    fn at_most_three_turns_are_kept() {
+        let tail = (0..6)
+            .map(|index| {
+                let kind = if index % 2 == 0 { "user" } else { "assistant" };
+                format!(
+                    "{{\"type\":\"{kind}\",\"cwd\":\"/w\",\"message\":{{\"content\":\"turn {index}\"}}}}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let summary = read_transcript_tail(&tail, "s.jsonl").expect("a summary");
+        let texts: Vec<&str> = summary
+            .recent_messages
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect();
+        assert_eq!(texts, vec!["turn 3", "turn 4", "turn 5"]);
+    }
+
+    #[test]
+    fn nothing_usable_is_none_rather_than_an_empty_session() {
+        assert_eq!(read_transcript_tail("", "abc.jsonl"), None);
+        assert_eq!(
+            read_transcript_tail("{\"type\":\"user\",\"mess", "abc.jsonl"),
+            None
+        );
+        // A file that is not a transcript at all.
+        assert_eq!(read_transcript_tail("not json\n", "abc.jsonl"), None);
+        // Not a `.jsonl` name: the session id would be wrong.
+        assert_eq!(read_transcript_tail(TAIL, "abc.json"), None);
+        // An empty id is not an id.
+        assert_eq!(read_transcript_tail(TAIL, ".jsonl"), None);
+    }
+
+    /// A tail that starts mid-file is normal: the first line may be cut. The
+    /// rest still has to read.
+    #[test]
+    fn a_cut_first_line_does_not_lose_the_rest() {
+        let cut = "{\"type\":\"user\",\"cwd\":";
+        let tail = format!("{cut}\n{TAIL}");
+        let summary = read_transcript_tail(&tail, "abc.jsonl").expect("a summary");
+        assert_eq!(summary.cwd, "/home/dev/project");
+        assert!(!summary.recent_messages.is_empty());
     }
 }
 

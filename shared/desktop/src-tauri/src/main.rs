@@ -5,6 +5,7 @@
 mod adapters;
 mod cli;
 mod completion;
+mod discovery;
 mod feed;
 mod hooks;
 mod hotkey;
