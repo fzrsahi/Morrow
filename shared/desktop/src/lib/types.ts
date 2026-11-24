@@ -121,10 +121,34 @@ export type Completion = {
   blocks: MarkdownBlock[];
 };
 
+/** One row of the prayer card's expanded day list. */
+export type PrayerTime = {
+  key: string;
+  name: string;
+  /** Local `HH:MM` at the selected city's offset. */
+  time: string;
+  epoch_seconds: number;
+};
+
+/** #307 — mirrors `PrayerSnapshot` in src-tauri/src/prayer.rs. */
+export type PrayerSnapshot = {
+  city_id: string;
+  city_name: string;
+  method: string;
+  correction_minutes: number;
+  hijri: string;
+  times: PrayerTime[];
+  next: PrayerTime | null;
+  in_minutes: number;
+  urgent: boolean;
+};
+
 export type Snapshot = {
   sessions: Session[];
   permissions: Card[];
   completion: Completion | null;
+  /** #307 — absent until a prayer setting is saved; never fabricated. */
+  prayer?: PrayerSnapshot | null;
 };
 export type Decision = 'allow' | 'deny';
 

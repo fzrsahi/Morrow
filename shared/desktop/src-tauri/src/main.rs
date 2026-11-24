@@ -14,6 +14,7 @@ mod music;
 mod peek_window;
 mod permissions;
 mod position;
+mod prayer;
 mod prune;
 mod sessions;
 mod settings;
@@ -143,6 +144,7 @@ fn main() -> ExitCode {
         .manage(hooks_site)
         .manage(Smoke(smoke))
         .manage(position)
+        .manage(prayer::PrayerWakeState::new())
         .invoke_handler(tauri::generate_handler![
             subscribe,
             set_probes_active,
@@ -175,6 +177,11 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            prayer::prayer_settings_load,
+            prayer::prayer_settings_set,
+            prayer::prayer_cities,
+            prayer::prayer_next,
+            prayer::prayer_tick,
             sound::sound_cues,
             sound::sound_preview,
             settings_window::open_settings,
