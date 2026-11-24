@@ -131,6 +131,12 @@ git branch -d <old-branch>
 git fetch --prune
 ```
 
+### 5.7. Stacked PR Hygiene & CI Reliability SOP
+When building dependent feature stacks (e.g. #260 -> #285):
+1. **Never Stack on Broken Base Commits:** The root/base PR must pass 100% CI checks before dependent child branches are stacked. Failures in base PRs cascade to all downstream PRs.
+2. **Mandatory Cargo.lock Synchronization:** Whenever modifying any `Cargo.toml` or workspace dependencies, immediately run `cargo check` and commit the updated `Cargo.lock`. CI strictly enforces `--locked` and will fail builds if lockfiles desynchronize.
+3. **Deterministic File Mutation Testing:** Never test file changes by rewriting payloads of the exact same byte length without a delay. Fast NVMe/container filesystems can complete writes within identical nanosecond timestamps, causing assertion panics. Always vary the payload length or use discrete event boundaries.
+4. **Local Verification Gate:** Always execute `./scripts/ci/verify-local.sh` before pushing code.
 ### 5.7. Review Focus (Substance Over Paperwork)
 
 A review exists to catch code that is wrong, not to grade the PR description. Apply this order:
