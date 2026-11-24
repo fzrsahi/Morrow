@@ -10,9 +10,9 @@
 //! Three behaviours worth stating, because each exists to fix something that looked
 //! wrong on a card:
 //!
-//! - **The status is whatever the caller says it is.** The daemon's event name does not
-//!   decide `waitingApproval` — the watch client does, from the socket's own state. This
-//!   fold only sets the fields beside it.
+//! - **The event name decides the status.** `AiWorkStatusMapper.status(forEventName:)`
+//!   maps the nine event families to the Swift `AgentStatus`; a caller-supplied status
+//!   is only a fallback for names the mapper does not recognise.
 //! - **Text deltas accumulate.** Putting each fragment into `toolDescription` looks like
 //!   noise and re-triggers the blur on every token, so fragments merge into
 //!   `lastAssistantMessage` (last 800 characters) and the row shows a 160-character
@@ -26,7 +26,11 @@
 //! than hidden behind a call that cannot exist.
 
 use serde_json::Value;
+use unicode_segmentation::UnicodeSegmentation;
 
+use crate::attention::{AttentionMoment, FollowUpReminderKind, TurnEnd, TurnHost};
+use crate::display_only_wait;
+use crate::follow_up::FollowUpKind;
 use crate::reduce::{AgentStatus, ChatMessage, SessionSnapshot};
 
 /// The assistant text the card keeps after a turn.
@@ -47,14 +51,15 @@ pub fn terminal_placeholder(event_name: &str) -> &'static str {
     }
 }
 
-/// `text` cut to `max` characters with an ellipsis, counted in characters so a preview
-/// never splits a glyph.
+/// `text` cut to `max` grapheme clusters with an ellipsis. Swift's `String.count`
+/// and `prefix` count extended grapheme clusters, not Unicode scalars — a ZWJ
+/// emoji or a combining mark would otherwise shift every boundary.
 pub fn truncate(text: &str, max: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= max {
+    let clusters: Vec<&str> = text.graphemes(true).collect();
+    if clusters.len() <= max {
         return text.to_owned();
     }
-    let mut out: String = chars[..max.saturating_sub(1)].iter().collect();
+    let mut out: String = clusters[..max.saturating_sub(1)].concat();
     out.push('…');
     out
 }
@@ -65,6 +70,13 @@ fn string(data: Option<&Value>, key: &str) -> Option<String> {
         .as_str()
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
+}
+
+/// Swift's `??` stops at the first *present* value, even when it is an empty
+/// string; the caller then decides whether empty is acceptable. `string()` above
+/// skips empties per alias and is still right for Swift's `!x.isEmpty` checks.
+fn string_raw(data: Option<&Value>, key: &str) -> Option<String> {
+    data?.get(key)?.as_str().map(str::to_owned)
 }
 
 fn object<'a>(data: Option<&'a Value>, key: &str) -> Option<&'a Value> {
@@ -98,7 +110,9 @@ pub fn tool_name(data: Option<&Value>) -> Option<String> {
     if let Some(display) = tool_display(data) {
         if let Some(title) = string(Some(display), "title") {
             // Prefer the short name when the title is a long "name: detail".
-            if let Some(name) = string(Some(display), "tool_name").or_else(|| string(data, "name"))
+            if let Some(name) = string_raw(Some(display), "tool_name")
+                .or_else(|| string_raw(data, "name"))
+                .filter(|name| !name.is_empty())
             {
                 return Some(name);
             }
@@ -205,18 +219,99 @@ pub fn user_prompt(data: Option<&Value>) -> Option<String> {
     None
 }
 
+/// `AiWorkStatusMapper.status(forEventName:)` in `AiWorkWatchClient.swift`.
+/// `None` for an event that must not change status (a diagnostic, say).
+pub fn status_for_event_name(name: &str) -> Option<AgentStatus> {
+    match name {
+        "stream.approval_required" | "stream.plan_confirmation_required" => {
+            Some(AgentStatus::WaitingApproval)
+        }
+        "stream.question_required" => Some(AgentStatus::WaitingQuestion),
+        "stream.tool_call" => Some(AgentStatus::Running),
+        "stream.tool_result"
+        | "stream.approval_resolved"
+        | "stream.plan_confirmation_resolved"
+        | "stream.question_resolved"
+        | "stream.started"
+        | "stream.progress"
+        | "stream.thinking_delta"
+        | "stream.text_delta"
+        | "stream.ack"
+        | "stream.fallback_started" => Some(AgentStatus::Processing),
+        "stream.completed" | "stream.failed" | "stream.aborted" => Some(AgentStatus::Idle),
+        _ => None,
+    }
+}
+
+fn reminder_kind(kind: FollowUpKind) -> FollowUpReminderKind {
+    match kind {
+        FollowUpKind::Approval => FollowUpReminderKind::Approval,
+        FollowUpKind::Question => FollowUpReminderKind::Question,
+        FollowUpKind::Completion => FollowUpReminderKind::Completion,
+    }
+}
+
+/// The missing producer for #238 AC 3: fold one AiWork frame and return the
+/// `AttentionMoment` a display-only wait / turn transition deserves. Pure — a
+/// transcript fixture drives it without a socket or a desktop (#355/#357).
+pub fn reduce_aiwork_frame(
+    snapshot: &mut SessionSnapshot,
+    event_name: &str,
+    data: Option<&Value>,
+    island_holds_request: bool,
+    new_session: bool,
+) -> Option<AttentionMoment> {
+    let before_status = snapshot.status;
+    let status = status_for_event_name(event_name).unwrap_or(before_status);
+    apply_stream_event(snapshot, event_name, data, status);
+
+    let before = display_only_wait::kind(before_status, island_holds_request);
+    let after = display_only_wait::kind(snapshot.status, island_holds_request);
+    if let Some(after_kind) = after {
+        if Some(after_kind) != before {
+            return Some(AttentionMoment::DisplayOnlyWaitBegan {
+                kind: reminder_kind(after_kind),
+                announce: true,
+            });
+        }
+    }
+    match event_name {
+        "stream.started" => Some(AttentionMoment::TurnStarted { new_session }),
+        "stream.completed" => Some(AttentionMoment::TurnEnded {
+            end: TurnEnd::Completed,
+            host: TurnHost::Aiwork,
+        }),
+        "stream.failed" => Some(AttentionMoment::TurnEnded {
+            end: TurnEnd::Failed,
+            host: TurnHost::Aiwork,
+        }),
+        "stream.aborted" => Some(AttentionMoment::TurnEnded {
+            end: TurnEnd::Stopped,
+            host: TurnHost::Aiwork,
+        }),
+        _ => None,
+    }
+}
+
+/// `AiWorkStatusMapper.isTerminalEvent(_:)`: which events enqueue a completion card.
+pub fn is_terminal_event(name: &str) -> bool {
+    matches!(
+        name,
+        "stream.completed" | "stream.failed" | "stream.aborted"
+    )
+}
+
 /// Fold one stream event into `snapshot`.
 ///
-/// `status` is the caller's: the watch client derives it from the socket's own state, and
-/// the event name never overrides it except for `stream.tool_result`, which marks
-/// completion by dropping back to `processing`.
+/// The event name wins through `status_for_event_name`; `status` is the caller's
+/// fallback for an event the mapper does not recognise.
 pub fn apply_stream_event(
     snapshot: &mut SessionSnapshot,
     event_name: &str,
     data: Option<&Value>,
     status: AgentStatus,
 ) {
-    snapshot.status = status;
+    snapshot.status = status_for_event_name(event_name).unwrap_or(status);
     match event_name {
         "stream.started" => {
             // Mirror Claude's UserPromptSubmit: keep the user turn in recentMessages so
@@ -324,11 +419,11 @@ pub fn apply_stream_event(
 }
 
 fn tail_chars(text: &str, count: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() <= count {
+    let clusters: Vec<&str> = text.graphemes(true).collect();
+    if clusters.len() <= count {
         return text.to_owned();
     }
-    chars[chars.len() - count..].iter().collect()
+    clusters[clusters.len() - count..].concat()
 }
 
 /// The closing of a turn: keep what the assistant said, or leave a stand-in so an idle
@@ -340,10 +435,11 @@ pub fn finalize_turn_messages(
 ) {
     let notice_summary =
         object(data, "terminal_notice").and_then(|notice| string(Some(notice), "summary"));
-    let final_text = string(data, "final_text")
-        .or_else(|| string(data, "text"))
+    let final_text = string_raw(data, "final_text")
+        .or_else(|| string_raw(data, "text"))
         .or(notice_summary)
-        .or(snapshot.last_assistant_message.clone());
+        .or(snapshot.last_assistant_message.clone())
+        .filter(|text| !text.is_empty());
 
     match non_empty(final_text) {
         Some(text) => {
@@ -424,7 +520,7 @@ pub fn apply_session_metadata(snapshot: &mut SessionSnapshot, data: Option<&Valu
         .or_else(|| session.and_then(|session| string(Some(session), "last_user_prompt")))
         .filter(|prompt| !prompt.is_empty())
     {
-        snapshot.last_user_prompt = Some(prompt.chars().take(240).collect());
+        snapshot.last_user_prompt = Some(prompt.graphemes(true).take(240).collect());
     }
     if snapshot.tool_description.is_none() && snapshot.status != AgentStatus::Idle {
         if let Some(signal) = session
@@ -448,6 +544,105 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_or_turn_transition_produces_an_attention_moment() {
+        let mut s = snapshot();
+        assert_eq!(
+            reduce_aiwork_frame(&mut s, "stream.approval_required", None, false, false),
+            Some(AttentionMoment::DisplayOnlyWaitBegan {
+                kind: FollowUpReminderKind::Approval,
+                announce: true,
+            })
+        );
+        // The second frame is the same wait: no second attention moment.
+        assert_eq!(
+            reduce_aiwork_frame(&mut s, "stream.approval_required", None, false, false),
+            None
+        );
+        // A request the island already holds is not display-only.
+        let mut held = snapshot();
+        assert_eq!(
+            reduce_aiwork_frame(&mut held, "stream.question_required", None, true, false),
+            None
+        );
+
+        assert_eq!(
+            reduce_aiwork_frame(&mut snapshot(), "stream.started", None, false, true),
+            Some(AttentionMoment::TurnStarted { new_session: true })
+        );
+        assert_eq!(
+            reduce_aiwork_frame(&mut snapshot(), "stream.completed", None, false, false),
+            Some(AttentionMoment::TurnEnded {
+                end: TurnEnd::Completed,
+                host: TurnHost::Aiwork,
+            })
+        );
+    }
+
+    fn the_status_mapper_matches_swifts_nine_event_families() {
+        for (event, expected) in [
+            (
+                "stream.approval_required",
+                Some(AgentStatus::WaitingApproval),
+            ),
+            (
+                "stream.plan_confirmation_required",
+                Some(AgentStatus::WaitingApproval),
+            ),
+            (
+                "stream.question_required",
+                Some(AgentStatus::WaitingQuestion),
+            ),
+            ("stream.tool_call", Some(AgentStatus::Running)),
+            ("stream.tool_result", Some(AgentStatus::Processing)),
+            ("stream.approval_resolved", Some(AgentStatus::Processing)),
+            ("stream.text_delta", Some(AgentStatus::Processing)),
+            ("stream.fallback_started", Some(AgentStatus::Processing)),
+            ("stream.completed", Some(AgentStatus::Idle)),
+            ("stream.failed", Some(AgentStatus::Idle)),
+            ("stream.aborted", Some(AgentStatus::Idle)),
+            ("stream.diagnostic", None),
+        ] {
+            assert_eq!(status_for_event_name(event), expected, "{event}");
+        }
+        for event in ["stream.completed", "stream.failed", "stream.aborted"] {
+            assert!(is_terminal_event(event));
+        }
+        assert!(!is_terminal_event("stream.tool_result"));
+    }
+
+    #[test]
+    fn truncation_uses_grapheme_clusters_like_swift_string_count() {
+        // A ZWJ family is one rendered glyph but seven Unicode scalars.
+        let family = "👨‍👩‍👧‍👦";
+        let text = format!("{family}A");
+        assert_eq!(
+            truncate(&text, 2),
+            text,
+            "two clusters fit in two characters"
+        );
+        assert_eq!(
+            truncate(&text, 1),
+            "…",
+            "one cluster leaves no room before the ellipsis"
+        );
+        assert_eq!(tail_chars(&text, 1), "A");
+        assert_eq!(tail_chars(&text, 2), text);
+    }
+
+    #[test]
+    fn an_empty_first_alias_stops_the_chain_like_swifts_null_coalescing() {
+        let data = serde_json::json!({
+            "_meta": {"agentix": {"tool_display": {
+                "title": "Bash", "tool_name": "", "name": "other"
+            }}},
+            "name": "fallback"
+        });
+        // Swift: `tool_name ?? name` keeps the empty string, the !isEmpty guard
+        // fails, and the title is used. Falling through to "other" was the bug.
+        assert_eq!(super::tool_name(Some(&data)), Some("Bash".to_owned()));
+    }
+
+    #[test]
     fn a_started_stream_carries_the_prompt_and_clears_the_previous_turn() {
         let mut s = snapshot();
         s.last_assistant_message = Some("old answer".to_owned());
@@ -457,9 +652,11 @@ mod tests {
             &mut s,
             "stream.started",
             Some(&json!({"display_text": "  fix the flaky test  "})),
+            // Deliberately wrong: the Swift mapper says `stream.started` is
+            // `processing`, so the event name must win over the caller.
             AgentStatus::Running,
         );
-        assert_eq!(s.status, AgentStatus::Running);
+        assert_eq!(s.status, AgentStatus::Processing);
         assert_eq!(s.last_user_prompt.as_deref(), Some("fix the flaky test"));
         assert_eq!(s.last_assistant_message, None);
         assert_eq!(s.current_tool(), None);

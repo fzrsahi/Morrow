@@ -290,6 +290,23 @@ impl FollowUpReminderScheduler {
         self.reconcile(kind, origin, &waiting, now);
     }
 
+    /// `sync_origin` for a mirror origin, keeping entries for sessions the
+    /// other origin still holds so their timing survives the handover.
+    pub fn sync_origin_keeping(
+        &mut self,
+        kind: FollowUpKind,
+        origin: Origin,
+        waiting: &BTreeSet<String>,
+        keep: &BTreeSet<String>,
+        now: Timestamp,
+    ) {
+        let waiting: BTreeMap<String, Option<String>> = waiting
+            .iter()
+            .map(|session| (session.clone(), None))
+            .collect();
+        self.reconcile_keeping(kind, origin, &waiting, keep, now);
+    }
+
     fn reconcile(
         &mut self,
         kind: FollowUpKind,
@@ -297,11 +314,27 @@ impl FollowUpReminderScheduler {
         waiting: &BTreeMap<String, Option<String>>,
         now: Timestamp,
     ) {
+        self.reconcile_keeping(kind, origin, waiting, &BTreeSet::new(), now)
+    }
+
+    /// `keep` names sessions the other origin still holds: their entry must
+    /// survive this pass so that origin's sync can adopt its timing (#356).
+    fn reconcile_keeping(
+        &mut self,
+        kind: FollowUpKind,
+        origin: Origin,
+        waiting: &BTreeMap<String, Option<String>>,
+        keep: &BTreeSet<String>,
+        now: Timestamp,
+    ) {
         if !self.is_enabled() {
             return;
         }
         self.entries.retain(|key, entry| {
-            key.kind != kind || entry.origin != origin || waiting.contains_key(&key.session_id)
+            key.kind != kind
+                || entry.origin != origin
+                || waiting.contains_key(&key.session_id)
+                || keep.contains(&key.session_id)
         });
         for (session_id, request_id) in waiting {
             let key = Key::new(kind, session_id.clone());
