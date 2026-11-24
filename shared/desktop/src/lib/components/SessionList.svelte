@@ -30,6 +30,7 @@
   } from '../session-list';
   import type { SessionDensity, SessionFilter } from '../panel';
   import { PALETTE, type Theme } from '../tokens';
+  import { jumpLabel } from '../terminal';
   import type { Card, Decision, Session } from '../types';
 
   type Props = {
@@ -38,6 +39,12 @@
     filter: SessionFilter;
     density?: SessionDensity;
     onDelete: (sessionId: string) => void;
+    /** #239 AC 5 / L-009: jump to the session's terminal, or copy its path. */
+    onJump?: (session: Session) => void;
+    /** Whether the row earns the jump button — the capability row decides. */
+    canJumpTo?: (session: Session) => boolean;
+    /** #239 AC 5: what the last jump did. A row has nowhere else to say it. */
+    notice?: { text: string; failed: boolean } | null;
     onOpenSettings: () => void;
     /** Pending, non-hidden requests (#approval-queue: inline in the list). */
     approvals?: Card[];
@@ -49,6 +56,9 @@
     filter,
     density = 'compact',
     onDelete,
+    onJump,
+    canJumpTo,
+    notice = null,
     onOpenSettings,
     approvals = [],
     onAnswer,
@@ -69,6 +79,12 @@
     scroller?.scrollBy({ top: scroller.clientHeight, behavior: 'smooth' });
   }
 </script>
+
+{#if notice}
+  <!-- A jump that could not focus a window hands back a path, or explains
+       itself; both are said here rather than leaving the click looking dead. -->
+  <p class="jump-note" class:bad={notice.failed} role="status">{notice.text}</p>
+{/if}
 
 {#if sessions.length === 0}
   <div class="empty">
@@ -126,6 +142,15 @@
                 <PixelText text={meta.label} size={1.05} color={meta.fill ? '#000' : meta.color} />
               </span>
               <span class="ctail">
+                {#if onJump && canJumpTo?.(session)}
+                  <!-- #239 AC 5: `terminal_activate` had no caller since #103. -->
+                  <button
+                    class="jump"
+                    aria-label={jumpLabel(session)}
+                    title={jumpLabel(session)}
+                    onclick={() => onJump(session)}
+                  >↗</button>
+                {/if}
                 <button
                   class="del"
                   aria-label="Remove {session.cwd_name || session.session_id}"
@@ -233,6 +258,14 @@
                     </span>
                   {/if}
                   <span class="sp"></span>
+                  {#if onJump && canJumpTo?.(session)}
+                    <button
+                      class="jump"
+                      aria-label={jumpLabel(session)}
+                      title={jumpLabel(session)}
+                      onclick={() => onJump(session)}
+                    >↗</button>
+                  {/if}
                   <button
                     class="del"
                     aria-label="Remove {session.cwd_name || session.session_id}"
@@ -507,19 +540,43 @@
   .pb.fill {
     background: var(--c);
   }
+  /* Two glyph buttons with one shape and two meanings: the arrow goes to the
+     terminal, the cross forgets the row. Both stay out of the way until the row
+     is hovered, so a list of eight sessions is not a wall of controls. */
+  .jump,
   .del {
     padding: 0 2px;
     border: 0;
     background: none;
-    color: var(--red);
     font: 900 calc(var(--f) * 0.9) ui-monospace, monospace;
     opacity: 0;
     pointer-events: none;
     cursor: default;
   }
+  .del {
+    color: var(--red);
+  }
+  .jump {
+    color: var(--cyan);
+  }
+  .jump-note {
+    margin: 0 0 4px;
+    padding: 3px 6px;
+    border-left: 2px solid var(--cyan);
+    background: rgba(255, 255, 255, 0.04);
+    font: calc(var(--f) * 0.8) ui-monospace, monospace;
+    color: var(--tw);
+    overflow-wrap: anywhere;
+  }
+  .jump-note.bad {
+    border-left-color: var(--amber);
+  }
   .crow:hover .del,
   .pcard:hover .del,
-  .del:focus-visible {
+  .del:focus-visible,
+  .crow:hover .jump,
+  .pcard:hover .jump,
+  .jump:focus-visible {
     opacity: 1;
     pointer-events: auto;
   }

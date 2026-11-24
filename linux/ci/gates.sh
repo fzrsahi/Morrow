@@ -153,12 +153,50 @@ headless_all() { # filter...
 }
 
 # --- L-003: p95 hook → panel < 300 ms ----------------------------------------
-# Nothing in the repository measures this yet: e2e1 proves a synthetic hook
-# becomes a card, and does not time it. A gate here would be a script nobody has
-# seen run, so it names the measurement instead of inventing one.
+# The budget is #48's; the samples come from a host that can run the panel.
+LATENCY_BUDGET_MS=300
+LATENCY_SAMPLES="${MORROW_LATENCY_SAMPLES:-$ROOT/dist/linux/latency-ms.txt}"
+LATENCY_MIN_SAMPLES=20
+
+# Nearest-rank percentile over one number per line. `awk`, not `sort | sed`,
+# because the index arithmetic is the part that can be wrong and it is testable.
+p95() {
+    local n idx
+    # `asort` is a gawk extension and macOS ships BWK awk, so the sort is GNU
+    # `sort -n` — the same command on both platforms.
+    n="$(grep -cE '^[0-9]+$' "$1")"
+    [ "$n" -gt 0 ] || return 1
+    idx=$(( (95 * n + 99) / 100 ))
+    [ "$idx" -lt 1 ] && idx=1
+    [ "$idx" -gt "$n" ] && idx="$n"
+    grep -E '^[0-9]+$' "$1" | sort -n | sed -n "${idx}p"
+}
+
 gate_l003() {
-    record L-003 "MISSING" "BLOCKED" \
-        "no latency measurement exists: e2e1.sh proves a hook becomes a card and does not time it; the gate needs a host to add one against (and the panel's card log line to time against)"
+    if [ ! -f "$LATENCY_SAMPLES" ]; then
+        record L-003 "MISSING" "BLOCKED" \
+            "no samples at $LATENCY_SAMPLES: e2e1.sh proves a hook becomes a card and does not time it; the gate needs a host to write one measurement per line"
+        return
+    fi
+    local count measured
+    count="$(grep -cE '^[0-9]+$' "$LATENCY_SAMPLES" 2>/dev/null || echo 0)"
+    if [ "$count" -lt "$LATENCY_MIN_SAMPLES" ]; then
+        record L-003 "MISSING" "BLOCKED" \
+            "$count samples in $LATENCY_SAMPLES, need $LATENCY_MIN_SAMPLES before a p95 means anything"
+        return
+    fi
+    measured="$(p95 "$LATENCY_SAMPLES")"
+    if [ -z "$measured" ]; then
+        record L-003 "MISSING" "BLOCKED" "the samples in $LATENCY_SAMPLES are not numbers"
+        return
+    fi
+    if [ "$measured" -le "$LATENCY_BUDGET_MS" ]; then
+        record L-003 "PASS" "BLOCKED" \
+            "p95 ${measured} ms over ${count} samples (budget ${LATENCY_BUDGET_MS} ms); the samples still have to come from a host with a display"
+    else
+        record L-003 "FAIL" "BLOCKED" \
+            "p95 ${measured} ms over ${count} samples is over the ${LATENCY_BUDGET_MS} ms budget"
+    fi
 }
 
 # --- L-004: approve/deny/answer reaches the CLI that asked -------------------
@@ -214,10 +252,26 @@ gate_l008() {
     fi
 }
 
+# Runs L-011 against a chosen dist and echoes its verdict, so `--self-check` can
+# exercise the branch without a real packaging host.
+recheck_l011() { # dist-directory -> the verdict for that directory
+    local saved_dist="$DIST" saved_have="$HAVE_DIST" verdict
+    # Empty the table first: `index_of` finds the *first* entry, so appending a
+    # second L-011 would read the verdict from the host run instead of this one.
+    names=(); headless=(); desktop=(); reasons=()
+    DIST="$1"
+    HAVE_DIST=1
+    gate_l011
+    verdict="${headless[0]}"
+    DIST="$saved_dist"
+    HAVE_DIST="$saved_have"
+    echo "$verdict"
+}
+
 # --- L-009: terminal jump at the window level; copy-path fallback -----------
 gate_l009() {
     record L-009 "MISSING" "BLOCKED" \
-        "the shell command exists (terminal_activate) and no surface calls it: the button is #33, so there is nothing to assess"
+        "the button exists now (#383) and nothing has pressed it: assessing this needs a session with a real terminal window on an X11 desktop"
 }
 
 # --- L-010: settings live in ~/.config and survive an upgrade --------------
@@ -307,12 +361,37 @@ self_check() {
         check "$gate is not passed without evidence" '[ "${headless[$i]}" != "MISSING" ] || [ "$said" = "BLOCKED" ]'
     done
 
-    # 3. A filter that matches no test must not read as green — the same trap
+    # 3. The percentile, against numbers whose answer is known by hand.
+    local synthetic
+    synthetic="$(mktemp)"
+    printf '%s\n' 1 2 3 4 5 6 7 8 9 10 >"$synthetic"
+    check "p95 of 1..10 is 10 (nearest rank)" '[ "$(p95 "$synthetic")" = "10" ]'
+    printf '%s\n' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 >"$synthetic"
+    check "p95 of 1..20 is 19, not 20" '[ "$(p95 "$synthetic")" = "19" ]'
+    printf '%s\n' 120 130 118 121 119 >"$synthetic"
+    check "p95 of five fast samples is the fastest-by-rank" '[ "$(p95 "$synthetic")" = "130" ]'
+    : >"$synthetic"
+    check "no samples has no percentile" '[ -z "$(p95 "$synthetic")" ]'
+
+    # 4. L-011's checksum branch, against a dist directory made here. This code
+    #    path had never seen a real dist/ and was written blind; a synthetic one
+    #    is enough to know the branch reads what package.sh writes.
+    local fake
+    fake="$(mktemp -d)"
+    printf 'not a real package\n' >"$fake/morrow_0.1.0_amd64.deb"
+    (cd "$fake" && { sha256sum ./*.deb 2>/dev/null || shasum -a 256 ./*.deb; } >SHA256SUMS)
+    check "a dist of one package and its SHA256SUMS is PASS" '[ "$(recheck_l011 "$fake")" = "PASS" ]'
+    printf 'tampered\n' >"$fake/morrow_0.1.0_amd64.deb"
+    check "a tampered package is FAIL, not MISSING" '[ "$(recheck_l011 "$fake")" = "FAIL" ]'
+    rm -rf "$fake"
+    rm -f "$synthetic"
+
+    # 5. A filter that matches no test must not read as green — the same trap
     #    `commands.rs` has a Rust test for: a guard that matches nothing passes
     #    forever.
     check "a filter that matches nothing is EMPTY, not PASS" '[ "$(headless_verdict morrow-platform a_filter_that_cannot_exist)" = "EMPTY" ]'
 
-    # 4. The exit code must separate the three outcomes, because a host that
+    # 6. The exit code must separate the three outcomes, because a host that
     #    cannot judge must not look like a host that judged and agreed.
     check "blocked exits 77" '[ "$(exit_code 0 1)" = "77" ]'
     check "a failure exits 1" '[ "$(exit_code 1 1)" = "1" ]'
