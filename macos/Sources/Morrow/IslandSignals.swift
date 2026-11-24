@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import SwiftUI
 
 /// The values the collapsed bar actually shows.
 ///
@@ -70,12 +71,16 @@ final class IslandSignals {
     }
 
     func setChargingBanner(visible: Bool, batteryLevel: Int) {
-        if showChargingBanner != visible { showChargingBanner = visible }
-        if self.batteryLevel != batteryLevel { self.batteryLevel = batteryLevel }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
+            if showChargingBanner != visible { showChargingBanner = visible }
+            if self.batteryLevel != batteryLevel { self.batteryLevel = batteryLevel }
+        }
     }
 
     func setMiniPeekBanner(_ visible: Bool) {
-        if showMiniPeekBanner != visible { showMiniPeekBanner = visible }
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
+            if showMiniPeekBanner != visible { showMiniPeekBanner = visible }
+        }
     }
 
     func setVolumeHUDVisible(_ visible: Bool) {
@@ -88,5 +93,67 @@ final class IslandSignals {
 
     func setInQuietHours(_ quiet: Bool) {
         if inQuietHours != quiet { inQuietHours = quiet }
+    }
+}
+
+/// Shared deadline-aware hover-hold timer for below-notch notification banners.
+/// Holds the banner open while hovered, resumes the remaining deadline on early unhover,
+/// and dismisses immediately if unhovered after the deadline has elapsed.
+@MainActor
+public final class BannerHoverHoldTimer {
+    public private(set) var isHovered: Bool = false
+    public private(set) var deadline: Date?
+    private var workItem: DispatchWorkItem?
+    private let defaultDuration: TimeInterval
+
+    public init(defaultDuration: TimeInterval = 3.0) {
+        self.defaultDuration = defaultDuration
+    }
+
+    public func start(duration: TimeInterval? = nil, onDismiss: @escaping () -> Void) {
+        let ttl = duration ?? defaultDuration
+        isHovered = false
+        deadline = Date().addingTimeInterval(ttl)
+        schedule(after: ttl, onDismiss: onDismiss)
+    }
+
+    public func setHovered(_ hovering: Bool, isVisible: Bool, onDismiss: @escaping () -> Void) {
+        guard isVisible else {
+            isHovered = false
+            return
+        }
+        if hovering {
+            isHovered = true
+            workItem?.cancel()
+            workItem = nil
+        } else if isHovered {
+            isHovered = false
+            let remaining = deadline?.timeIntervalSinceNow ?? 0
+            if remaining > 0 {
+                schedule(after: remaining, onDismiss: onDismiss)
+            } else {
+                cancel()
+                onDismiss()
+            }
+        }
+    }
+
+    public func cancel() {
+        workItem?.cancel()
+        workItem = nil
+        isHovered = false
+        deadline = nil
+    }
+
+    private func schedule(after delay: TimeInterval, onDismiss: @escaping () -> Void) {
+        workItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self, !self.isHovered else { return }
+            self.deadline = nil
+            self.workItem = nil
+            onDismiss()
+        }
+        workItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 }

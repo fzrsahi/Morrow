@@ -17,6 +17,9 @@
 # proves install → settings.json carries our hook → idempotent re-install →
 # uninstall → the file is byte-for-byte what it was, and prints the same
 # Evidence block. The full run adds the CLI and the panel on top.
+# Evidence block. It needs only an app binary (MORROW_APP, or target/debug) —
+# no frontend build, no display, no socket, no bridge — so it runs on a clean
+# checkout given a prebuilt binary. The full run adds the CLI/panel.
 #
 # A real X11 desktop (DISPLAY set; the final judgement, Debian host #70):
 #   (cd shared/desktop && bun install && bun run build) && linux/ci/e2e2.sh
@@ -31,6 +34,11 @@
 #      E2E2_COMMIT (Evidence block when git cannot read the checkout),
 #      E2E2_PROMPT (the prompt given to `claude`), CARGO_TARGET_DIR,
 #      CLAUDE_BIN (default: claude).
+# Env: MORROW_APP (binary; required for --self-check, built in full mode when unset),
+#      E2E2_SCREEN (Xvfb only),
+#      E2E2_COMMIT (Evidence block when git cannot read the checkout),
+#      E2E2_PROMPT (prompt template; keep __MARKER_FILE__ in it),
+#      CARGO_TARGET_DIR, CLAUDE_BIN (default: claude).
 # Exit: 0 when every check passed, 1 otherwise.
 set -euo pipefail
 
@@ -44,6 +52,18 @@ CLAUDE="${CLAUDE_BIN:-claude}"
 # Something that needs a tool call, so [CC] asks before running it. Kept boring:
 # one `echo`, no network, no file written.
 PROMPT="${E2E2_PROMPT:-Run the shell command: echo e2e2-ok}"
+# The tool's effect is a FILE, not a string in the captured pane: the TUI echoes
+# the submitted prompt, so grepping the pane for a marker proves nothing. The
+# prompt names a per-run path; the checks below test that path on disk.
+MARKER_CONTENT=e2e2-ok
+marker_written() { # marker_written <path> <content>: the tool actually ran
+  grep -qx "$2" "$1" 2>/dev/null
+}
+marker_not_written() { ! marker_written "$@"; }
+marker_absent() { [ ! -e "$1" ]; }
+# E2E2_PROMPT may reword the instruction, but must keep __MARKER_FILE__ where the
+# per-run path goes, or the effect cannot be observed.
+PROMPT_TEMPLATE="${E2E2_PROMPT:-Run this shell command exactly: echo '$MARKER_CONTENT' > '__MARKER_FILE__'}"
 SELF_CHECK=0
 [ "${1:-}" = "--self-check" ] && SELF_CHECK=1
 
@@ -63,6 +83,21 @@ if [ "$SELF_CHECK" -eq 1 ] && [ -z "${MORROW_APP:-}" ]; then
 fi
 x11_binaries
 x11_workdir
+# --self-check needs only the app binary: no frontend, no display, no socket,
+# no bridge. The full run still goes through x11_binaries/x11_workdir.
+if [ "$SELF_CHECK" -eq 1 ]; then
+  if [ -z "${MORROW_APP:-}" ]; then
+    MORROW_APP="$TARGET_DIR/debug/morrow-app"
+    [ -x "$MORROW_APP" ] ||
+      die "no app binary: --self-check needs only the binary (set MORROW_APP=/path/to/morrow-app); building one is Tauri's job and needs the frontend dist"
+  fi
+  WORK="$(mktemp -d "/tmp/$NAME.XXXXXX")"
+  pids=()
+  trap x11_cleanup EXIT
+else
+  x11_binaries
+  x11_workdir
+fi
 # Built first: `cargo build` needs the real HOME for its registry.
 export HOME="$WORK/home"
 mkdir -p "$HOME/.claude"
@@ -88,6 +123,20 @@ checksum() { # checksum <path>: sha256, or "absent"
 # promise, which is the one that matters when their config is not ours.
 before="$(checksum "$SETTINGS")"
 
+
+# Pin the effect checks on disk: no CLI, no display, no tmux needed. These catch
+# a regression back to grepping the echoed prompt instead of the marker file.
+probe="$WORK/marker.probe"
+rm -f "$probe"
+check marker_absent_without_file "no marker file means the tool did not run" \
+  marker_absent "$probe"
+printf '%s\n' "$MARKER_CONTENT" >"$probe"
+check marker_written_with_content "marker with the expected content proves the run" \
+  marker_written "$probe" "$MARKER_CONTENT"
+printf 'something-else\n' >"$probe"
+check marker_rejects_other_content "other content is not the tool's effect" \
+  marker_not_written "$probe" "$MARKER_CONTENT"
+rm -f "$probe"
 # --- the installer -------------------------------------------------------
 install_out="$("$MORROW_APP" --hooks install claude 2>&1)" || {
   check install_claude "install failed: $install_out" false
@@ -104,6 +153,8 @@ check status_says_installed "morrow-app --hooks status" \
 
 # --- the CLI and the panel (not in --self-check) -------------------------
 latency=()
+
+prompts=()
 if [ "$SELF_CHECK" -eq 0 ]; then
   command -v tmux >/dev/null 2>&1 || die "no tmux: the CLI needs a terminal to ask in"
 
@@ -128,11 +179,23 @@ if [ "$SELF_CHECK" -eq 0 ]; then
     tmux new-session -d -s "$name" -x 200 -y 50 "$CLAUDE"
     tmux send-keys -t "$name" "$PROMPT" Enter
     tmux pipe-pane -t "$name" -o "cat >'$WORK/$name.cli'"
+    local name="$1" marker="$WORK/$1.marker" prompt
+    rm -f "$marker"
+    tmux new-session -d -s "$name" -x 200 -y 50 "$CLAUDE"
+    # Attach the pipe before typing: the first paint, including the card's
+    # clock, starts with the prompt and would be missed if we attached after.
+    tmux pipe-pane -t "$name" -o "cat >'$WORK/$name.cli'"
+    prompt="${PROMPT_TEMPLATE//__MARKER_FILE__/$marker}"
+    prompts+=("$prompt")
+    T0=$(now_ms)
+    tmux send-keys -t "$name" "$prompt" Enter
   }
   # answer <name> <approve|deny>: waits for the card, clicks the button, and
   # records what the CLI printed after the answer.
   answer() {
     local name="$1" which="$2" line at id
+    local name="$1" which="$2" line at id marker
+    marker="$WORK/$name.marker"
     id=$([ "$name" = approve ] && echo 1 || echo 2)
     if ! until_ok 120 sh -c "grep -q 'morrow-smoke: card id=$id ' '$WORK/app.out'"; then
       check "${name}_card_shown" "no card $id within 120 s: $(tail -n 5 "$WORK/$name.cli" 2>/dev/null)" false
@@ -158,6 +221,19 @@ if [ "$SELF_CHECK" -eq 0 ]; then
     fi
     check "${name}_card_gone" "the next push has cards=0" \
       until_ok 5 sh -c "grep 'morrow-smoke: pushed' '$WORK/app.out' | tail -n1 | grep -q 'cards=0$'"
+    # Wait for the card to be dismissed first: that is the point at which the
+    # CLI has the answer, so an absence check afterwards means something.
+    check "${name}_card_gone" "the next push has cards=0" \
+      until_ok 5 sh -c "grep 'morrow-smoke: pushed' '$WORK/app.out' | tail -n1 | grep -q 'cards=0$'"
+    # The effect, not the echoed prompt: the marker file exists only if the CLI
+    # actually ran the tool after the click. Independent of the prompt wording.
+    if [ "$which" = approve ]; then
+      check "${name}_cli_ran_the_tool" "marker file written with the expected content" \
+        until_ok 60 marker_written "$marker" "$MARKER_CONTENT"
+    else
+      check "${name}_cli_did_not_run_the_tool" "no marker file after a deny" \
+        marker_absent "$marker"
+    fi
     latency+=("$name: card $((at - T0)) ms")
     tmux kill-session -t "$name" 2>/dev/null || true
   }
@@ -218,6 +294,7 @@ if [ "$SELF_CHECK" -eq 0 ]; then
   echo "display:    $display"
   echo "wm:         $(wmctrl -m 2>/dev/null | sed -n 's/^Name: //p')"
   echo "prompt:     $PROMPT"
+  for entry in "${prompts[@]}"; do echo "prompt:     $entry"; done
   for entry in "${latency[@]}"; do echo "latency:    $entry"; done
 fi
 printf '%s\n' "${results[@]}"

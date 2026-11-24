@@ -8,6 +8,7 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
+  import BehaviorPage from './lib/components/BehaviorPage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
   import ShortcutsPage from './lib/components/ShortcutsPage.svelte';
   import UnavailablePage from './lib/components/UnavailablePage.svelte';
@@ -23,6 +24,10 @@
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
   import { resolveLanguage, type Language } from './lib/strings';
+  import {
+    followUpMinutesFromSettings,
+    SETTINGS_KEY_FOLLOW_UP_MINUTES,
+  } from './lib/reminders';
   import { cssVariables } from './lib/tokens';
   import type {
     AutostartStatus,
@@ -76,6 +81,7 @@
     if ('Unsupported' in capability) return capability.Unsupported;
     return null;
   });
+  let followUpMinutes = $state(1);
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -101,6 +107,9 @@
       cues = sound;
       settingsFile = file;
       appearance = appearanceFromSettings(stored);
+      followUpMinutes = followUpMinutesFromSettings(
+        (stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
+      );
       applyAppearance();
       error = null;
     } catch (cause) {
@@ -138,6 +147,11 @@
   // #241: the same answer the Capability table gives, read the same way, so
   // the page and the table cannot disagree about whether a sound can play.
   const soundSupported = $derived(isSupported(capabilities, 'Sound effects'));
+
+  function saveFollowUpMinutes(key: string, value: number) {
+    followUpMinutes = value;
+    void run(() => invoke('settings_set', { key, value }), false);
+  }
 
   onMount(() => {
     void load();
@@ -204,6 +218,9 @@
         <ShortcutsPage hotkeySupported={hotkeySupported} hotkeyDetail={hotkeyDetail} />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} onResetPosition={resetPosition} />
+        <AppearancePage {appearance} onChange={saveSetting} />
+      {:else if page === 'behavior'}
+        <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
       {:else if page === 'about'}
         <AboutPage {settingsFile} />
       {:else}

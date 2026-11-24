@@ -35,6 +35,8 @@
     gone?: boolean;
     /** #188: a click answers a single-choice question at once. */
     onPick: (id: number, label: string) => void;
+    /** #189: a typed answer on a wizard / multi-select step. */
+    onTyped: (id: number, text: string) => void;
     /** #190: toggle an option of the current prompt. */
     onToggle: (id: number, index: number) => void;
     onBack: (id: number) => void;
@@ -58,6 +60,7 @@
     isLast = true,
     gone = false,
     onPick,
+    onTyped,
     onToggle,
     onBack,
     onAdvance,
@@ -73,10 +76,18 @@
   let queue = $derived(queueLabel(position, total));
   let hideKey = $derived(shortcutHint(SHORTCUTS.hide, hotkeySupported));
   let immediate = $derived(!prompt.multi_select && chip === '');
-  // #189: typing belongs to a single prompt; #190's multi-select / wizard
-  // keeps its own Confirm / Next path and is left untouched.
-  let typed = $derived(immediate ? questionInput(prompt.options) : null);
+  // #189: every prompt has a typed path — a wizard step or a multi-select
+  // question is no exception. The shell decides where the answer goes.
+  let typed = $derived(questionInput(prompt.options));
   let canSubmit = $derived(canSubmitTyped(draft) && !gone);
+
+  // A new step is a new field: never carry a previous step's text or the
+  // revealed Other row into the next prompt of a wizard.
+  $effect(() => {
+    prompt;
+    showOther = false;
+    draft = '';
+  });
 
   // The Other row reveals the field and focuses it; the input's onfocus is
   // the one place that asks the shell to make the island keyboard-accessible.
@@ -89,7 +100,8 @@
 
   function submit() {
     if (!canSubmit) return;
-    onPick(card.id, draft);
+    if (immediate) onPick(card.id, draft);
+    else onTyped(card.id, draft);
   }
 
   function onFieldKeydown(event: KeyboardEvent) {

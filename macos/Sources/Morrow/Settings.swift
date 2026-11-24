@@ -340,6 +340,8 @@ enum SettingsKey {
     static let sessionTimeout = "sessionTimeout"
 
     // Display
+    static let islandEnabled = "islandEnabled"
+    static let displayConfigurations = "displayConfigurations"
     static let islandDisplayMode = "islandDisplayMode"          // IslandDisplayMode raw value: "notch" | "dynamicIsland"
     static let dynamicIslandTopOffset = "dynamicIslandTopOffset" // Distance in pt below top screen edge (0–40)
     static let maxPanelHeight = "maxPanelHeight"
@@ -537,6 +539,7 @@ struct SettingsDefaults {
     static let autoExpandOnQuestion = true
     static let sessionTimeout = 30
 
+    static let islandEnabled = true
     static let islandDisplayMode = IslandDisplayMode.notch.rawValue
     static let dynamicIslandTopOffset = DynamicIslandTopOffset.defaultValue
     static let maxPanelHeight = 560
@@ -695,6 +698,7 @@ class SettingsManager {
             SettingsKey.showProjectName: SettingsDefaults.showProjectName,
             SettingsKey.autoExpandOnQuestion: SettingsDefaults.autoExpandOnQuestion,
             SettingsKey.sessionTimeout: SettingsDefaults.sessionTimeout,
+            SettingsKey.islandEnabled: SettingsDefaults.islandEnabled,
             SettingsKey.islandDisplayMode: SettingsDefaults.islandDisplayMode,
             SettingsKey.maxPanelHeight: SettingsDefaults.maxPanelHeight,
             SettingsKey.maxVisibleSessions: SettingsDefaults.maxVisibleSessions,
@@ -891,6 +895,89 @@ class SettingsManager {
     var workspaceHUDTheme: String {
         get { defaults.string(forKey: SettingsKey.workspaceHUDTheme) ?? SettingsDefaults.workspaceHUDTheme }
         set { defaults.set(newValue, forKey: SettingsKey.workspaceHUDTheme) }
+    }
+
+    var islandEnabled: Bool {
+        get {
+            guard defaults.object(forKey: SettingsKey.islandEnabled) != nil else {
+                return SettingsDefaults.islandEnabled
+            }
+            return defaults.bool(forKey: SettingsKey.islandEnabled)
+        }
+        set { defaults.set(newValue, forKey: SettingsKey.islandEnabled) }
+    }
+
+    var rawDisplayConfigurations: [String: DisplayConfiguration]? {
+        let obj = defaults.object(forKey: SettingsKey.displayConfigurations)
+        if let str = obj as? String {
+            return DisplayConfigurationCodec.decode(str)
+        }
+        if let data = obj as? Data {
+            return DisplayConfigurationCodec.decode(data: data)
+        }
+        return nil
+    }
+
+    func displayConfigurations(for displays: [DisplayDescriptor]) -> [String: DisplayConfiguration] {
+        let resolved = DisplayConfigurationPlanner.resolvedConfigurations(
+            stored: rawDisplayConfigurations,
+            displays: displays,
+            displayChoice: displayChoice,
+            legacyMode: islandDisplayMode,
+            legacyTopOffset: dynamicIslandTopOffset
+        )
+        if resolved.didMigrate && !resolved.configs.isEmpty {
+            setDisplayConfigurations(resolved.configs, displays: displays)
+        }
+        return resolved.configs
+    }
+
+    func setDisplayConfigurations(
+        _ configurations: [String: DisplayConfiguration],
+        displays: [DisplayDescriptor]
+    ) {
+        let encoded = DisplayConfigurationCodec.encode(configurations)
+        defaults.set(encoded, forKey: SettingsKey.displayConfigurations)
+
+        if let primaryID = DisplayConfigurationPlanner.primaryEnabledDisplayID(
+            displays: displays,
+            configs: configurations
+        ), let primaryConfig = configurations[primaryID] {
+            defaults.set(primaryConfig.displayMode.rawValue, forKey: SettingsKey.islandDisplayMode)
+            defaults.set(
+                DynamicIslandTopOffset.clamp(primaryConfig.dynamicIslandTopOffset),
+                forKey: SettingsKey.dynamicIslandTopOffset
+            )
+        }
+    }
+
+    func setDisplayConfiguration(
+        _ configuration: DisplayConfiguration,
+        for displayID: String,
+        displays: [DisplayDescriptor]
+    ) {
+        var configs = displayConfigurations(for: displays)
+        configs[displayID] = configuration
+        setDisplayConfigurations(configs, displays: displays)
+    }
+
+    func restoreIslandIfAllDisplaysOff(displays: [DisplayDescriptor]) {
+        islandEnabled = true
+        guard !displays.isEmpty else { return }
+        var configs = displayConfigurations(for: displays)
+        let hasEnabledDisplay = displays.contains { configs[$0.id]?.enabled == true }
+        guard !hasEnabledDisplay else { return }
+
+        let targetIndex = DisplayConfigurationPlanner.legacyTargetIndex(
+            displayChoice: displayChoice,
+            displays: displays
+        ) ?? 0
+        let targetDisplay = displays[targetIndex]
+        var updated = configs[targetDisplay.id]
+            ?? DisplayDescriptor.defaultConfiguration(hasNotch: targetDisplay.hasNotch, enabled: true)
+        updated.enabled = true
+        configs[targetDisplay.id] = updated
+        setDisplayConfigurations(configs, displays: displays)
     }
 
     var islandDisplayMode: IslandDisplayMode {

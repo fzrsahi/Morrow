@@ -134,6 +134,15 @@ fn main() -> ExitCode {
         }
     });
 
+    // #241: AppLaunch is the one cue with no hook to carry it — the app's own
+    // start is the event. A locked screen stays silent, as it does for hook
+    // cues in `Feed::record`.
+    if adapters::screen_locked() != Some(true) {
+        if let Some(player) = morrow_platform::sound::player_on_path() {
+            let _ = morrow_platform::sound::play(player, morrow_core::attention::sound_cue::LAUNCH);
+        }
+    }
+
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(feed)

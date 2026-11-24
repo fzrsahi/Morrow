@@ -111,6 +111,7 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
         reason:
           'The follow-up interval exists in core (#342, 60 s default) but no command exposes it and nothing reads a key for it. Until one does, a field here would change a number the reminder loop never asks for.',
       },
+      { id: 'behavior', label: 'Behavior', icon: 'workspace', available: true },
       { id: 'hooks', label: 'Hooks', icon: 'checkmark', available: true },
       { id: 'capabilities', label: 'Capabilities', icon: 'workspace', available: true },
       { id: 'about', label: 'About', icon: 'settings', available: true },
