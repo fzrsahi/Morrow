@@ -5,7 +5,9 @@
 use std::collections::BTreeMap;
 
 use morrow_platform::capability::{Capability, Environment, Os, table};
-use morrow_platform::windows_rules::{NotificationState, Parents, run_value, terminal_pid};
+use morrow_platform::windows_rules::{
+    NotificationState, Parents, run_value, terminal_hosts, terminal_pid,
+};
 
 fn parents(pairs: &[(u32, u32)]) -> Parents {
     pairs.iter().copied().collect()
@@ -36,6 +38,27 @@ fn the_outermost_terminal_wins_not_the_nearest_shell() {
         100,
         "the window the user can see is the terminal's, not the shell's"
     );
+}
+
+#[test]
+fn the_hosts_include_the_three_windows_editors_w_007_asks_for() {
+    // claude → shell → Code.exe / idea64.exe / WindowsTerminal.exe. A host list
+    // without these would leave W-007's jump button permanently NotPossible.
+    for (leaf, host_pid, host) in [
+        (300u32, 100u32, "Code.exe"),
+        (301, 101, "code.exe"),
+        (302, 102, "idea64.exe"),
+        (303, 103, "IntelliJ IDEA.exe"),
+        (304, 104, "WindowsTerminal.exe"),
+    ] {
+        let parents = parents(&[(leaf, host_pid), (host_pid, 4)]);
+        let names = names(&[(leaf, "claude.exe"), (host_pid, host), (4, "explorer.exe")]);
+        assert_eq!(
+            terminal_pid(&parents, leaf, terminal_hosts(), &names),
+            host_pid,
+            "{host} must own the window a jump raises"
+        );
+    }
 }
 
 #[test]

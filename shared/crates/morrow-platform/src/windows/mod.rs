@@ -23,10 +23,12 @@
 #![allow(unsafe_code)]
 
 pub mod autostart;
+pub mod clipboard;
 pub mod fullscreen;
 pub mod lock;
 pub mod media;
 pub mod pointer;
+pub mod process;
 pub mod terminal;
 pub mod toast;
 pub mod volume;

@@ -3,15 +3,21 @@
 //! tight-fit, nonactivating panel, which answers permission requests.
 
 mod adapters;
+mod completion;
 mod feed;
 mod hooks;
 mod hotkey;
 mod island;
 mod listener;
 mod music;
+mod peek_window;
 mod permissions;
+mod position;
+mod prune;
 mod sessions;
 mod settings;
+mod settings_window;
+mod transcripts;
 mod tray;
 #[cfg(windows)]
 mod windows_panel;
@@ -43,11 +49,45 @@ fn subscribe(feed: State<'_, Arc<Feed>>, channel: Channel<Snapshot>) {
     feed.subscribe(channel);
 }
 
+/// #197: a locked screen suspends content probes (transcript tails) but does
+/// not hide the island window. The frontend owns the lock watch; the shell
+/// only gates its own probes.
+#[tauri::command]
+fn set_probes_active(feed: State<'_, Arc<Feed>>, active: bool) {
+    feed.set_probes_active(active);
+}
+
 /// The user's Approve or Deny on card `id`. False if the request is no
 /// longer held (answered already, or its hook gone).
 #[tauri::command]
 fn answer_permission(feed: State<'_, Arc<Feed>>, id: u64, decision: Decision) -> bool {
     feed.answer(id, decision)
+}
+
+/// #188: one option of a Question card. The shell keys the reply by question
+/// text (not header) and writes `updatedInput.answers` exactly as macOS does.
+#[tauri::command]
+fn answer_question(feed: State<'_, Arc<Feed>>, id: u64, answer: String) -> bool {
+    feed.answer_question(id, &answer)
+}
+
+/// #190: the wizard's answers, one string per question in request order. The
+/// reply is built by the same `question_reply`, so its bytes are #188's shape.
+#[tauri::command]
+fn answer_questions(feed: State<'_, Arc<Feed>>, id: u64, answers: Vec<String>) -> bool {
+    feed.answer_questions(id, answers)
+}
+
+/// #188: Skip closes the card without answering it — deny for AskUserQuestion.
+#[tauri::command]
+fn skip_question(feed: State<'_, Arc<Feed>>, id: u64) -> bool {
+    feed.skip_question(id)
+}
+
+/// #185: the ✕ on a session card removes it from the shell's store.
+#[tauri::command]
+fn session_dismiss(feed: State<'_, Arc<Feed>>, session_id: String) {
+    feed.dismiss(&session_id);
 }
 
 fn main() -> ExitCode {
@@ -70,8 +110,10 @@ fn main() -> ExitCode {
     }
 
     let hooks_site = hooks::site();
+    let position = position::Store::new(&hooks_site.paths.codeisland_dir);
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
+    Feed::spawn_pruner(Arc::clone(&feed));
     Feed::spawn_pusher(Arc::clone(&feed), move |sessions, cards| {
         if smoke {
             println!("morrow-smoke: pushed sessions={sessions} cards={cards}");
@@ -83,11 +125,22 @@ fn main() -> ExitCode {
         .manage(feed)
         .manage(hooks_site)
         .manage(Smoke(smoke))
+        .manage(position)
         .invoke_handler(tauri::generate_handler![
             subscribe,
+            set_probes_active,
             answer_permission,
+            answer_question,
+            answer_questions,
+            skip_question,
+            session_dismiss,
             island::set_island_size,
+            island::move_island,
+            island::commit_island_position,
+            island::reset_island_position,
             island::smoke_card,
+            island::quit,
+            island::island_visible,
             hooks::hooks_status,
             hooks::hooks_install,
             hooks::hooks_uninstall,
@@ -105,6 +158,8 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            settings_window::open_settings,
+            peek_window::close_peek,
             music::music_track,
             music::music_position,
             music::music_play_pause,
@@ -120,6 +175,7 @@ fn main() -> ExitCode {
             adapters::process_alive,
             adapters::screen_locked,
             adapters::fullscreen,
+            adapters::quiet_hours,
             adapters::pointer_position,
             adapters::notify_send,
             island::island_question_focus,
@@ -127,6 +183,7 @@ fn main() -> ExitCode {
         ])
         .setup(|app| {
             island::create(app)?;
+            peek_window::maybe_show(app)?;
             tray::create(app);
             hotkey::install(app.handle());
             Ok(())

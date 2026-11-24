@@ -7,9 +7,12 @@ use std::path::PathBuf;
 use morrow_platform::capability::{self, Feature};
 use morrow_platform::{autostart, settings};
 use serde_json::Value;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::HooksSite;
+
+/// #202 — the island listens for this while Settings writes from its own window.
+pub const SETTINGS_CHANGED_EVENT: &str = "settings-changed";
 
 /// Every adapter and what it can do on this machine.
 ///
@@ -29,6 +32,19 @@ pub fn capabilities() -> Vec<capability::Row> {
         ) {
             row.capability = outcome;
         }
+    }
+    // #197: `fullscreen` has no probe behind it off Windows — it returns
+    // false on every Linux session, X11 included. The generic table would
+    // still promise "Supported" there; say so instead, and keep the island
+    // visible. Windows keeps the probe's own answer from the table.
+    #[cfg(not(windows))]
+    if let Some(row) = rows
+        .iter_mut()
+        .find(|row| row.feature == Feature::Fullscreen.name())
+    {
+        row.capability = capability::Capability::Unsupported(
+            "fullscreen detection is Windows-only; the island stays visible".into(),
+        );
     }
     rows
 }
@@ -93,14 +109,46 @@ pub fn settings_load(site: State<'_, HooksSite>) -> Result<Value, String> {
     settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())
 }
 
-/// Set one top-level setting.
+/// Set one top-level setting. The saved document is broadcast to both windows
+/// so a theme choice in Settings reaches the island without a restart (#202).
 #[tauri::command]
-pub fn settings_set(site: State<'_, HooksSite>, key: String, value: Value) -> Result<bool, String> {
-    settings::set(&site.paths.codeisland_dir, &key, &value).map_err(|error| error.to_string())
+pub fn settings_set(
+    app: AppHandle,
+    site: State<'_, HooksSite>,
+    key: String,
+    value: Value,
+) -> Result<bool, String> {
+    let changed = settings::set(&site.paths.codeisland_dir, &key, &value)
+        .map_err(|error| error.to_string())?;
+    if let Ok(stored) = settings::load(&site.paths.codeisland_dir) {
+        let _ = app.emit(SETTINGS_CHANGED_EVENT, stored);
+    }
+    Ok(changed)
 }
 
 /// Where the settings file is, for a "reveal" button.
 #[tauri::command]
 pub fn settings_path(site: State<'_, HooksSite>) -> PathBuf {
     settings::path(&site.paths.codeisland_dir)
+}
+
+#[cfg(all(test, not(windows)))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fullscreen_detection_says_not_supported_off_windows() {
+        let rows = capabilities();
+        let row = rows
+            .iter()
+            .find(|row| row.feature == Feature::Fullscreen.name())
+            .expect("a Fullscreen detection row");
+        assert_eq!(row.capability.label(), "Not supported");
+        assert!(
+            row.capability
+                .reason()
+                .is_some_and(|reason| !reason.is_empty()),
+            "an unsupported capability has to say why"
+        );
+    }
 }

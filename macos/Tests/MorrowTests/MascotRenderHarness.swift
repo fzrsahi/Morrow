@@ -111,6 +111,66 @@ final class MascotRenderHarness: XCTestCase {
             try ReadmeGif.writeGif(images, delays: spec.delays, to: url)
         }
     }
+
+    /// Web sprite sheets for the shared desktop panel (#181): one horizontal
+    /// strip per (mascot, status), plus a manifest that the Svelte Mascot
+    /// component reads. Opt-in via `MASCOT_WEB_SPRITE_DIR` so CI never renders
+    /// it, and test-only — the macOS app and its mascot views are untouched.
+    func testExportWebSpriteSheets() throws {
+        guard let outDir = ProcessInfo.processInfo.environment["MASCOT_WEB_SPRITE_DIR"] else {
+            throw XCTSkip("MASCOT_WEB_SPRITE_DIR not set — web sprite export is opt-in")
+        }
+        try FileManager.default.createDirectory(atPath: outDir, withIntermediateDirectories: true)
+
+        // Same distinct mascots as the README GIFs, plus MiniMax (which has no
+        // README row yet). `name` is the exported asset key; `source` is the
+        // routing key for `routedMascot`.
+        var specs = ReadmeGifSpec.all
+        specs.append(ReadmeGifSpec(name: "minimax", source: "minimax", period: 1.2, frames: 24))
+        let fps = 20.0
+        let frameSize = 64
+        var mascots: [String: [String: [String: Any]]] = [:]
+
+        for spec in specs {
+            // Use the GIF's calm-window start so the strip's first and last
+            // frames flow into each other when the web component loops it.
+            let start = try XCTUnwrap(spec.loopStart(), "no calm window for \(spec.name)")
+            let activeFrames = Int((spec.period * fps).rounded())
+            let statuses: [(String, MascotAgentStatus, Int, Double)] = [
+                ("idle", .idle, 8, 1.0),
+                ("working", .processing, activeFrames, spec.period),
+                ("waitingApproval", .waitingApproval, activeFrames, spec.period),
+                ("waitingQuestion", .waitingQuestion, activeFrames, spec.period),
+            ]
+            var entry: [String: [String: Any]] = [:]
+            for (label, status, frames, window) in statuses {
+                var pixels: [[UInt8]] = []
+                pixels.reserveCapacity(frames)
+                for k in 0..<frames {
+                    let t = start + window * Double(k) / Double(frames)
+                    let frame = MascotWebFrame(source: spec.source, status: status, time: t, size: frameSize)
+                    guard let raster = ReadmeGif.rasterize(frame, size: frameSize) else {
+                        XCTFail("web sprite render failed for \(spec.name)/\(label) @ \(t)")
+                        break
+                    }
+                    pixels.append(raster)
+                }
+                guard pixels.count == frames else { continue }
+                let name = "\(spec.name)-\(label).png"
+                try MascotWebSheet.write(pixels, frameSize: frameSize, to: URL(fileURLWithPath: "\(outDir)/\(name)"))
+                entry[label] = ["file": name, "frames": frames]
+            }
+            mascots[spec.name] = entry
+        }
+
+        let manifest: [String: Any] = [
+            "frameSize": frameSize,
+            "fps": ["idle": 8, "active": 20],
+            "mascots": mascots,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: manifest, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: URL(fileURLWithPath: "\(outDir)/manifest.json"))
+    }
 }
 
 // MARK: - README GIF export
@@ -410,6 +470,53 @@ private enum ReadmeGif {
         case blank(String)
         case tooBig(String, Int, Int)
         case encode(String)
+    }
+}
+
+/// One 64×64 px frame of a web sprite sheet, pinned to a timeline instant.
+private struct MascotWebFrame: View {
+    let source: String
+    let status: MascotAgentStatus
+    let time: Double
+    let size: Int
+
+    var body: some View {
+        MascotContactSheet.routedMascot(source: source, status: status, size: CGFloat(size))
+            .environment(\.mascotAnimationsActive, false)
+            .environment(\.mascotStaticTime, time)
+            .frame(width: CGFloat(size), height: CGFloat(size))
+    }
+}
+
+/// Packs a mascot's frames into one horizontal PNG (frame 0 at x = 0) so the
+/// browser only fetches one image per (mascot, status). Alpha is 0/255 with
+/// RGB zeroed where transparent, so straight == premultiplied in the output.
+private enum MascotWebSheet {
+    enum SheetError: Error { case encode(String) }
+
+    static func write(_ frames: [[UInt8]], frameSize: Int, to url: URL) throws {
+        let width = frameSize * frames.count
+        var pixels = [UInt8](repeating: 0, count: width * frameSize * 4)
+        for (index, frame) in frames.enumerated() {
+            for y in 0..<frameSize {
+                for x in 0..<frameSize {
+                    let src = (y * frameSize + x) * 4
+                    let dst = (y * width + index * frameSize + x) * 4
+                    pixels[dst..<(dst + 4)] = frame[src..<(src + 4)]
+                }
+            }
+        }
+        guard let provider = CGDataProvider(data: Data(pixels) as CFData),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let image = CGImage(width: width, height: frameSize, bitsPerComponent: 8,
+                                  bitsPerPixel: 32, bytesPerRow: width * 4, space: space,
+                                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+                                  provider: provider, decode: nil, shouldInterpolate: false,
+                                  intent: .defaultIntent),
+              let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil)
+        else { throw SheetError.encode(url.lastPathComponent) }
+        CGImageDestinationAddImage(dest, image, nil)
+        guard CGImageDestinationFinalize(dest) else { throw SheetError.encode(url.lastPathComponent) }
     }
 }
 

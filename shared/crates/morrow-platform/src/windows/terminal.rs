@@ -15,21 +15,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::BOOL;
 
-use crate::windows_rules::{Parents, terminal_pid};
-
-/// The processes a session's terminal is likely to be.
-pub const HOSTS: [&str; 6] = [
-    "windows terminal",
-    "windowsterminal",
-    "conhost",
-    "wezterm",
-    "alacritty",
-    "kitty",
-];
+use crate::windows_rules::{Parents, terminal_hosts, terminal_pid};
 
 /// What a click achieved, mirroring `terminal::Outcome` on Unix.
 pub fn activate(parents: &Parents, pid: u32, names: &BTreeMap<u32, String>) -> Result<(), String> {
-    let target = terminal_pid(parents, pid, &HOSTS, names);
+    let target = terminal_pid(parents, pid, terminal_hosts(), names);
     let window = find_window(target).ok_or_else(|| format!("no window for process {target}"))?;
     unsafe {
         // `SW_RESTORE` also un-minimises, which is what "bring my terminal back"

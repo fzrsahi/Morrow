@@ -153,6 +153,30 @@ fn a_missing_credentials_file_is_degraded_rather_than_broken() {
     );
 }
 
+#[test]
+fn dragging_the_island_is_a_capability_not_a_silent_failure() {
+    // X11 and Windows let the app place its own window; Wayland hands that to
+    // the compositor, so the drag is stated as unavailable in Settings (#196).
+    assert_eq!(
+        Feature::IslandReposition.probe(&x11(temp("drag-x11"))),
+        Capability::Supported
+    );
+    let wayland = Feature::IslandReposition.probe(&wayland(temp("drag-wayland")));
+    assert!(matches!(wayland, Capability::Unsupported(_)), "{wayland:?}");
+    assert!(
+        wayland
+            .reason()
+            .is_some_and(|reason| reason.to_ascii_lowercase().contains("wayland")),
+        "the row has to say why drag is unavailable: {wayland:?}"
+    );
+    // The row is actually rendered, not just probeable.
+    let rows = table(&x11(temp("drag-table")));
+    assert!(
+        rows.iter()
+            .any(|row| row.feature == Feature::IslandReposition.name())
+    );
+}
+
 // MARK: - Autostart
 
 #[test]

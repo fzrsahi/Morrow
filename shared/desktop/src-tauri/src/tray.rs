@@ -13,6 +13,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{App, Manager};
 
 use crate::island;
+use crate::settings_window;
 
 /// What actually happened, for the Capability table: the probe cannot know
 /// whether the status notifier registered, only whether the library is there.
@@ -36,8 +37,16 @@ pub fn create(app: &App) {
 
 fn build(app: &App) -> tauri::Result<()> {
     let toggle = MenuItem::with_id(app, "toggle", "Show or hide the island", true, None::<&str>)?;
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, None::<&str>)?;
+    let reset = MenuItem::with_id(
+        app,
+        "reset-position",
+        "Reset island position",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit Morrow", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&toggle, &quit])?;
+    let menu = Menu::with_items(app, &[&toggle, &settings, &reset, &quit])?;
 
     TrayIconBuilder::with_id("morrow")
         .tooltip("Morrow")
@@ -45,11 +54,33 @@ fn build(app: &App) -> tauri::Result<()> {
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id.as_ref() {
             "toggle" => toggle_island(app),
+            "settings" => {
+                if let Err(error) = settings_window::open_settings(app.clone()) {
+                    eprintln!("morrow-app: cannot open Settings ({error})");
+                }
+            }
+            "reset-position" => reset_position(app),
             "quit" => app.exit(0),
             _ => {}
         })
         .build(app)?;
     Ok(())
+}
+
+/// #196: forget this monitor's offset and refit. The menu item does its work
+/// in the shell, so no frontend round-trip (or context menu) is needed.
+fn reset_position(app: &tauri::AppHandle) {
+    let Some(window) = app.get_webview_window(island::LABEL) else {
+        return;
+    };
+    let result = island::reset(
+        &window,
+        &app.state::<crate::position::Store>(),
+        app.state::<crate::island::Smoke>().0,
+    );
+    if let Err(error) = result {
+        eprintln!("morrow-app: cannot reset island position: {error}");
+    }
 }
 
 /// Show the island if it is hidden, hide it if it is showing.
