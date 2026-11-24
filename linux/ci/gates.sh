@@ -153,12 +153,23 @@ headless_all() { # filter...
 }
 
 # --- L-003: p95 hook → panel < 300 ms ----------------------------------------
-# Nothing in the repository measures this yet: e2e1 proves a synthetic hook
-# becomes a card, and does not time it. A gate here would be a script nobody has
-# seen run, so it names the measurement instead of inventing one.
+# The measurement is `linux/ci/e2e1.sh`: it times the card (hook sent → card
+# shown) and the answer (click → bridge exit) per case and checks them against
+# `LIMIT_MS`. That is the headless half — does the repository measure at all.
+# The numbers it produces need a host, so this runner does not claim the p95.
+latency_measured() { # root
+    local src="$1/linux/ci/e2e1.sh"
+    [ -f "$src" ] && grep -q 'LIMIT_MS' "$src" && grep -q 'latency\[' "$src" && grep -q '_latency_under_' "$src"
+}
+
 gate_l003() {
-    record L-003 "MISSING" "BLOCKED" \
-        "no latency measurement exists: e2e1.sh proves a hook becomes a card and does not time it; the gate needs a host to add one against (and the panel's card log line to time against)"
+    if latency_measured "$ROOT"; then
+        record L-003 "PASS" "BLOCKED" \
+            "e2e1.sh times the card (hook sent -> shown) and the answer (click -> bridge exit) against LIMIT_MS; producing the numbers needs a host, so the p95 verdict is not claimed here"
+    else
+        record L-003 "MISSING" "BLOCKED" \
+            "no latency measurement in linux/ci/e2e1.sh: nothing times hook -> panel, so no host could answer the 300 ms question"
+    fi
 }
 
 # --- L-004: approve/deny/answer reaches the CLI that asked -------------------
@@ -215,9 +226,22 @@ gate_l008() {
 }
 
 # --- L-009: terminal jump at the window level; copy-path fallback -----------
+# The command alone proved nothing: a `terminal_activate` no surface calls is a
+# gate with nothing to assess. The session row's button and the contract script
+# are the headless half; the window actually jumping needs an X11 host.
+terminal_surface_calls_it() { # root
+    [ -f "$1/scripts/ci/jump-terminal-gate.sh" ] \
+        && grep -rq 'terminal_activate' "$1/shared/desktop/src" 2>/dev/null
+}
+
 gate_l009() {
-    record L-009 "MISSING" "BLOCKED" \
-        "the shell command exists (terminal_activate) and no surface calls it: the button is #33, so there is nothing to assess"
+    if terminal_surface_calls_it "$ROOT"; then
+        record L-009 "PASS" "BLOCKED" \
+            "the session row invokes terminal_activate and scripts/ci/jump-terminal-gate.sh states the contract (wmctrl/xdotool, then copy cwd); the window jump itself needs an X11 host"
+    else
+        record L-009 "MISSING" "BLOCKED" \
+            "no surface calls terminal_activate, or scripts/ci/jump-terminal-gate.sh is gone: a command nobody calls has nothing to assess"
+    fi
 }
 
 # --- L-010: settings live in ~/.config and survive an upgrade --------------
@@ -309,8 +333,14 @@ self_check() {
 
     # 3. A filter that matches no test must not read as green — the same trap
     #    `commands.rs` has a Rust test for: a guard that matches nothing passes
-    #    forever.
+    #    forever. The file checks get the same treatment: point them at an empty
+    #    tree and they must refuse to pass.
     check "a filter that matches nothing is EMPTY, not PASS" '[ "$(headless_verdict morrow-platform a_filter_that_cannot_exist)" = "EMPTY" ]'
+    local empty_root
+    empty_root="$(mktemp -d)"
+    check "L-003 does not pass without a measurement" '! latency_measured "$empty_root"'
+    check "L-009 does not pass without a caller" '! terminal_surface_calls_it "$empty_root"'
+    rm -rf "$empty_root"
 
     # 4. The exit code must separate the three outcomes, because a host that
     #    cannot judge must not look like a host that judged and agreed.
