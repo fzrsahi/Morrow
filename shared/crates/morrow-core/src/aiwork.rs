@@ -27,6 +27,9 @@
 
 use serde_json::Value;
 
+use crate::attention::{AttentionMoment, FollowUpReminderKind, TurnEnd, TurnHost};
+use crate::display_only_wait;
+use crate::follow_up::FollowUpKind;
 use crate::reduce::{AgentStatus, ChatMessage, SessionSnapshot};
 
 /// The assistant text the card keeps after a turn.
@@ -203,6 +206,80 @@ pub fn user_prompt(data: Option<&Value>) -> Option<String> {
         }
     }
     None
+}
+
+/// `AiWorkStatusMapper.status(forEventName:)`: the daemon's event name decides
+/// the status when it names a wait or a turn end.
+fn status_for_event_name(name: &str) -> Option<AgentStatus> {
+    match name {
+        "stream.approval_required" | "stream.plan_confirmation_required" => {
+            Some(AgentStatus::WaitingApproval)
+        }
+        "stream.question_required" => Some(AgentStatus::WaitingQuestion),
+        "stream.tool_call"
+        | "stream.tool_result"
+        | "stream.started"
+        | "stream.progress"
+        | "stream.thinking_delta"
+        | "stream.text_delta"
+        | "stream.ack"
+        | "stream.fallback_started"
+        | "stream.approval_resolved"
+        | "stream.plan_confirmation_resolved"
+        | "stream.question_resolved" => Some(AgentStatus::Processing),
+        "stream.completed" | "stream.failed" | "stream.aborted" => Some(AgentStatus::Idle),
+        _ => None,
+    }
+}
+
+fn reminder_kind(kind: FollowUpKind) -> FollowUpReminderKind {
+    match kind {
+        FollowUpKind::Approval => FollowUpReminderKind::Approval,
+        FollowUpKind::Question => FollowUpReminderKind::Question,
+        FollowUpKind::Completion => FollowUpReminderKind::Completion,
+    }
+}
+
+/// The missing producer for #238 AC 3: fold one AiWork frame and return the
+/// `AttentionMoment` a display-only wait / turn transition deserves. Pure — a
+/// transcript fixture drives it without a socket or a desktop (#355/#357).
+pub fn reduce_aiwork_frame(
+    snapshot: &mut SessionSnapshot,
+    event_name: &str,
+    data: Option<&Value>,
+    island_holds_request: bool,
+    new_session: bool,
+) -> Option<AttentionMoment> {
+    let before_status = snapshot.status;
+    let status = status_for_event_name(event_name).unwrap_or(before_status);
+    apply_stream_event(snapshot, event_name, data, status);
+
+    let before = display_only_wait::kind(before_status, island_holds_request);
+    let after = display_only_wait::kind(snapshot.status, island_holds_request);
+    if let Some(after_kind) = after {
+        if Some(after_kind) != before {
+            return Some(AttentionMoment::DisplayOnlyWaitBegan {
+                kind: reminder_kind(after_kind),
+                announce: true,
+            });
+        }
+    }
+    match event_name {
+        "stream.started" => Some(AttentionMoment::TurnStarted { new_session }),
+        "stream.completed" => Some(AttentionMoment::TurnEnded {
+            end: TurnEnd::Completed,
+            host: TurnHost::Aiwork,
+        }),
+        "stream.failed" => Some(AttentionMoment::TurnEnded {
+            end: TurnEnd::Failed,
+            host: TurnHost::Aiwork,
+        }),
+        "stream.aborted" => Some(AttentionMoment::TurnEnded {
+            end: TurnEnd::Stopped,
+            host: TurnHost::Aiwork,
+        }),
+        _ => None,
+    }
 }
 
 /// Fold one stream event into `snapshot`.
@@ -445,6 +522,41 @@ mod tests {
 
     fn snapshot() -> SessionSnapshot {
         SessionSnapshot::new(Timestamp(1_000.0))
+    }
+
+    #[test]
+    fn a_wait_or_turn_transition_produces_an_attention_moment() {
+        let mut s = snapshot();
+        assert_eq!(
+            reduce_aiwork_frame(&mut s, "stream.approval_required", None, false, false),
+            Some(AttentionMoment::DisplayOnlyWaitBegan {
+                kind: FollowUpReminderKind::Approval,
+                announce: true,
+            })
+        );
+        // The second frame is the same wait: no second attention moment.
+        assert_eq!(
+            reduce_aiwork_frame(&mut s, "stream.approval_required", None, false, false),
+            None
+        );
+        // A request the island already holds is not display-only.
+        let mut held = snapshot();
+        assert_eq!(
+            reduce_aiwork_frame(&mut held, "stream.question_required", None, true, false),
+            None
+        );
+
+        assert_eq!(
+            reduce_aiwork_frame(&mut snapshot(), "stream.started", None, false, true),
+            Some(AttentionMoment::TurnStarted { new_session: true })
+        );
+        assert_eq!(
+            reduce_aiwork_frame(&mut snapshot(), "stream.completed", None, false, false),
+            Some(AttentionMoment::TurnEnded {
+                end: TurnEnd::Completed,
+                host: TurnHost::Aiwork,
+            })
+        );
     }
 
     #[test]
