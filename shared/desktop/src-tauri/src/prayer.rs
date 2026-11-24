@@ -7,6 +7,7 @@
 //! their `SystemTime::now()` call) touch the real clock, so the tests can pin
 //! a day and check the shape without a desktop or a notification daemon.
 
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -312,28 +313,41 @@ pub fn prayer_cities() -> Vec<CityOption> {
         .collect()
 }
 
+/// The command's decision with HOME and the clock injected. The Tauri wrapper
+/// only supplies those two globals; a test supplies a temp HOME and a pinned
+/// instant, so the real code path is exercised without a desktop (#307).
+fn prayer_next_at(
+    settings_dir: &Path,
+    now: i64,
+    feed: &crate::feed::Feed,
+) -> Option<PrayerSnapshot> {
+    let stored = settings::load(settings_dir).ok()?;
+    let view = prayer_snapshot(&stored, now);
+    feed.set_prayer(view.clone());
+    view
+}
+
 #[tauri::command]
 pub fn prayer_next(
     site: State<'_, HooksSite>,
     feed: State<'_, crate::feed::Feed>,
 ) -> Result<Option<PrayerSnapshot>, String> {
-    let stored = match settings::load(&site.paths.codeisland_dir) {
-        Ok(stored) => stored,
-        Err(_) => return Ok(None),
-    };
-    let view = prayer_snapshot(&stored, now_epoch_seconds()?);
-    feed.set_prayer(view.clone());
-    Ok(view)
+    Ok(prayer_next_at(
+        &site.paths.codeisland_dir,
+        now_epoch_seconds()?,
+        &feed,
+    ))
 }
 
-#[tauri::command]
-pub fn prayer_tick(
-    site: State<'_, HooksSite>,
-    wake: State<'_, PrayerWakeState>,
-    feed: State<'_, crate::feed::Feed>,
+/// The tick's decision with HOME, the clock and the notifier injected.
+fn prayer_tick_at(
+    settings_dir: &Path,
+    now: i64,
+    wake: &PrayerWakeState,
+    feed: &crate::feed::Feed,
+    runner: &dyn Runner,
 ) -> Result<usize, String> {
-    let stored = settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())?;
-    let now = now_epoch_seconds()?;
+    let stored = settings::load(settings_dir).map_err(|error| error.to_string())?;
     // #307: the card travels in the feed snapshot, not only in this command's
     // return value. A tick refreshes it even when no notification is due.
     feed.set_prayer(prayer_snapshot(&stored, now));
@@ -344,10 +358,20 @@ pub fn prayer_tick(
         .0
         .lock()
         .map_err(|_| "prayer wake state poisoned".to_owned())?;
-    notify_due_prayers(
-        &prepared,
-        &mut policy,
-        now,
+    notify_due_prayers(&prepared, &mut policy, now, runner)
+}
+
+#[tauri::command]
+pub fn prayer_tick(
+    site: State<'_, HooksSite>,
+    wake: State<'_, PrayerWakeState>,
+    feed: State<'_, crate::feed::Feed>,
+) -> Result<usize, String> {
+    prayer_tick_at(
+        &site.paths.codeisland_dir,
+        now_epoch_seconds()?,
+        &wake,
+        &feed,
         &morrow_platform::runner::SystemRunner,
     )
 }
@@ -426,11 +450,10 @@ mod tests {
     }
 
     #[test]
-    fn the_command_reads_a_real_home_settings_document() {
-        // #307 review: the earlier tests fed in-memory Values, so the
-        // HOME/codeisland_dir path the command actually uses was never
-        // exercised. Here the settings are written to a temp HOME and read
-        // back through the same platform helper the command calls.
+    fn the_commands_read_a_temp_home_with_an_injected_clock_and_runner() {
+        // #307 review: this now goes through the same helper functions the
+        // Tauri commands delegate to, with HOME (settings dir) and the clock
+        // injected — no `SystemTime::now()`, no real `notify-send`.
         use std::time::{SystemTime, UNIX_EPOCH};
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -448,12 +471,33 @@ mod tests {
         ] {
             morrow_platform::settings::set(&codeisland, key, &value).expect("a saved setting");
         }
-        let stored = morrow_platform::settings::load(&codeisland).expect("a readable document");
-        let view = prayer_snapshot(&stored, now_epoch_seconds().expect("a clock"))
-            .expect("a saved city has a schedule");
+
+        let schedule = jakarta_schedule();
+        let before = schedule.subuh.epoch_seconds - 60;
+        let feed = crate::feed::Feed::default();
+        let view = prayer_next_at(&codeisland, before, &feed).expect("a saved city has a schedule");
         assert_eq!(view.city_id, "jakarta");
         assert_eq!(view.city_name, "Jakarta");
         assert_eq!(view.times.len(), 5);
+        assert!(
+            feed.snapshot().prayer.is_some(),
+            "the card travels in the feed"
+        );
+
+        let runner = FakeRunner::default();
+        let wake = PrayerWakeState::new();
+        assert_eq!(
+            prayer_tick_at(&codeisland, before, &wake, &feed, &runner),
+            Ok(0)
+        );
+        assert!(runner.calls.borrow().is_empty(), "nothing due yet");
+
+        let due = schedule.subuh.epoch_seconds;
+        assert_eq!(
+            prayer_tick_at(&codeisland, due, &wake, &feed, &runner),
+            Ok(1)
+        );
+        assert_eq!(runner.calls.borrow().len(), 1);
         std::fs::remove_dir_all(&home).ok();
     }
 
