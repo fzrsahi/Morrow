@@ -61,6 +61,27 @@ None of these are usable on Linux or Windows yet. Keep them separate from the wi
 | "How it works" navigation link | Upstream `:24`; the section still exists in our README `:351`. |
 | Contributing section | Added in this fork, our README `:433`; upstream has none. |
 
+## Ported and out-of-scope status
+
+This table answers the audit questions in #399 and #240. An item is either ported, intentionally unsupported, or deferred with a decision issue.
+
+| Item | Status | Where or decision |
+|---|---|---|
+| Reduce, hook intake, attention intents, git branch, transcript tail, config roots, path identity, SQLite stores | Ported | `shared/crates/morrow-core/src/` with Swift-exported conformance fixtures. |
+| Discovery readers and PID correlation | Ported | 13 configured readers in `shared/crates/morrow-core/src/discovery.rs` and `shared/desktop/src-tauri/src/discovery.rs`. |
+| Scan policy, cache, coordinator, backfill | Ported | `morrow-core/src/scan_policy.rs`, `morrow-watch/`, `feed.rs`. Real-OS watcher run is tracked in #400. |
+| Installer targets and Settings hook card | Ported | `morrow-core/src/installer/`, `morrow-platform/src/hooks.rs`. |
+| Capability rows without an adapter | Intentional | #249 changed them to `Unsupported(reason)` and added the `ADAPTERS` guard. They are not missing ports. |
+| Sound cues and player outlet | Ported | #241, `morrow-platform/src/sound.rs`, `SoundPage.svelte`. |
+| Session persistence, markdown folding, follow-up reminders, prayer times | Ported | `morrow-core/src/session_store.rs`, `markdown_preview.rs`, `follow_up.rs`, `prayer.rs` and their shell commands. |
+| Push render, policy, transport and channel | Library only | Core modules exist; no Tauri command. Kept separate from wired features. |
+| Claude quota | Partial | Core and platform modules exist; the visible card is still Swift side. |
+| `RemoteInstaller` and `SSHForwarder` | Deferred | #233. The only #232–#239 sub-issue with no Rust module. |
+| `AttentionPolicy::settle` (quiet hours, lock, sound switches, Smart Suppress) | In progress | Only `settle_completion` exists today; port tracked in the #399 backlog. |
+| Wayland layer shell, input region, XDG Portal | Deferred | #109. Awaiting the tao fork decision; capability rows are honest about the gap. |
+| `NotchHoopsEngine` and Apple-only surfaces | Out of scope | Recorded in ADR-0002 and #82; the old plan was removed with the #408 cleanup. |
+| E2E-2 on a real Linux X11 host and a Windows host | Blocked | #400. Scripts exist and installer self-checks ran; the CLI half has not. |
+
 ## Platform readiness
 
 Linux and Windows remain **experimental**. Code compiles and Rust tests pass, but host gates have not run: E2E-1, E2E-2, L-001 through L-012, and W-001 through W-009. Build commands and limits are in `docs/build-windows-linux.md` (PR #406). The debt is tracked in #399, #400, #401, and #402.

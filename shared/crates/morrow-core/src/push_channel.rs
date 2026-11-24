@@ -26,6 +26,7 @@ use base64::Engine as _;
 use serde_json::{Map, Value, json};
 use std::borrow::Cow;
 
+use crate::digest::sha256;
 use crate::push::{PushEventKind, PushMessage, truncated, truncated_utf8, truncated_utf16};
 use crate::push_policy::PushChannelKind;
 use crate::push_transport::PushHttpRequest;
@@ -768,13 +769,23 @@ impl PushSigning {
     }
 }
 
+/// RFC 2104 HMAC-SHA256: `H((K' ^ opad) || H((K' ^ ipad) || message))`.
+/// `K'` is the key padded to a 64-byte block, or its digest when longer.
 fn hmac_sha256(key: &[u8], message: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC takes any key length");
-    mac.update(message);
-    base64(&mac.finalize().into_bytes())
+    let mut key_block = [0u8; 64];
+    if key.len() > 64 {
+        key_block[..32].copy_from_slice(&sha256(key));
+    } else {
+        key_block[..key.len()].copy_from_slice(key);
+    }
+    let inner: Vec<u8> = key_block
+        .iter()
+        .map(|&byte| byte ^ 0x36)
+        .chain(message.iter().copied())
+        .collect();
+    let mut outer: Vec<u8> = key_block.iter().map(|&byte| byte ^ 0x5c).collect();
+    outer.extend_from_slice(&sha256(&inner));
+    base64(&sha256(&outer))
 }
 
 #[cfg(test)]
@@ -857,6 +868,18 @@ mod tests {
         assert_eq!(
             PushSigning::feishu_signature("abcDEF123", 1_700_000_000),
             "qimCYnXKTZRVfEDjgpOq1ke9awsBuC3tn/n151vIck8="
+        );
+    }
+
+    #[test]
+    fn hmac_hashes_a_key_longer_than_one_block() {
+        // RFC 4231, case 6: a 131-byte key must be shortened with SHA-256 first.
+        assert_eq!(
+            hmac_sha256(
+                &[0xaa; 131],
+                b"Test Using Larger Than Block-Size Key - Hash Key First"
+            ),
+            "YOQxWR7gtn8Niiaqy/W3f44LxiE3KMUUBUYEDw7jf1Q="
         );
     }
 
