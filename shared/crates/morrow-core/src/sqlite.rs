@@ -14,6 +14,11 @@
 //! file holds the whole database, so it is then opened `immutable`, which reads
 //! it without creating, locking or changing anything.
 //!
+//! The fallback is not for every failure. `SQLITE_BUSY` and `SQLITE_LOCKED`
+//! mean a writer **is** active — the opposite of "no writer" — so the store is
+//! skipped for this scan instead. `immutable` would ignore that writer's
+//! `-wal` pages and could read a stale value or a torn page mid-checkpoint.
+//!
 //! Opening is lazy in SQLite: the first statement is where the WAL index is
 //! needed, so that is where the fallback has to be decided.
 
@@ -29,6 +34,13 @@ use rusqlite::{Connection, OpenFlags};
 pub enum StoreError {
     /// The file is not there: nothing to read, not an error to surface.
     Missing,
+    /// A writer holds the store right now. Skip it this scan and try again:
+    /// reading the raw file would ignore the writer's uncommitted `-wal` pages.
+    Busy,
+    /// The path cannot be expressed as a UTF-8 SQLite URI, so `immutable`
+    /// cannot be tried. Never rewrite the name lossily: that would open a
+    /// different file (or none at all) and call a fine store unreadable.
+    NonUtf8Path,
     /// There is a file but SQLite will not open or read it.
     Unreadable(String),
 }
@@ -37,6 +49,8 @@ impl std::fmt::Display for StoreError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Missing => write!(formatter, "no store at that path"),
+            Self::Busy => write!(formatter, "store is being written; try again next scan"),
+            Self::NonUtf8Path => write!(formatter, "store path is not valid UTF-8"),
             Self::Unreadable(reason) => write!(formatter, "store unreadable: {reason}"),
         }
     }
@@ -56,12 +70,14 @@ pub enum OpenMode {
 /// Open `path` read-only, falling back to `immutable` when the ordinary
 /// read-only open cannot read the store (#247c).
 ///
-/// The fallback is triggered by **any** failure of the first statement, not by
-/// one specific error code. The condition being detected is "this store cannot
-/// be read the ordinary read-only way", and SQLite's code for that is not stable
-/// across versions — the same missing-WAL state answers `SQLITE_CANTOPEN` on
-/// some builds and `SQLITE_IOERR` on others (measured, see the tests). Naming
-/// one of them would make the fallback dead code on the other.
+/// The fallback is triggered by any failure of the first statement **except**
+/// `SQLITE_BUSY` / `SQLITE_LOCKED`, which are reported as [`StoreError::Busy`]
+/// so the caller can skip a live store instead. The condition being detected
+/// is "this store cannot be read the ordinary read-only way", and SQLite's code
+/// for that is not stable across versions — the same missing-WAL state answers
+/// `SQLITE_CANTOPEN` on some builds and `SQLITE_IOERR` on others (measured, see
+/// the tests). Naming one of them would make the fallback dead code on the
+/// other.
 pub fn open_read_only(path: &Path) -> Result<Connection, StoreError> {
     open_reporting_mode(path).map(|(connection, _)| connection)
 }
@@ -73,10 +89,12 @@ pub fn open_reporting_mode(path: &Path) -> Result<(Connection, OpenMode), StoreE
         return Err(StoreError::Missing);
     }
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-    let direct = Connection::open_with_flags(path, flags)
-        .map_err(|error| StoreError::Unreadable(error.to_string()))?;
+    let direct = Connection::open_with_flags(path, flags).map_err(open_error)?;
     match probe(&direct) {
         Ok(()) => Ok((direct, OpenMode::ReadOnly)),
+        // A writer is active: the opposite of the state that makes `immutable`
+        // safe. Leave the store alone and let the next scan try again.
+        Err(error) if busy_or_locked(&error) => Err(StoreError::Busy),
         Err(direct_error) => {
             drop(direct);
             match open_immutable(path) {
@@ -89,28 +107,71 @@ pub fn open_reporting_mode(path: &Path) -> Result<(Connection, OpenMode), StoreE
     }
 }
 
+/// `SQLITE_BUSY` and `SQLITE_LOCKED` say a writer is holding the store, not
+/// that it cannot be read. Those must never send discovery to `immutable`.
+fn busy_or_locked(error: &rusqlite::Error) -> bool {
+    matches!(
+        error,
+        rusqlite::Error::SqliteFailure(error, _)
+            if matches!(
+                error.code,
+                rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+            )
+    )
+}
+
+fn open_error(error: rusqlite::Error) -> StoreError {
+    if busy_or_locked(&error) {
+        StoreError::Busy
+    } else {
+        StoreError::Unreadable(error.to_string())
+    }
+}
+
 /// `file:…?immutable=1`: SQLite reads the file as it stands, with no locking
 /// and no sidecar files. Only safe because a store in this state has no writer.
 fn open_immutable(path: &Path) -> Result<Connection, StoreError> {
-    let uri = format!(
-        "file:{}?immutable=1",
-        path.to_string_lossy()
-            .replace('?', "%3f")
-            .replace('#', "%23")
-    );
+    let uri = immutable_uri(path)?;
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY
         | OpenFlags::SQLITE_OPEN_NO_MUTEX
         | OpenFlags::SQLITE_OPEN_URI;
-    let connection = Connection::open_with_flags(uri, flags)
-        .map_err(|error| StoreError::Unreadable(error.to_string()))?;
-    probe(&connection).map_err(|error| StoreError::Unreadable(error.to_string()))?;
+    let connection = Connection::open_with_flags(uri, flags).map_err(open_error)?;
+    probe(&connection).map_err(open_error)?;
     Ok(connection)
+}
+
+/// The `file:…?immutable=1` URI for `path`.
+///
+/// SQLite decodes `%HH` in the path of a URI, so every byte outside the
+/// unreserved set must be escaped — including a literal `%`, which would
+/// otherwise turn `100%2Fdone` into `100/done`. A non-UTF-8 name is refused
+/// rather than lossily rewritten into a path that does not exist.
+fn immutable_uri(path: &Path) -> Result<String, StoreError> {
+    let Some(path) = path.to_str() else {
+        return Err(StoreError::NonUtf8Path);
+    };
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut uri = String::from("file:");
+    for byte in path.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            uri.push(byte as char);
+        } else {
+            uri.push('%');
+            uri.push(HEX[(byte >> 4) as usize] as char);
+            uri.push(HEX[(byte & 0x0f) as usize] as char);
+        }
+    }
+    uri.push_str("?immutable=1");
+    Ok(uri)
 }
 
 /// The first statement, which is where a lazily-opened connection actually
 /// opens — and therefore where a missing WAL index shows up.
 fn probe(connection: &Connection) -> rusqlite::Result<()> {
-    connection.query_row("SELECT 1 FROM sqlite_master LIMIT 1;", [], |_| Ok(()))?;
+    // An aggregate returns a row even on an empty schema. The question is
+    // "did the connection open and can it execute?", not "are there tables?" —
+    // a just-created store with no migrations yet is still readable.
+    connection.query_row("SELECT count(*) FROM sqlite_master;", [], |_| Ok(()))?;
     Ok(())
 }
 
@@ -224,6 +285,28 @@ mod tests {
         assert_eq!(directory, "/home/dev/project");
     }
 
+    /// A store whose schema is still empty — created before the first migration
+    /// — is readable. "No rows in sqlite_master" is not "cannot read".
+    #[test]
+    fn an_empty_schema_opens_read_only_without_the_fallback() {
+        let scratch = Scratch::new("empty-schema");
+        {
+            let _connection = Connection::open(scratch.db()).expect("a writable store");
+        }
+
+        let (connection, mode) =
+            open_reporting_mode(&scratch.db()).expect("a readable, empty store");
+        assert_eq!(
+            mode,
+            OpenMode::ReadOnly,
+            "an empty schema is not unreadable"
+        );
+        let count: i64 = connection
+            .query_row("SELECT count(*) FROM sqlite_master;", [], |row| row.get(0))
+            .expect("a count");
+        assert_eq!(count, 0);
+    }
+
     /// The reason this module exists. A read-only connection must not be able to
     /// write, and the attempt must fail rather than succeed quietly.
     #[test]
@@ -279,6 +362,30 @@ mod tests {
         assert_eq!(directory, "/home/dev/project");
     }
 
+    /// BUSY/LOCKED are not "cannot read" — they say a writer is live, which is
+    /// exactly when `immutable` would be unsafe. Skip the store for this scan.
+    #[test]
+    fn a_store_held_by_a_writer_is_skipped_not_opened_immutable() {
+        let scratch = Scratch::new("busy");
+        let path = scratch.db();
+        seed(&path);
+        let writer = Connection::open(&path).expect("a writable store");
+        writer
+            .execute_batch("BEGIN EXCLUSIVE;")
+            .expect("an exclusive writer");
+
+        assert_eq!(
+            open_reporting_mode(&path).map(|(_, mode)| mode),
+            Err(StoreError::Busy),
+            "a live writer must be retried next scan, not read without locking"
+        );
+        drop(writer);
+
+        // The same store is readable the ordinary way once the writer is gone.
+        let (_, mode) = open_reporting_mode(&path).expect("a read-only connection");
+        assert_eq!(mode, OpenMode::ReadOnly);
+    }
+
     /// `immutable=1` reads a store without locking, without creating sidecar
     /// files, and without changing anything. Tested directly because the state
     /// that *needs* it could not be reproduced on this host (below).
@@ -315,6 +422,69 @@ mod tests {
         assert!(!scratch.0.join("store.sqlite-shm").exists());
     }
 
+    /// SQLite decodes `%HH` in a `file:` URI, so a literal `%` must be encoded
+    /// too: `100%2Fdone` would otherwise resolve to `100/done`.
+    #[test]
+    fn a_percent_in_the_path_is_not_decoded_as_an_escape() {
+        let scratch = Scratch::new("percent");
+        let dir = scratch.0.join("100%2Fdone");
+        fs::create_dir_all(&dir).expect("a directory with a percent");
+        let path = dir.join("store.sqlite");
+        seed(&path);
+        assert!(
+            immutable_uri(&path)
+                .expect("a URI")
+                .contains("100%252Fdone"),
+            "the literal % must be encoded, not left for SQLite to decode"
+        );
+
+        let connection = open_immutable(&path).expect("an immutable connection");
+        let directory: String = connection
+            .query_row(
+                "SELECT directory FROM session WHERE id = 's1';",
+                [],
+                |row| row.get(0),
+            )
+            .expect("the row");
+        assert_eq!(directory, "/home/dev/project");
+    }
+
+    /// `?` starts the URI query and `#` the fragment; both must stay in the
+    /// path after the rewrite, not become part of the URI syntax.
+    #[test]
+    fn a_question_mark_and_a_hash_stay_in_the_path() {
+        let scratch = Scratch::new("uri-specials");
+        let path = scratch.0.join("store?#1.sqlite");
+        seed(&path);
+
+        let connection = open_immutable(&path).expect("an immutable connection");
+        let directory: String = connection
+            .query_row(
+                "SELECT directory FROM session WHERE id = 's1';",
+                [],
+                |row| row.get(0),
+            )
+            .expect("the row");
+        assert_eq!(directory, "/home/dev/project");
+    }
+
+    /// Lossy conversion would turn a non-UTF-8 name into a different path and
+    /// then read that other file (or report the store unreadable). Refuse it
+    /// before touching the filesystem. No file is created here: SQLite on this
+    /// host cannot open such a name anyway, which is part of the point.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_path_is_not_lossily_rewritten() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let scratch = Scratch::new("non-utf8");
+        let path = scratch
+            .0
+            .join(std::ffi::OsStr::from_bytes(b"store-\xff.sqlite"));
+
+        assert_eq!(open_immutable(&path).unwrap_err(), StoreError::NonUtf8Path);
+    }
+
     /// What could **not** be proven here, recorded rather than hidden.
     ///
     /// `SQLiteReader.swift` says a WAL database whose `-wal` and `-shm` are gone
@@ -327,8 +497,8 @@ mod tests {
     ///   **succeeds** (so nothing needs a fallback);
     /// - with a `-wal` left behind holding uncommitted-to-main data and the
     ///   `-shm` deleted, it fails with `SQLITE_IOERR` (`disk I/O error`), **not**
-    ///   `SQLITE_CANTOPEN` — which is why the guard is "any probe failure"
-    ///   rather than a named code.
+    ///   `SQLITE_CANTOPEN` — which is why the fallback still takes any
+    ///   non-BUSY probe failure rather than a named code.
     ///
     /// So the fallback is a safety net for the state Swift observed, not
     /// something this machine can trigger. Pinned here so a future reader knows
