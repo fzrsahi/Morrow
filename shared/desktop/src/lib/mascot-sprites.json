@@ -1,0 +1,441 @@
+{
+  "fps" : {
+    "active" : 20,
+    "idle" : 8
+  },
+  "frameSize" : 64,
+  "mascots" : {
+    "aiwork" : {
+      "idle" : {
+        "file" : "aiwork-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "aiwork-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "aiwork-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "aiwork-working.png",
+        "frames" : 24
+      }
+    },
+    "antigravity" : {
+      "idle" : {
+        "file" : "antigravity-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "antigravity-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "antigravity-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "antigravity-working.png",
+        "frames" : 24
+      }
+    },
+    "claude" : {
+      "idle" : {
+        "file" : "claude-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "claude-waitingApproval.png",
+        "frames" : 21
+      },
+      "waitingQuestion" : {
+        "file" : "claude-waitingQuestion.png",
+        "frames" : 21
+      },
+      "working" : {
+        "file" : "claude-working.png",
+        "frames" : 21
+      }
+    },
+    "cline" : {
+      "idle" : {
+        "file" : "cline-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "cline-waitingApproval.png",
+        "frames" : 20
+      },
+      "waitingQuestion" : {
+        "file" : "cline-waitingQuestion.png",
+        "frames" : 20
+      },
+      "working" : {
+        "file" : "cline-working.png",
+        "frames" : 20
+      }
+    },
+    "codebuddy" : {
+      "idle" : {
+        "file" : "codebuddy-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "codebuddy-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "codebuddy-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "codebuddy-working.png",
+        "frames" : 24
+      }
+    },
+    "codex" : {
+      "idle" : {
+        "file" : "codex-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "codex-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "codex-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "codex-working.png",
+        "frames" : 24
+      }
+    },
+    "copilot" : {
+      "idle" : {
+        "file" : "copilot-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "copilot-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "copilot-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "copilot-working.png",
+        "frames" : 24
+      }
+    },
+    "cursor" : {
+      "idle" : {
+        "file" : "cursor-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "cursor-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "cursor-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "cursor-working.png",
+        "frames" : 24
+      }
+    },
+    "factory" : {
+      "idle" : {
+        "file" : "factory-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "factory-waitingApproval.png",
+        "frames" : 20
+      },
+      "waitingQuestion" : {
+        "file" : "factory-waitingQuestion.png",
+        "frames" : 20
+      },
+      "working" : {
+        "file" : "factory-working.png",
+        "frames" : 20
+      }
+    },
+    "gemini" : {
+      "idle" : {
+        "file" : "gemini-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "gemini-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "gemini-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "gemini-working.png",
+        "frames" : 24
+      }
+    },
+    "grok" : {
+      "idle" : {
+        "file" : "grok-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "grok-waitingApproval.png",
+        "frames" : 20
+      },
+      "waitingQuestion" : {
+        "file" : "grok-waitingQuestion.png",
+        "frames" : 20
+      },
+      "working" : {
+        "file" : "grok-working.png",
+        "frames" : 20
+      }
+    },
+    "hermes" : {
+      "idle" : {
+        "file" : "hermes-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "hermes-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "hermes-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "hermes-working.png",
+        "frames" : 24
+      }
+    },
+    "kimi" : {
+      "idle" : {
+        "file" : "kimi-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "kimi-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "kimi-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "kimi-working.png",
+        "frames" : 24
+      }
+    },
+    "kiro" : {
+      "idle" : {
+        "file" : "kiro-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "kiro-waitingApproval.png",
+        "frames" : 36
+      },
+      "waitingQuestion" : {
+        "file" : "kiro-waitingQuestion.png",
+        "frames" : 36
+      },
+      "working" : {
+        "file" : "kiro-working.png",
+        "frames" : 36
+      }
+    },
+    "mimo" : {
+      "idle" : {
+        "file" : "mimo-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "mimo-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "mimo-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "mimo-working.png",
+        "frames" : 24
+      }
+    },
+    "minimax" : {
+      "idle" : {
+        "file" : "minimax-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "minimax-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "minimax-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "minimax-working.png",
+        "frames" : 24
+      }
+    },
+    "openclaw" : {
+      "idle" : {
+        "file" : "openclaw-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "openclaw-waitingApproval.png",
+        "frames" : 25
+      },
+      "waitingQuestion" : {
+        "file" : "openclaw-waitingQuestion.png",
+        "frames" : 25
+      },
+      "working" : {
+        "file" : "openclaw-working.png",
+        "frames" : 25
+      }
+    },
+    "opencode" : {
+      "idle" : {
+        "file" : "opencode-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "opencode-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "opencode-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "opencode-working.png",
+        "frames" : 24
+      }
+    },
+    "pi" : {
+      "idle" : {
+        "file" : "pi-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "pi-waitingApproval.png",
+        "frames" : 25
+      },
+      "waitingQuestion" : {
+        "file" : "pi-waitingQuestion.png",
+        "frames" : 25
+      },
+      "working" : {
+        "file" : "pi-working.png",
+        "frames" : 25
+      }
+    },
+    "qoder" : {
+      "idle" : {
+        "file" : "qoder-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "qoder-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "qoder-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "qoder-working.png",
+        "frames" : 24
+      }
+    },
+    "qwen" : {
+      "idle" : {
+        "file" : "qwen-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "qwen-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "qwen-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "qwen-working.png",
+        "frames" : 24
+      }
+    },
+    "stepfun" : {
+      "idle" : {
+        "file" : "stepfun-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "stepfun-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "stepfun-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "stepfun-working.png",
+        "frames" : 24
+      }
+    },
+    "trae" : {
+      "idle" : {
+        "file" : "trae-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "trae-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "trae-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "trae-working.png",
+        "frames" : 24
+      }
+    },
+    "workbuddy" : {
+      "idle" : {
+        "file" : "workbuddy-idle.png",
+        "frames" : 8
+      },
+      "waitingApproval" : {
+        "file" : "workbuddy-waitingApproval.png",
+        "frames" : 24
+      },
+      "waitingQuestion" : {
+        "file" : "workbuddy-waitingQuestion.png",
+        "frames" : 24
+      },
+      "working" : {
+        "file" : "workbuddy-working.png",
+        "frames" : 24
+      }
+    }
+  }
+}
