@@ -1937,6 +1937,7 @@ dependencies = [
  "morrow-ipc",
  "morrow-platform",
  "morrow-protocol",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

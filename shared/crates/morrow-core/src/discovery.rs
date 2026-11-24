@@ -796,27 +796,17 @@ pub mod opencode {
     /// what it holds, and the store's own `directory` column becomes the card's
     /// working directory.
     ///
-    /// Archived rows are skipped, because they are what the CLI itself hides.
+    /// Every row is a session worth showing, including an archived one and a
+    /// MiMo subagent. #270 asks for **all** recent sessions — the filters that
+    /// make `find_recent_session` match one process to one CLI card do not apply
+    /// to a backfill with no process at all.
     pub fn recent_sessions(connection: &Connection, limit: usize) -> Vec<SessionRow> {
         let columns = crate::sqlite::table_columns(connection, "session");
         if columns.is_empty() || !columns.iter().any(|column| column == "directory") {
             return Vec::new();
         }
-        let mut conditions: Vec<&str> = Vec::new();
-        if columns.iter().any(|column| column == "time_archived") {
-            conditions.push("time_archived IS NULL");
-        }
-        if columns.iter().any(|column| column == "parent_id") {
-            // A subagent session is never the CLI's own card.
-            conditions.push("parent_id IS NULL");
-        }
-        let where_clause = if conditions.is_empty() {
-            String::new()
-        } else {
-            format!(" WHERE {}", conditions.join(" AND "))
-        };
         let sql = format!(
-            "SELECT id, directory, time_updated FROM session{where_clause}
+            "SELECT id, directory, time_updated FROM session
              ORDER BY time_updated DESC LIMIT {limit};"
         );
         let Ok(mut statement) = connection.prepare(&sql) else {
@@ -1078,6 +1068,23 @@ mod opencode_tests {
         let hit = opencode::find_recent_session(&connection, "/home/dev/project", None, false)
             .expect("a session");
         assert_eq!(hit.session_id, "moved");
+    }
+
+    #[test]
+    fn a_backfill_reads_archived_and_child_sessions() {
+        let store = Store::new(
+            "backfill-all",
+            &format!(
+                "{SCHEMA}
+                 INSERT INTO session VALUES ('root','/home/dev/a',NULL,5000,NULL);
+                 INSERT INTO session VALUES ('archived','/home/dev/b',NULL,4000,1234);
+                 INSERT INTO session VALUES ('child','/home/dev/c','root',3000,NULL);"
+            ),
+        );
+        let rows = opencode::recent_sessions(&store.open(), 10);
+        let ids: Vec<&str> = rows.iter().map(|row| row.session_id.as_str()).collect();
+        assert_eq!(ids, ["root", "archived", "child"]);
+        assert_eq!(rows[2].cwd, "/home/dev/c");
     }
 
     #[test]

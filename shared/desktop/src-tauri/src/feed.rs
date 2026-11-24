@@ -342,15 +342,11 @@ impl Feed {
     /// Returns how many sessions were added, which is what the test asserts.
     pub fn backfill(&self) -> usize {
         let home = std::path::PathBuf::from(self.lock().sessions.home_directory());
-        // Claude Code's config dir comes from the installer's own ladder (#258),
-        // so discovery reads the folder the hooks were written into.
-        let config_dir = crate::hooks::claude_config_dir(
-            &home,
-            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
-        )
-        .unwrap_or_else(|| home.join(".claude"));
+        // #270 is only about registering readers: keep scanning the same
+        // default Claude Code folder as before, not the installer's config-dir
+        // ladder (that would change which sessions are discovered).
         self.backfill_with(move |_| {
-            crate::discovery::scan_once(&config_dir, &home.join(".local/share"))
+            crate::discovery::scan_once(&home.join(".claude"), &home.join(".local/share"))
         })
     }
 
