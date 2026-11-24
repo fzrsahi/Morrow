@@ -1,10 +1,109 @@
 import AppKit
+import MorrowCore
 
 struct ScreenDetector {
     struct Candidate {
         let frame: CGRect
         let hasNotch: Bool
         let isMain: Bool
+    }
+
+    static func displayID(for screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
+    /// Pure, deterministic hardware-backed display identifier.
+    /// Never falls back to volatile runtime `CGDirectDisplayID` values.
+    static func stableIdentifier(
+        isBuiltin: Bool,
+        uuidString: String?,
+        vendor: UInt32,
+        model: UInt32,
+        serial: UInt32,
+        unit: UInt32,
+        localizedName: String,
+        width: Int,
+        height: Int
+    ) -> String {
+        if isBuiltin {
+            return "builtin"
+        }
+        if let uuidString, !uuidString.isEmpty {
+            return uuidString
+        }
+        if serial != 0 {
+            return "hw_\(vendor)_\(model)_\(serial)"
+        }
+        if vendor != 0 || model != 0 {
+            return "hw_\(vendor)_\(model)_u\(unit)_\(localizedName)_\(width)x\(height)"
+        }
+        return "fallback_\(localizedName)_\(width)x\(height)"
+    }
+
+    /// Stable hardware-backed identifier for persisting per-display settings across
+    /// unplug/replug and arrangement changes.
+    static func displayIdentifier(for screen: NSScreen) -> String {
+        let builtin = isBuiltinScreen(screen)
+        let width = Int(screen.frame.width.rounded())
+        let height = Int(screen.frame.height.rounded())
+
+        guard let id = displayID(for: screen) else {
+            return stableIdentifier(
+                isBuiltin: builtin,
+                uuidString: nil,
+                vendor: 0,
+                model: 0,
+                serial: 0,
+                unit: 0,
+                localizedName: screen.localizedName,
+                width: width,
+                height: height
+            )
+        }
+
+        let uuidString: String? = CGDisplayCreateUUIDFromDisplayID(id).flatMap {
+            CFUUIDCreateString(nil, $0.takeRetainedValue()) as String?
+        }
+
+        return stableIdentifier(
+            isBuiltin: builtin,
+            uuidString: uuidString,
+            vendor: CGDisplayVendorNumber(id),
+            model: CGDisplayModelNumber(id),
+            serial: CGDisplaySerialNumber(id),
+            unit: CGDisplayUnitNumber(id),
+            localizedName: screen.localizedName,
+            width: width,
+            height: height
+        )
+    }
+
+    static func screenDescriptors(
+        from screens: [NSScreen] = NSScreen.screens
+    ) -> [(descriptor: DisplayDescriptor, screen: NSScreen)] {
+        var idCounts: [String: Int] = [:]
+        return screens.enumerated().map { index, screen in
+            let baseID = displayIdentifier(for: screen)
+            let count = (idCounts[baseID] ?? 0) + 1
+            idCounts[baseID] = count
+            let uniqueID = count == 1 ? baseID : "\(baseID)#\(count)"
+
+            let descriptor = DisplayDescriptor(
+                id: uniqueID,
+                index: index,
+                name: screen.localizedName,
+                width: Int(screen.frame.width.rounded()),
+                height: Int(screen.frame.height.rounded()),
+                hasNotch: screenHasNotch(screen),
+                isBuiltin: isBuiltinScreen(screen),
+                isPrimary: index == 0
+            )
+            return (descriptor, screen)
+        }
+    }
+
+    static func descriptors(from screens: [NSScreen] = NSScreen.screens) -> [DisplayDescriptor] {
+        screenDescriptors(from: screens).map(\.descriptor)
     }
 
     /// Simulated notch width for non-notch screens — scales with screen width.
@@ -34,12 +133,14 @@ struct ScreenDetector {
 
     /// Check if a display is the built-in screen of the Mac
     static func isBuiltinScreen(_ screen: NSScreen) -> Bool {
-        if screenHasNotch(screen) { return true }
-        if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
+        if let screenNumber = displayID(for: screen) {
             return CGDisplayIsBuiltin(screenNumber) != 0
         }
         let name = screen.localizedName
-        return name.localizedCaseInsensitiveContains("built-in") || name.contains("内置")
+        return name.localizedCaseInsensitiveContains("built-in")
+            || name.contains("内置")
+            || name.localizedCaseInsensitiveContains("liquid retina")
+            || name.localizedCaseInsensitiveContains("color lcd")
     }
 
     /// Preferred screen: built-in display (with hardware notch) first, then primary Mac display (origin (0, 0))
@@ -200,5 +301,54 @@ struct ScreenDetector {
         }
 
         return nil
+    }
+}
+
+@MainActor
+final class ScreenMonitor: ObservableObject {
+    static let shared = ScreenMonitor()
+
+    @Published private(set) var displays: [DisplayDescriptor]
+
+    private var observer: NSObjectProtocol?
+    private var resyncTask: Task<Void, Never>?
+
+    init(displays: [DisplayDescriptor]? = nil, observeSystemChanges: Bool = true) {
+        self.displays = displays ?? ScreenDetector.descriptors()
+        if observeSystemChanges {
+            observer = NotificationCenter.default.addObserver(
+                forName: NSApplication.didChangeScreenParametersNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleScreenParametersChanged()
+                }
+            }
+        }
+    }
+
+    func refreshNow() {
+        let latest = ScreenDetector.descriptors()
+        if latest != displays {
+            displays = latest
+        }
+    }
+
+    private func handleScreenParametersChanged() {
+        refreshNow()
+        resyncTask?.cancel()
+        resyncTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard !Task.isCancelled else { return }
+            self?.refreshNow()
+        }
+    }
+
+    deinit {
+        resyncTask?.cancel()
+        if let observer {
+            NotificationCenter.default.removeObserver(observer)
+        }
     }
 }

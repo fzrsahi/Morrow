@@ -11,6 +11,10 @@
 
 use std::process::ExitCode;
 
+<<<<<<< HEAD
+=======
+#[cfg(unix)]
+>>>>>>> origin/main
 use morrow_platform::hooks;
 use morrow_platform::hooks::Report;
 use morrow_platform::kimi;
@@ -90,6 +94,7 @@ fn status(site: &HooksSite) {
     }
     #[cfg(windows)]
     {
+<<<<<<< HEAD
         println!("claude: {}", windows_state(site));
         // The other CLIs' files are `<home>/<target.path>` here too, so the table
         // is the same one Linux walks.
@@ -104,6 +109,12 @@ fn status(site: &HooksSite) {
                 }
             );
         }
+=======
+        let _ = site;
+        // The Windows build hooks [CC] only; the other eight arrive with their
+        // Windows paths (#99's follow-up), which is what Settings says too.
+        println!("claude: {}", windows_state(site));
+>>>>>>> origin/main
     }
     let opencode = opencode::status(&site.opencode);
     println!(
@@ -206,6 +217,7 @@ fn target(site: &HooksSite, source: &str, install: bool) -> Result<(), String> {
 
 #[cfg(windows)]
 fn target(site: &HooksSite, source: &str, install: bool) -> Result<(), String> {
+<<<<<<< HEAD
     let report = if install {
         // `--hooks install` for a fork must leave the `.cmd` behind too, or the
         // command it writes names a file that is not there.
@@ -226,6 +238,12 @@ fn target(site: &HooksSite, source: &str, install: bool) -> Result<(), String> {
             Some(report) => print_report(source, &report),
         })
         .map_err(|error| error.to_string())
+=======
+    let _ = (site, install);
+    Err(format!(
+        "{source}: no Windows path for this source yet (#234)"
+    ))
+>>>>>>> origin/main
 }
 
 /// Every source this machine has, in table order, so a caller does not have to
@@ -280,6 +298,7 @@ fn status_sources(site: &HooksSite) -> Vec<(String, &'static str)> {
         }
     }
     #[cfg(windows)]
+<<<<<<< HEAD
     {
         sources.push(("claude".to_owned(), windows_state(site)));
         for target in hooks::targets_status(&site.paths) {
@@ -293,6 +312,9 @@ fn status_sources(site: &HooksSite) -> Vec<(String, &'static str)> {
             ));
         }
     }
+=======
+    sources.push(("claude".to_owned(), windows_state(site)));
+>>>>>>> origin/main
     let opencode = opencode::status(&site.opencode);
     sources.push((
         "opencode".to_owned(),

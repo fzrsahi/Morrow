@@ -115,6 +115,7 @@ pub mod claude {
     }
 }
 
+<<<<<<< HEAD
 /// What a Codex rollout says about its session, without a hook (#272).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CodexRolloutSummary {
@@ -350,6 +351,8 @@ fn looks_like_tool_result(text: &str) -> bool {
     trimmed.starts_with("[{") || trimmed.starts_with("{\"type\":\"tool_result\"")
 }
 
+=======
+>>>>>>> origin/main
 /// `CursorDiscovery.readRecentFromCursorTranscript`: the last three turns of a
 /// Cursor agent transcript, in the order they were written.
 pub mod cursor {
@@ -405,6 +408,7 @@ pub mod gemini {
         serde_json::from_str(transcript).ok()
     }
 
+<<<<<<< HEAD
     /// `readGeminiProjectsMap`: `~/.gemini/projects.json` maps a working directory
     /// to the folder under `~/.gemini/tmp` that holds its chats.
     ///
@@ -436,6 +440,8 @@ pub mod gemini {
         contents.trim() == cwd
     }
 
+=======
+>>>>>>> origin/main
     pub fn session_id(transcript: &str) -> Option<String> {
         parse(transcript)?
             .get("sessionId")
@@ -516,6 +522,7 @@ mod tests {
         assert_eq!(project_dir::app_encoded("/"), "");
     }
 }
+<<<<<<< HEAD
 
 /// The files a store reader lists before it reads any of them.
 ///
@@ -3288,3 +3295,5 @@ mod scan_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+=======
+>>>>>>> origin/main
