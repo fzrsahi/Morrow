@@ -132,12 +132,15 @@ pub fn is_session_process(source: &str, info: &ProcessInfo) -> bool {
         "grok" => executable_name(&info.executable) == "grok",
         "kimi" => executable_name(&info.executable) == "kimi",
         "qwen" => executable_name(&info.executable) == "qwen",
+<<<<<<< HEAD
         "copilot" => executable_name(&info.executable) == "copilot",
         // Amazon Q Developer's CLI: `kiro-cli` is the binary, `kiro` the product.
         "kiro" => matches!(
             executable_name(&info.executable).as_str(),
             "kiro-cli" | "kiro"
         ),
+=======
+>>>>>>> origin/feat/#272-codex-rollouts
         // The CLI binary is `cursor-agent`; `cursor` is the name it is sometimes
         // installed under. The IDE's own process is a desktop app, which this port
         // does not try to recognise (no `.app` bundles on Linux or Windows).
