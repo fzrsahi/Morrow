@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use morrow_core::attention::CompletionStyle;
 use morrow_core::reduce::SideEffect;
@@ -19,6 +19,7 @@ use tauri::ipc::Channel;
 
 use crate::completion::{self, SnapshotCompletion};
 use crate::permissions::{Card, Decision, Permissions};
+use crate::prayer::PrayerSnapshot;
 use crate::prune::{Pid, SessionProcess, Watches};
 use crate::sessions::{Session, Sessions};
 use crate::transcripts::Tails;
@@ -32,6 +33,9 @@ pub struct Snapshot {
     /// The last finished turn's reply, parsed into Markdown blocks by the
     /// core, and its settled presentation. `None` after the next prompt.
     pub completion: Option<SnapshotCompletion>,
+    /// #307: the current prayer schedule. `None` until a city is saved, so a
+    /// fresh install never shows an invented time.
+    pub prayer: Option<PrayerSnapshot>,
 }
 
 /// One push per 1/60 s at most.
@@ -45,23 +49,6 @@ const TAIL_POLL: Duration = Duration::from_millis(200);
 /// has to disappear from the panel (#198).
 const PRUNE_POLL: Duration = Duration::from_secs(1);
 
-/// One discovery tick, end to end (#274). The scan's own 250 ms budget is
-/// **inside** this window, not added to it, so a visible panel really looks
-/// four times a second. The gap policy (#259) decides which ticks scan.
-const DISCOVERY_TICK: Duration = Duration::from_millis(250);
-
-/// Sleep only what is left after the scan. A tick that overran the budget
-/// starts the next one at once instead of adding another full delay.
-fn discovery_tick_delay(elapsed: Duration) -> Duration {
-    DISCOVERY_TICK.saturating_sub(elapsed)
-}
-
-/// The data dir `backfill` passed before the tick was added (#274). The tick
-/// shares it so turning the panel visible cannot move a store root.
-fn discovery_data_dir(home: &std::path::Path) -> std::path::PathBuf {
-    home.join(".local/share")
-}
-
 /// Where a decided sound goes (#241). Production leaves it `None` and the
 /// platform plays it; a test installs a recorder, because "a locked screen is
 /// silent" is only observable if something was asked to play.
@@ -74,6 +61,11 @@ pub struct Feed {
     /// condvar so a single hook cannot wake only the wrong waiter.
     prune_changed: Condvar,
     sound: Option<SoundOutlet>,
+    /// What the last scan read, kept **across** ticks: a cache built inside one
+    /// scan would read everything and forget it (#284). On the `Feed` rather than
+    /// in `State` because a scan runs outside the state lock and this is
+    /// internally synchronised on its own.
+    scan_cache: morrow_core::scan_policy::TextCache,
 }
 
 impl Default for Feed {
@@ -83,6 +75,9 @@ impl Default for Feed {
             changed: Condvar::new(),
             prune_changed: Condvar::new(),
             sound: None,
+            scan_cache: morrow_core::scan_policy::TextCache::new(
+                morrow_core::scan_policy::SCAN_CACHE_CAPACITY,
+            ),
         }
     }
 }
@@ -91,6 +86,7 @@ struct State {
     sessions: Sessions,
     permissions: Permissions,
     completion: Option<SnapshotCompletion>,
+    prayer: Option<PrayerSnapshot>,
     watches: Watches,
     channel: Option<Channel<Snapshot>>,
     /// The frontend has not seen the latest snapshot.
@@ -113,6 +109,7 @@ impl Default for State {
             sessions: Sessions::with_home(std::env::var("HOME").unwrap_or_default()),
             permissions: Permissions::default(),
             completion: None,
+            prayer: None,
             watches: Watches::default(),
             channel: None,
             dirty: false,
@@ -138,6 +135,7 @@ impl State {
             sessions: self.sessions.snapshot(),
             permissions: self.permissions.cards(),
             completion: self.completion.clone(),
+            prayer: self.prayer.clone(),
         }
     }
 }
@@ -401,20 +399,49 @@ impl Feed {
         self.backfill_with(scan)
     }
 
-    /// Polls the policy forever, once per `DISCOVERY_TICK`. A quarter second
-    /// is plenty of granularity for a five-second gap, and when nothing is due
-    /// the tick costs one mutex read.
+    /// Asks the policy forever, woken by the stores themselves where the OS allows
+    /// it (#286).
+    ///
+    /// The watcher is not a replacement for the clock: an append inside a file
+    /// already on disk may not be reported (the fallback arm cannot see it, and
+    /// inotify's `IN_MODIFY` is not a promise about a finished write). So the loop
+    /// keeps its own tick, and a change only brings the next question forward.
     pub fn spawn_discovery(feed: Arc<Self>) {
         thread::Builder::new()
             .name("morrow-discovery".into())
             .spawn(move || {
+                let mut watcher = feed.watcher();
                 loop {
-                    let started = Instant::now();
+                    // A watcher that reports a change wakes the loop early; one
+                    // that does not, or one the OS refused, is a 250 ms sleep.
+                    let moved = watcher
+                        .as_mut()
+                        .map(|watcher| watcher.wait(Duration::from_millis(250)))
+                        .unwrap_or_else(|| {
+                            thread::sleep(Duration::from_millis(250));
+                            false
+                        });
+                    if !moved {
+                        thread::sleep(Duration::from_millis(250));
+                    }
                     feed.tick_discovery(now_ms());
-                    thread::sleep(discovery_tick_delay(started.elapsed()));
                 }
             })
             .expect("spawn the discovery thread");
+    }
+
+    /// An event source over every store a reader knows about, or `None` where the
+    /// OS refuses — in which case the timer is the whole answer and discovery
+    /// still works, only later.
+    fn watcher(&self) -> Option<morrow_watch::Watcher> {
+        let home = std::path::PathBuf::from(self.lock().sessions.home_directory());
+        let config_dir = crate::hooks::claude_config_dir(
+            &home,
+            std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
+        )
+        .unwrap_or_else(|| home.join(".claude"));
+        let roots = morrow_watch::default_roots(&home, &config_dir);
+        morrow_watch::Watcher::new(&roots).ok()
     }
 
     /// One discovery scan, integrated as ordinary sessions.
@@ -438,15 +465,13 @@ impl Feed {
 
     fn scan_stores_in(&self, home: &std::path::Path) -> morrow_core::discovery::scan::ScanResult {
         // Claude Code's config dir comes from the installer's own ladder (#258),
-        // so discovery reads the folder the hooks were written into. The data
-        // dir stays the one `backfill` used before the tick: sharing these roots
-        // must not quietly move Codex's or OpenCode's stores.
+        // so discovery reads the folder the hooks were written into.
         let config_dir = crate::hooks::claude_config_dir(
             home,
             std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
         )
         .unwrap_or_else(|| home.join(".claude"));
-        crate::discovery::scan_once(&config_dir, &discovery_data_dir(home))
+        crate::discovery::scan_once(&config_dir, home, &self.scan_cache)
     }
 
     /// One discovery scan, integrated as ordinary sessions.
@@ -597,6 +622,18 @@ impl Feed {
                 }
             })
             .expect("spawn the feed thread");
+    }
+
+    /// Put the prayer schedule on the next snapshot. The prayer commands own
+    /// the calculation; the feed only carries the result to the frontend (#307).
+    pub fn set_prayer(&self, prayer: Option<PrayerSnapshot>) {
+        let mut state = self.lock();
+        if state.prayer == prayer {
+            return;
+        }
+        state.prayer = prayer;
+        state.dirty = true;
+        self.changed.notify_one();
     }
 
     /// The current snapshot (the pusher uses `State::snapshot` directly).
@@ -759,32 +796,6 @@ mod tests {
             *scans.lock().unwrap(),
             2,
             "the clock was forgotten while hidden"
-        );
-    }
-
-    /// The tick shares `backfill`'s roots, so it must not move where Codex and
-    /// OpenCode are looked for: `~/.local/share`, as before the tick existed.
-    #[test]
-    fn the_tick_keeps_backfills_store_root() {
-        let home = Path::new("/home/someone");
-        assert_eq!(
-            discovery_data_dir(home),
-            PathBuf::from("/home/someone/.local/share")
-        );
-    }
-
-    /// A tick is one 250 ms window, scan included — not 250 ms of sleep after
-    /// up to 250 ms of scanning. An overrun starts the next tick at once.
-    #[test]
-    fn a_tick_sleeps_only_what_is_left_of_its_budget() {
-        assert_eq!(
-            discovery_tick_delay(Duration::from_millis(10)),
-            Duration::from_millis(240)
-        );
-        assert_eq!(discovery_tick_delay(DISCOVERY_TICK), Duration::ZERO);
-        assert_eq!(
-            discovery_tick_delay(Duration::from_millis(300)),
-            Duration::ZERO
         );
     }
 
@@ -1040,5 +1051,25 @@ mod tests {
             ["b"]
         );
         assert!(!feed.lock().tails.has("a"), "pruning stops its tail too");
+    }
+    #[test]
+    fn snapshot_carries_the_prayer_card_and_can_clear_it() {
+        let feed = Feed::default();
+        assert!(feed.snapshot().prayer.is_none(), "no city, no card");
+        let prayer = crate::prayer::PrayerSnapshot {
+            city_id: "jakarta".to_owned(),
+            city_name: "Jakarta".to_owned(),
+            method: "kemenag".to_owned(),
+            correction_minutes: 0,
+            hijri: "1 Ramadan 1447".to_owned(),
+            times: Vec::new(),
+            next: None,
+            in_minutes: 7,
+            urgent: true,
+        };
+        feed.set_prayer(Some(prayer.clone()));
+        assert_eq!(feed.snapshot().prayer, Some(prayer));
+        feed.set_prayer(None);
+        assert!(feed.snapshot().prayer.is_none());
     }
 }

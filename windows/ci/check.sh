@@ -43,7 +43,7 @@ if command -v llvm-rc >/dev/null; then
 elif [ -x "$(brew --prefix llvm 2>/dev/null)/bin/llvm-rc" ]; then
   LLVM_RC="$(brew --prefix llvm)/bin/llvm-rc"
 fi
-CRATES=(morrow-ipc morrow-bridge morrow-platform morrow-core)
+CRATES=(morrow-ipc morrow-bridge morrow-platform morrow-core morrow-watch)
 if [ -n "$LLVM_RC" ]; then
   CRATES+=(morrow-app)
   export PATH="$(dirname "$LLVM_RC"):$PATH"

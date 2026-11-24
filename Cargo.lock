@@ -1947,6 +1947,7 @@ dependencies = [
  "morrow-ipc",
  "morrow-platform",
  "morrow-protocol",
+ "morrow-watch",
  "rusqlite",
  "serde",
  "serde_json",
@@ -2006,6 +2007,14 @@ version = "0.0.0"
 dependencies = [
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "morrow-watch"
+version = "0.0.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
