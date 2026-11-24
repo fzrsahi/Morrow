@@ -20,6 +20,7 @@
   import Header from './lib/components/Header.svelte';
   import MusicDeck from './lib/components/MusicDeck.svelte';
   import SessionList from './lib/components/SessionList.svelte';
+  import { JUMP_CAPABILITY, canJumpWhen, jumpArgs, outcomeNotice } from './lib/terminal';
   import PermissionCard from './lib/components/PermissionCard.svelte';
   import QuestionCard from './lib/components/QuestionCard.svelte';
   import VolumeHud from './lib/components/VolumeHud.svelte';
@@ -378,14 +379,16 @@
   // session's terminal window (or copy its path). The shell owns the outcome;
   // the card only draws it. No card is removed here.
   async function jumpToTerminal(session: Session) {
+    // `jumpArgs` is the same decision the button used to appear, so a session with
+    // nothing to jump by never reaches the shell.
+    const args = jumpArgs(session);
+    if (args === null) return;
     try {
-      const outcome = await invoke<TerminalOutcome>('terminal_activate', {
-        app: session.term_app || null,
-        tty: session.tty_path || null,
-        cwd: session.cwd || null,
-        pid: session.cli_pid,
-      });
+      const outcome = await invoke<TerminalOutcome>('terminal_activate', args);
+      // The permission card draws the full note; a session row is a different
+      // surface with the same outcome, so it gets the one-line notice.
       jumpOutcomes = { ...jumpOutcomes, [session.session_id]: outcome };
+      showsJumpNotice(outcome);
     } catch (error) {
       hooksError = String(error);
     }
@@ -626,6 +629,28 @@
   // #239 AC 2: the meter sets a level. The HUD draws the level optimistically —
   // a slow or failing read must not leave the meter where it was after a click —
   // and the shell's answer corrects it a moment later.
+  // #239 AC 5 / L-009: the shell has focused a terminal since #103 and nothing
+  // called it. A jump that could not focus hands back a path; both are reported,
+  // because a click that appears to do nothing is the bug L-009 exists to catch.
+  let jumpCapable = $state(false);
+  let jumpNotice = $state<{ text: string; failed: boolean } | null>(null);
+  let jumpNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function showsJumpNotice(outcome: TerminalOutcome) {
+    const notice = outcomeNotice(outcome);
+    if (notice === null) {
+      jumpNotice = null;
+      return;
+    }
+    jumpNotice = notice;
+    clearTimeout(jumpNoticeTimer);
+    jumpNoticeTimer = setTimeout(() => (jumpNotice = null), 4000);
+  }
+
+  function canJumpTo(session: Session) {
+    return canJumpWhen(jumpCapable, session);
+  }
+
   async function onSetVolume(percent: number) {
     if (!volumeCapable) return;
     const plan = setVolumePlan(muted, percent);
@@ -761,6 +786,9 @@
       notificationsCapable = isSupported(rows, 'Notifications');
       // #186: shortcut hints are only honest when a global hotkey can fire.
       hotkeySupported = isSupported(rows, 'Global hotkey');
+      // #239 AC 5 / L-009: the jump button appears only where a window can be
+      // focused or a path copied — the same rule every other adapter row follows.
+      jumpCapable = isSupported(rows, JUMP_CAPABILITY);
       // #195: no HUD (and no volume poll) on a machine without the adapter.
       volumeCapable = volumeSupported(rows);
       schedulePoll();
@@ -1053,6 +1081,9 @@
             approvals={liveCards}
             onAnswer={answer}
             onDelete={deleteSession}
+            onJump={jumpToTerminal}
+            canJumpTo={canJumpTo}
+            notice={jumpNotice}
             onOpenSettings={openSettings}
           />
         {/if}
