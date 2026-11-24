@@ -63,6 +63,22 @@ impl Home {
             .filter(|name| name.contains(".codeisland.bak."))
             .collect()
     }
+
+    /// ZCode's foreign-event back-ups live in our own directory.
+    fn zcode_backups(&self) -> Vec<PathBuf> {
+        fs::read_dir(self.root.join(".codeisland"))
+            .map(|dir| {
+                dir.filter_map(Result::ok)
+                    .map(|entry| entry.path())
+                    .filter(|path| {
+                        path.file_name()
+                            .and_then(|name| name.to_str())
+                            .is_some_and(|name| name.starts_with("config.json.codeisland.bak."))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for Home {
@@ -623,4 +639,78 @@ fn minimax_drift_is_reported_as_not_installed() {
             .installed,
         "a drifted hooks document is not our installed pack"
     );
+}
+
+/// #333: install drops foreign events because ZCode would discard the whole
+/// file otherwise. Dropping them must not be a one-way door.
+#[test]
+fn zcode_foreign_events_come_back_byte_for_byte() {
+    let home = Home::new("zcode-foreign");
+    let paths = home.paths();
+    cli_dir(&home, ".zcode");
+    let config = home.root.join(".zcode/cli/config.json");
+    let original = "{\n  \"hooks\": {\n    \"events\": {\n      \"Notification\": [{\"hooks\":[{\"type\":\"command\",\"command\":\"notify-send hi\"}]}],\n      \"PreToolUse\": [{\"hooks\":[{\"type\":\"command\",\"command\":\"mine\"}]}]\n    }\n  }\n}\n";
+    home.write(&config, original);
+
+    let report = hooks::install_target(&paths, "zcode", STAMP)
+        .expect("install")
+        .expect("a report");
+    let installed = home.read(&config);
+    assert!(!installed.contains("Notification"), "{installed}");
+    assert!(installed.contains("--source zcode"), "{installed}");
+
+    let backup = report.backup.expect("a back-up of the foreign events");
+    assert!(backup.starts_with(&paths.codeisland_dir), "{:?}", backup);
+    assert_eq!(
+        home.read(&backup),
+        original,
+        "the back-up is the exact original"
+    );
+    assert_eq!(home.zcode_backups().len(), 1, "one back-up per file ever");
+
+    let report = hooks::uninstall_target(&paths, "zcode")
+        .expect("uninstall")
+        .expect("a report");
+    assert!(report.settings_changed);
+    assert_eq!(home.read(&config), original, "byte for byte");
+    assert!(home.zcode_backups().is_empty(), "the back-up is spent");
+}
+
+#[test]
+fn zcode_an_existing_on_switch_survives_uninstall() {
+    let home = Home::new("zcode-on-switch");
+    let paths = home.paths();
+    cli_dir(&home, ".zcode");
+    let config = home.root.join(".zcode/cli/config.json");
+    home.write(
+        &config,
+        "{\n  \"hooks\": {\n    \"enabled\": true\n  }\n}\n",
+    );
+
+    hooks::install_target(&paths, "zcode", STAMP).expect("install");
+    hooks::uninstall_target(&paths, "zcode").expect("uninstall");
+    let back = home.read(&config);
+    assert!(back.contains("\"enabled\": true"), "{back}");
+    assert!(!back.contains("codeisland"), "{back}");
+    assert!(home.zcode_backups().is_empty());
+}
+
+#[test]
+fn zcode_a_fresh_install_uninstall_leaves_no_back_up() {
+    let home = Home::new("zcode-fresh");
+    let paths = home.paths();
+    cli_dir(&home, ".zcode");
+    let config = home.root.join(".zcode/cli/config.json");
+
+    let report = hooks::install_target(&paths, "zcode", STAMP)
+        .expect("install")
+        .expect("a report");
+    assert!(report.settings_changed);
+    assert_eq!(report.backup, None, "a new file has nothing to preserve");
+    assert!(home.read(&config).contains("--source zcode"));
+
+    hooks::uninstall_target(&paths, "zcode").expect("uninstall");
+    let back = home.read(&config);
+    assert!(!back.contains("codeisland"), "{back}");
+    assert!(home.zcode_backups().is_empty());
 }

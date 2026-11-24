@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use morrow_core::installer::claude_hooks;
 use morrow_core::installer::codex_config;
 use morrow_core::installer::targets::{self, Root, Target};
+use morrow_core::installer::zcode;
 use serde_json::Value;
 
 /// Bumped when the script below changes, so an install from an older build is
@@ -346,14 +347,24 @@ fn install_zcode(paths: &Paths, stamp: &str, command: &str) -> Result<Option<Rep
     let command = format!("{command} --source zcode");
     let path = zcode_path(paths);
     let existing = read_text(&path)?;
-    let outcome = morrow_core::installer::zcode::install(existing.as_deref(), &command)
+    let outcome = zcode::install(existing.as_deref(), &command)
         .ok_or_else(|| Error::UnparseableSettings(path.clone()))?;
     let mut report = Report::default();
     if outcome.changed {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        if existing.is_some() {
+        // Foreign events are dropped on install because ZCode would otherwise
+        // discard the whole file. Their exact bytes go under our own directory
+        // so uninstall can hand them back (#333).
+        if existing.as_deref().is_some_and(zcode::has_foreign_events) {
+            report.backup = Some(back_up_zcode(
+                paths,
+                &path,
+                stamp,
+                existing.as_deref().unwrap_or_default(),
+            )?);
+        } else if existing.is_some() {
             report.backup = back_up(&path, stamp)?;
         }
         fs::write(&path, &outcome.text)?;
@@ -364,13 +375,30 @@ fn install_zcode(paths: &Paths, stamp: &str, command: &str) -> Result<Option<Rep
 
 fn uninstall_zcode(paths: &Paths) -> Result<Option<Report>, Error> {
     let path = zcode_path(paths);
+    let mut report = Report::default();
+
+    // A foreign-event back-up outranks structural removal: only those bytes can
+    // put the user's events back exactly as they were (#333).
+    if let Some(backup) = zcode_backup(paths, &path)? {
+        if let Some(original) = read_text(&backup)? {
+            if read_text(&path)?.as_deref() != Some(original.as_str()) {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                fs::write(&path, &original)?;
+                report.settings_changed = true;
+            }
+        }
+        fs::remove_file(&backup)?;
+        return Ok(Some(report));
+    }
+
     let Some(existing) = read_text(&path)? else {
         return Ok(None);
     };
-    let Some(outcome) = morrow_core::installer::zcode::uninstall(&existing) else {
+    let Some(outcome) = zcode::uninstall(&existing) else {
         return Ok(None);
     };
-    let mut report = Report::default();
     if outcome.changed {
         fs::write(&path, &outcome.text)?;
         report.settings_changed = true;
@@ -609,6 +637,45 @@ pub(crate) fn back_up(settings: &Path, stamp: &str) -> io::Result<Option<PathBuf
     };
     fs::copy(settings, &path)?;
     Ok(Some(PathBuf::from(path)))
+}
+
+/// ZCode's foreign-event back-up lives in `~/.codeisland`, not beside the
+/// user's config: it is ours, and uninstall has to find it again (#333). Same
+/// `.codeisland.bak.<stamp>` shape and one-per-file rule as every other back-up.
+fn back_up_zcode(paths: &Paths, config: &Path, stamp: &str, bytes: &str) -> io::Result<PathBuf> {
+    fs::create_dir_all(&paths.codeisland_dir)?;
+    private(&paths.codeisland_dir, 0o700)?;
+    let name = config.file_name().unwrap_or_default().to_string_lossy();
+    let names: Vec<String> = fs::read_dir(&paths.codeisland_dir)?
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect();
+    if let Some(previous) = names
+        .iter()
+        .find(|entry| entry.starts_with(&format!("{name}.codeisland.bak.")))
+    {
+        return Ok(paths.codeisland_dir.join(previous));
+    }
+    let path = claude_hooks::backup_path(&name, stamp, &names).expect("no back-up yet");
+    let path = paths.codeisland_dir.join(path);
+    fs::write(&path, bytes)?;
+    Ok(path)
+}
+
+/// The one back-up of ZCode's pre-strip bytes, if we ever made one.
+fn zcode_backup(paths: &Paths, config: &Path) -> io::Result<Option<PathBuf>> {
+    let name = config.file_name().unwrap_or_default().to_string_lossy();
+    let prefix = format!("{name}.codeisland.bak.");
+    let entries = match fs::read_dir(&paths.codeisland_dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    Ok(entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .find(|entry| entry.starts_with(&prefix))
+        .map(|entry| paths.codeisland_dir.join(entry)))
 }
 
 fn remove_file(path: &Path) -> io::Result<bool> {
