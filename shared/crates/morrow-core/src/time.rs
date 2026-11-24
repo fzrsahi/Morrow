@@ -73,6 +73,40 @@ pub fn parse_iso8601(raw: &str) -> Option<Timestamp> {
     Some(Timestamp(seconds as f64 + fraction))
 }
 
+/// The string `ISO8601DateFormatter` with `.withInternetDateTime` writes:
+/// `YYYY-MM-DDTHH:MM:SSZ`. Whole seconds, as `JSONEncoder.dateEncodingStrategy =
+/// .iso8601` stores them — a session's start does not need its milliseconds back.
+pub fn format_iso8601(instant: Timestamp) -> String {
+    let seconds = instant.0.floor();
+    let fraction = instant.0 - seconds;
+    // Rounding, not truncating: `.floor()` already moved the fraction aside.
+    let seconds = seconds as i64 + i64::from(fraction >= 0.999_5);
+    let days = seconds.div_euclid(86_400);
+    let rest = seconds.rem_euclid(86_400);
+    let (year, month, day) = civil_from_days(days);
+    let (hour, minute, second) = (rest / 3600, (rest % 3600) / 60, rest % 60);
+    format!("{year:04}-{month:02}-{day:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Howard Hinnant's inverse: the civil date of a day count since 1970-01-01.
+fn civil_from_days(days: i64) -> (i64, i64, i64) {
+    let days = days + 719_468;
+    let era = days.div_euclid(146_097);
+    let day_of_era = days.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let year = year_of_era + era * 400;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_ish = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_ish + 2) / 5 + 1;
+    let month = if month_ish < 10 {
+        month_ish + 3
+    } else {
+        month_ish - 9
+    };
+    (if month <= 2 { year + 1 } else { year }, month, day)
+}
+
 /// Howard Hinnant's civil-date algorithm: days since 1970-01-01.
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
@@ -86,6 +120,32 @@ fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn formatting_round_trips_through_the_parser() {
+        for raw in [
+            "2026-09-12T03:35:41Z",
+            "1970-01-01T00:00:00Z",
+            "2024-02-29T23:59:59Z",
+            "2000-03-01T12:00:00Z",
+            "1969-12-31T23:59:59Z",
+        ] {
+            let instant = parse_iso8601(raw).expect(raw);
+            assert_eq!(format_iso8601(instant), raw);
+        }
+    }
+
+    #[test]
+    fn a_fraction_is_dropped_to_the_second() {
+        let instant = parse_iso8601("2026-09-12T03:35:41.545Z").expect("a timestamp");
+        assert_eq!(format_iso8601(instant), "2026-09-12T03:35:41Z");
+    }
+
+    #[test]
+    fn an_offset_is_written_as_utc() {
+        let instant = parse_iso8601("2026-09-12T03:35:41+07:00").expect("a timestamp");
+        assert_eq!(format_iso8601(instant), "2026-09-11T20:35:41Z");
+    }
 
     #[test]
     fn internet_date_times_with_and_without_fractions() {
