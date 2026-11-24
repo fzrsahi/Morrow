@@ -21,6 +21,8 @@
 //!   hook or transcript row carries (`parsing`), and the list that applies
 //!   them (`list`).
 //! - [`digest`]: SHA-256, for the delivery digest of a hook Cursor ran.
+//! - [`quota`]: the Claude plan-limit model, usage-response parser and pure
+//!   refresh policy, with the clock and credentials handed in.
 #![forbid(unsafe_code)]
 
 pub mod agent_tasks;
@@ -34,6 +36,7 @@ pub mod intake;
 pub mod markdown;
 pub mod model_label;
 pub mod music;
+pub mod quota;
 pub mod path_identity;
 pub mod reduce;
 pub mod session_recap;
