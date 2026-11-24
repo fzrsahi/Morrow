@@ -316,6 +316,43 @@ fn grok_is_detected_by_its_root_not_by_a_home_directory() {
     assert!(!grok.installed);
 }
 
+/// #292: one product, two config layouts. The old CLI writes
+/// `~/.trae/traecli.yaml`; Next writes `~/.trae/cli/hooks.json`. Detecting Next
+/// from `~/.trae` alone would claim it is installed on a machine that only has
+/// the old CLI, and an install would create a config file under a CLI that is
+/// not there.
+#[test]
+fn trae_cli_next_is_detected_by_its_own_cli_directory() {
+    let home = Home::new("trae-two-layouts");
+    let status = |source: &str| {
+        hooks::targets_status(&home.paths())
+            .into_iter()
+            .find(|row| row.source == source)
+            .expect(source)
+    };
+
+    // Only the old CLI is present: its marker is `~/.trae/traecli.yaml`.
+    cli_dir(&home, ".trae");
+    home.write(&home.root.join(".trae/traecli.yaml"), "hooks: {}\n");
+    assert!(
+        !status("traecli-next").detected,
+        "the old CLI's directory is not Next's"
+    );
+    assert_eq!(
+        hooks::install_target(&home.paths(), "traecli-next", STAMP).expect("install"),
+        None,
+        "install must skip a CLI that is not here"
+    );
+    assert!(!home.root.join(".trae/cli").exists());
+
+    // Both are present: Next gets its own directory and its own file.
+    cli_dir(&home, ".trae/cli");
+    assert!(status("traecli-next").detected, "both CLIs are installed");
+    let next = status("traecli-next");
+    assert_eq!(next.path, home.root.join(".trae/cli/hooks.json"));
+    assert!(!next.installed);
+}
+
 /// #234 batch 1, end to end through the file system: install, repair, uninstall,
 /// and the user's own keys untouched — for a fork added only as a table row.
 #[test]
@@ -761,17 +798,30 @@ fn an_extension_is_rewritten_for_this_platforms_bridge() {
     assert!(!extension.exists());
 }
 
-/// A user who put their own `codeisland.ts` there keeps it.
+/// A user who put their own `codeisland.ts` there keeps it: neither install
+/// (replacing it) nor uninstall (deleting it) is ours to do (#311).
 #[test]
 fn a_users_own_extension_is_not_ours_to_replace_or_delete() {
     let home = Home::new("pi-own");
     let paths = home.paths();
     cli_dir(&home, ".pi");
     let extension = home.root.join(".pi/agent/extensions/codeisland.ts");
-    home.write(&extension, "// my own extension\nexport {};\n");
+    let mine = "// my own extension\nexport {};\n";
+    home.write(&extension, mine);
+
+    let refused = hooks::install_target(&paths, "pi", STAMP);
+    assert!(
+        refused.is_err(),
+        "install must refuse a file we did not write"
+    );
+    assert_eq!(home.read(&extension), mine, "install left it byte for byte");
 
     hooks::uninstall_target(&paths, "pi").expect("uninstall");
-    assert_eq!(home.read(&extension), "// my own extension\nexport {};\n");
+    assert_eq!(
+        home.read(&extension),
+        mine,
+        "uninstall left it byte for byte"
+    );
 }
 
 /// DSH is bridged by a third-party plugin, so there is nothing to install.

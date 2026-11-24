@@ -198,7 +198,9 @@ fn minimax_plugin_dir(paths: &Paths) -> PathBuf {
 
 /// The directory each CLI proves itself by. Codex keeps `~/.codex`, Gemini
 /// `~/.gemini`; a file the user has never run their CLI for is ours to leave
-/// alone.
+/// alone. A nested path is allowed: Trae CLI Next owns `~/.trae/cli`, while the
+/// older CLI only creates `~/.trae`, so sharing that directory would detect a
+/// CLI that is not installed.
 const CLI_DIRS: &[(&str, &str)] = &[
     ("codex", ".codex"),
     ("gemini", ".gemini"),
@@ -219,7 +221,8 @@ const CLI_DIRS: &[(&str, &str)] = &[
     ("qwen", ".qwen"),
     // #234 batch 2. Grok is deliberately absent: it hangs from `$GROK_HOME`, and a
     // target with its own root proves itself by that root existing.
-    ("traecli-next", ".trae"),
+    // `~/.trae` alone is the older CLI's marker; Next lives one level deeper.
+    ("traecli-next", ".trae/cli"),
     // #234 batch 3a. Kiro's marker is `.kiro`; its file lives under `agents/`,
     // which an install creates if the directory exists.
     ("trae", ".trae"),
@@ -741,13 +744,27 @@ fn install_extension(
             ))
         })?;
     let path = paths.home.join(relative);
-    if read_text(&path)?.as_deref() == Some(text.as_str()) {
-        return Ok(Some(Report::default()));
+    let existing = read_text(&path)?;
+    if let Some(existing_text) = existing.as_deref() {
+        // An extension someone else put here is theirs. Refuse rather than back
+        // it up and overwrite it — the same ownership rule uninstall applies
+        // (#311).
+        if !morrow_core::installer::extension::is_ours(existing_text) {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} holds an extension this installer did not write",
+                    path.display()
+                ),
+            )));
+        }
+        if existing_text == text {
+            return Ok(Some(Report::default()));
+        }
     }
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let existing = read_text(&path)?;
     let mut report = Report::default();
     if existing.is_some() {
         report.backup = back_up(&path, stamp)?;

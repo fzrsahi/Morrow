@@ -19,6 +19,7 @@
   import CompletionCard from './lib/components/CompletionCard.svelte';
   import Header from './lib/components/Header.svelte';
   import MusicDeck from './lib/components/MusicDeck.svelte';
+  import PrayerCard from './lib/components/PrayerCard.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
   import QuestionCard from './lib/components/QuestionCard.svelte';
@@ -72,6 +73,7 @@
     type SessionFilter,
     type Size,
   } from './lib/panel';
+  import { prayerCardModel } from './lib/prayer';
   import {
     SETTINGS_CHANGED_EVENT,
     SETTINGS_KEYS,
@@ -94,7 +96,15 @@
   } from './lib/music';
   import { MOTION, PALETTE, cssVariables, type Theme } from './lib/tokens';
   import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
-  import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
+  import type {
+    CapabilityRow,
+    Card,
+    Completion,
+    Decision,
+    PrayerSnapshot,
+    Session,
+    Snapshot,
+  } from './lib/types';
 
   // The display mode mirrors Swift's IslandDisplayMode: `.dynamicIsland` is
   // canvas B (floating pill, default — no hardware notch on Windows/Linux),
@@ -135,6 +145,11 @@
   // #191: the last finished turn. The shell has already decided (via the
   // attention policy) whether it is a card, a glance or nothing at all.
   let completion = $state<Completion | null>(null);
+  // #307: `null` until the shell has a real schedule for a saved city. Never
+  // seeded with a made-up time.
+  let prayer = $state<PrayerSnapshot | null>(null);
+  let prayerLayout = $state(0);
+  let prayerReady = $derived(prayer !== null);
   let seenCompletion = $state<string | null>(null);
   let expanded = $state(false);
   let closing = $state(false);
@@ -420,6 +435,17 @@
   // the same call: SettingsApp opens on the Hooks page by default.
   function openSettings() {
     invoke('open_settings');
+  }
+
+  // #307: the shell computes the schedule; this webview only adopts it. A
+  // failed read clears the card, so a stale countdown can never outlive the
+  // settings it came from.
+  async function readPrayer() {
+    try {
+      prayer = await invoke<PrayerSnapshot | null>('prayer_next');
+    } catch {
+      prayer = null;
+    }
   }
 
   // #185 — the shell owns the session store, so removing one is an input, not
@@ -820,6 +846,9 @@
     cards = snapshot.permissions;
     // #238 AC 9: the shell owns the reminder schedule, so it hands over the bells.
     reminderIds = snapshot.reminder_ids ?? [];
+    // #307: the shell carries the card in the snapshot; the `prayer_next`
+    // command is only the explicit refresh on mount and after a settings write.
+    prayer = snapshot.prayer ?? null;
     // #189: a field whose card was answered or dropped elsewhere must not
     // leave the island holding keys meant for the app underneath.
     if (questionFocus.ownerId !== null && !cards.some((c) => c.id === questionFocus.ownerId)) {
@@ -861,6 +890,47 @@
   // #201: arm one wake-up for the earliest due follow-up. The pure scheduler
   // owns the timeout and the once-per-request rule; this effect only arms and
   // cancels the timer and calls the shell. It shares #197's ambient gate: a
+  // locked screen or quiet hours arms no timer at all, and the first eligible
+  // pass catches a held-back reminder up. Answering or dropping the request
+  // re-syncs, leaving nothing left to schedule.
+  $effect(() => {
+    const room: ReminderRoom = {
+      capable: notificationsCapable,
+      locked: ambient.locked,
+      quiet: ambient.quiet,
+    };
+    // Reading `cards` (not the scheduler's private map) is what re-arms the
+    // wake-up on every feed push: a new request starts its clock, an answered
+    // or dropped one leaves the map and takes its bell with it.
+    reminders.sync(cards, performance.now());
+    const at = reminders.nextDue(performance.now(), room);
+    reminderIds = reminders.hinted();
+    if (at === null) return;
+    const timer = setTimeout(() => {
+      const due = reminders.collect(performance.now(), room);
+      reminderIds = reminders.hinted();
+      for (const reminder of due) {
+        invoke('notify_send', { title: reminder.title, body: reminder.body }).catch(
+          (error) => (hooksError = String(error)),
+        );
+      }
+    }, Math.max(0, at - performance.now()));
+    return () => clearTimeout(timer);
+  });
+
+  // #307: one shell tick a minute sends at most one reminder per fardh
+  // milestone (the shell's policy owns de-duplication). #307 review: this
+  // tick must NOT share #197's lock gate — a screen locked longer than the
+  // 15-minute reminder window would silently drop that milestone. Quiet hours
+  // still suppress the reminder, as on macOS.
+  $effect(() => {
+    if (!prayerReady || view.quiet) return;
+    const timer = setInterval(() => {
+      void invoke<number>('prayer_tick').then(() => readPrayer());
+    }, 60_000);
+    return () => clearInterval(timer);
+  });
+
   onMount(() => {
     const channel = new Channel<Snapshot>();
     channel.onmessage = acceptSnapshot;
@@ -878,6 +948,7 @@
         );
       })
       .catch(() => {});
+    void readPrayer();
     // #202: Settings lives in another webview. The shell emits one event after
     // every settings write; adopting the theme here needs no restart and does
     // not touch the fit/reportCards chain.
@@ -886,6 +957,8 @@
       const appearance = appearanceFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
+      // City/method/correction changes invalidate the card's schedule.
+      void readPrayer();
       reminders.configure(
         followUpMinutesFromSettings(
           (event.payload as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
@@ -964,7 +1037,7 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}|${completion ? completionKey(completion) : ''}`;
+    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}|${completion ? completionKey(completion) : ''}|${prayer?.next?.epoch_seconds ?? ''}|${prayer?.in_minutes ?? ''}|${prayerLayout}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -1051,6 +1124,9 @@
     />
     {#if tab === 'agents'}
       <div class="padded">
+        {#if prayerCardModel(prayer)}
+          <PrayerCard {prayer} onToggle={() => (prayerLayout += 1)} />
+        {/if}
         {#if completion && completionSession && completion.presentation !== 'status_only'}
           <CompletionCard
             {completion}
