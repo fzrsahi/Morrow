@@ -16,6 +16,7 @@
 //! Settings can say "no tray icon: no AppIndicator library" instead of the
 //! feature silently not working.
 
+pub mod agent_process;
 pub mod autostart;
 pub mod bridge;
 pub mod capability;
