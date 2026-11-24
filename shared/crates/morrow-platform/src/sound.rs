@@ -112,23 +112,11 @@ pub fn player(has: impl Fn(&str) -> bool) -> Option<Player> {
 pub fn player_on_path() -> Option<Player> {
     let path = std::env::var_os("PATH")?;
     let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
+    // The same lookup the Capability probe uses, so Settings cannot promise a
+    // sound the feed has no way to play.
     player(|tool| {
-        dirs.iter().any(|dir| {
-            let candidate = dir.join(tool);
-            let Ok(metadata) = std::fs::metadata(&candidate) else {
-                return false;
-            };
-            if !metadata.is_file() {
-                return false;
-            }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                metadata.permissions().mode() & 0o111 != 0
-            }
-            #[cfg(not(unix))]
-            true
-        })
+        dirs.iter()
+            .any(|dir| crate::runner::is_executable_tool(&dir.join(tool)))
     })
 }
 
