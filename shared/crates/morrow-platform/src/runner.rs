@@ -7,7 +7,6 @@
 //! without a desktop behind it.
 
 use std::path::Path;
-use std::process::Command;
 use std::io::Write;
 use std::process::{Command, Stdio};
 
