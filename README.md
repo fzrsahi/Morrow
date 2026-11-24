@@ -31,6 +31,7 @@
   <a href="#new-features">New Features</a> •
   <a href="#supported-tools">Supported tools</a> •
   <a href="docs/build-windows-linux.md">Linux / Windows</a> •
+  <a href="docs/fork-differences.md">From upstream</a> •
   <a href="#build-from-source">Build</a> •
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -444,6 +445,7 @@ We welcome contributions from everyone! Please check out [CONTRIBUTING.md](CONTR
 
 - Upstream original project: [wxtsky/CodeIsland](https://github.com/wxtsky/CodeIsland) by [@wxtsky](https://github.com/wxtsky) — thanks for creating the foundational notch agent tracker.
 - Inspired by [claude-island](https://github.com/farouqaldori/claude-island) by [@farouqaldori](https://github.com/farouqaldori).
+- What this fork changed: [docs/fork-differences.md](docs/fork-differences.md).
 
 ## License
 
