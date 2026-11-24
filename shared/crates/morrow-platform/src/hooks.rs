@@ -15,6 +15,7 @@ use morrow_core::installer::claude_hooks;
 use morrow_core::installer::codex_config;
 use morrow_core::installer::targets::{self, Root, Target};
 use morrow_core::installer::zcode;
+use serde_json::Value;
 
 /// Bumped when the script below changes, so an install from an older build is
 /// rewritten instead of left in place (`hookScriptVersion`).
@@ -88,7 +89,8 @@ pub struct TargetStatus {
     pub path: PathBuf,
 }
 
-/// Every target the core knows, in table order, plus ZCode's `{enabled, events}` wrapper.
+/// Every target the core knows, in table order, plus the two that are not one key
+/// in one file: ZCode's `{enabled, events}` wrapper and MiniMax's plugin pack.
 pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
     let mut rows: Vec<TargetStatus> = targets::TARGETS
         .iter()
@@ -107,6 +109,7 @@ pub fn targets_status(paths: &Paths) -> Vec<TargetStatus> {
         })
         .collect();
     rows.push(zcode_status(paths));
+    rows.push(minimax_status(paths));
     rows
 }
 
@@ -127,6 +130,60 @@ pub fn zcode_status(paths: &Paths) -> TargetStatus {
 
 fn zcode_path(paths: &Paths) -> PathBuf {
     paths.home.join(".zcode/cli/config.json")
+}
+
+/// MiniMax's pack: two files, so `installed` means both are current.
+pub fn minimax_status(paths: &Paths) -> TargetStatus {
+    let plugin = minimax_plugin_dir(paths);
+    let manifest = read_text(&plugin.join(".claude-plugin/plugin.json"))
+        .ok()
+        .flatten();
+    let hooks = read_text(&plugin.join("hooks/hooks.json")).ok().flatten();
+    // Swift's isMinimaxPluginInstalled compares the parsed document with the
+    // exact one we generate — a stale bridge path, timeout or event list is
+    // drift, not "installed". A substring check would miss all three.
+    let expected = morrow_core::installer::minimax::hooks_document(&format!(
+        "{command} --source minimax",
+        command = claude_hooks::HOOK_COMMAND
+    ));
+    let current = hooks
+        .as_deref()
+        .and_then(|text| serde_json::from_str::<Value>(text).ok());
+    TargetStatus {
+        source: "minimax",
+        name: "MiniMax Code",
+        detected: minimax_root(paths).is_dir(),
+        installed: manifest
+            .as_deref()
+            .is_some_and(morrow_core::installer::minimax::manifest_is_ours)
+            && current.as_ref() == Some(&expected),
+        path: plugin,
+    }
+}
+
+/// `$MINIMAX_DATA_DIR` or `$MAVIS_DATA_DIR`, expanded, else `~/.minimax`.
+fn minimax_root(paths: &Paths) -> PathBuf {
+    for key in ["MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"] {
+        if let Some(raw) = std::env::var(key).ok().map(|raw| raw.trim().to_owned()) {
+            if raw.is_empty() {
+                continue;
+            }
+            if raw == "~" {
+                return paths.home.clone();
+            }
+            if let Some(rest) = raw.strip_prefix("~/") {
+                return paths.home.join(rest);
+            }
+            return PathBuf::from(raw);
+        }
+    }
+    paths.home.join(".minimax")
+}
+
+fn minimax_plugin_dir(paths: &Paths) -> PathBuf {
+    minimax_root(paths)
+        .join("plugins")
+        .join(morrow_core::installer::minimax::PLUGIN_NAME)
 }
 
 /// The directory each CLI proves itself by. Codex keeps `~/.codex`, Gemini
@@ -180,10 +237,13 @@ pub fn install_target_with(
     stamp: &str,
     command: &str,
 ) -> Result<Option<Report>, Error> {
-    // ZCode is an installer of its own rather than a key in a file: it wraps
-    // its events beside a user-owned switch (#234 batch 3b).
-    if source == "zcode" {
-        return install_zcode(paths, stamp, command);
+    // Two sources are installers of their own rather than a key in a file: ZCode
+    // wraps its events beside a user-owned switch, and MiniMax loads hooks only
+    // from a plugin pack (#234 batch 3b).
+    match source {
+        "zcode" => return install_zcode(paths, stamp, command),
+        "minimax" => return install_minimax(paths, stamp, command),
+        _ => {}
     }
     let Some(target) = targets::target_for(source) else {
         return Err(Error::Io(io::Error::new(
@@ -239,8 +299,10 @@ fn enable_codex_hooks(paths: &Paths) -> Result<bool, Error> {
 
 /// Take one target's hook back out.
 pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, Error> {
-    if source == "zcode" {
-        return uninstall_zcode(paths);
+    match source {
+        "zcode" => return uninstall_zcode(paths),
+        "minimax" => return uninstall_minimax(paths),
+        _ => {}
     }
     let Some(target) = targets::target_for(source) else {
         return Err(Error::Io(io::Error::new(
@@ -339,6 +401,62 @@ fn uninstall_zcode(paths: &Paths) -> Result<Option<Report>, Error> {
     };
     if outcome.changed {
         fs::write(&path, &outcome.text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+/// MiniMax's plugin pack: two files under `<root>/plugins/morrow` (#234 batch 3b).
+///
+/// A pack someone else put there is refused, not overwritten — the manifest's
+/// marker is the only proof of authorship this installer has.
+fn install_minimax(paths: &Paths, _stamp: &str, command: &str) -> Result<Option<Report>, Error> {
+    if !minimax_root(paths).is_dir() {
+        return Ok(None);
+    }
+    let command = format!("{command} --source minimax");
+    let plugin = minimax_plugin_dir(paths);
+    let manifest_path = plugin.join(".claude-plugin/plugin.json");
+    if let Some(existing) = read_text(&manifest_path)? {
+        if !morrow_core::installer::minimax::manifest_is_ours(&existing) {
+            return Err(Error::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!(
+                    "{} holds a plugin this installer did not write",
+                    plugin.display()
+                ),
+            )));
+        }
+    }
+    let mut report = Report::default();
+    for (relative, text) in morrow_core::installer::minimax::files(&command) {
+        let path = plugin.join(relative);
+        if read_text(&path)?.as_deref() == Some(text.as_str()) {
+            continue;
+        }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+fn uninstall_minimax(paths: &Paths) -> Result<Option<Report>, Error> {
+    let path = minimax_plugin_dir(paths).join(".claude-plugin/plugin.json");
+    let Some(existing) = read_text(&path)? else {
+        return Ok(None);
+    };
+    if !morrow_core::installer::minimax::manifest_is_ours(&existing) {
+        return Ok(None);
+    }
+    let mut report = Report::default();
+    // The pack is entirely ours — two files in a directory named after us — so the
+    // whole directory goes, rather than a pack with no hooks in it left behind.
+    if let Some(plugin) = path.parent().and_then(|dir| dir.parent()) {
+        // #334: "uninstall membersihkan paket" must not fail silently.
+        fs::remove_dir_all(plugin)?;
         report.settings_changed = true;
     }
     Ok(Some(report))
