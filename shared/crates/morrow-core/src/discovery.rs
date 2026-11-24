@@ -548,6 +548,7 @@ pub mod transcript_files {
         pub modified_ms: u64,
     }
 
+<<<<<<< HEAD
     /// One file's modification time, in milliseconds, without listing its
     /// directory. `None` when it is not there.
     pub fn mtime_ms(path: &str) -> Option<u64> {
@@ -558,6 +559,8 @@ pub mod transcript_files {
             .map(|since| since.as_millis() as u64)
     }
 
+=======
+>>>>>>> origin/feat/#272-codex-rollouts
     /// The same listing with any extension, for a store that is not JSONL
     /// (Gemini's chats are `*.json`).
     pub fn list_any(directory: &str, extension: &str) -> Option<Vec<TranscriptFile>> {
@@ -903,6 +906,46 @@ mod flat_store_tests {
         );
         assert_eq!(flat_store::factory_model_from_settings("not json"), None);
         assert_eq!(flat_store::factory_model_from_settings("{}"), None);
+    }
+}
+
+#[cfg(test)]
+mod gemini_map_tests {
+    use super::gemini;
+
+    #[test]
+    fn the_projects_map_names_a_chat_folder_for_a_working_directory() {
+        let json = r#"{"projects":{"/home/dev/a":"abc123","/home/dev/b":"def456"}}"#;
+        let map = gemini::projects_map(json);
+        assert_eq!(map.get("/home/dev/a").map(String::as_str), Some("abc123"));
+        assert_eq!(map.get("/home/dev/b").map(String::as_str), Some("def456"));
+        assert_eq!(map.get("/home/dev/c"), None);
+    }
+
+    #[test]
+    fn a_map_that_is_not_a_map_is_empty_rather_than_a_panic() {
+        assert!(gemini::projects_map("").is_empty());
+        assert!(gemini::projects_map("not json").is_empty());
+        assert!(gemini::projects_map("{}").is_empty());
+        assert!(gemini::projects_map(r#"{"projects":"nope"}"#).is_empty());
+        // A non-string entry is skipped, the rest survives.
+        assert_eq!(
+            gemini::projects_map(r#"{"projects":{"/a":1,"/b":"two"}}"#)
+                .get("/b")
+                .map(String::as_str),
+            Some("two")
+        );
+    }
+
+    #[test]
+    fn a_project_root_file_matches_its_working_directory_trimmed() {
+        assert!(gemini::project_root_matches("/home/dev/a\n", "/home/dev/a"));
+        assert!(gemini::project_root_matches(
+            "  /home/dev/a  ",
+            "/home/dev/a"
+        ));
+        assert!(!gemini::project_root_matches("/home/dev/b", "/home/dev/a"));
+        assert!(!gemini::project_root_matches("", "/home/dev/a"));
     }
 }
 

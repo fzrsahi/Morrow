@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use morrow_core::attention::CompletionStyle;
 use morrow_core::reduce::SideEffect;
@@ -44,6 +44,23 @@ const TAIL_POLL: Duration = Duration::from_millis(200);
 /// One liveness round per second: well inside the five seconds a dead CLI
 /// has to disappear from the panel (#198).
 const PRUNE_POLL: Duration = Duration::from_secs(1);
+
+/// One discovery tick, end to end (#274). The scan's own 250 ms budget is
+/// **inside** this window, not added to it, so a visible panel really looks
+/// four times a second. The gap policy (#259) decides which ticks scan.
+const DISCOVERY_TICK: Duration = Duration::from_millis(250);
+
+/// Sleep only what is left after the scan. A tick that overran the budget
+/// starts the next one at once instead of adding another full delay.
+fn discovery_tick_delay(elapsed: Duration) -> Duration {
+    DISCOVERY_TICK.saturating_sub(elapsed)
+}
+
+/// The data dir `backfill` passed before the tick was added (#274). The tick
+/// shares it so turning the panel visible cannot move a store root.
+fn discovery_data_dir(home: &std::path::Path) -> std::path::PathBuf {
+    home.join(".local/share")
+}
 
 /// Where a decided sound goes (#241). Production leaves it `None` and the
 /// platform plays it; a test installs a recorder, because "a locked screen is
@@ -384,15 +401,27 @@ impl Feed {
         self.backfill_with(scan)
     }
 
+<<<<<<< HEAD
     /// Polls the policy forever. One second of granularity is enough for a
     /// five-second gap, and it costs a mutex read when nothing is due.
+=======
+    /// Polls the policy forever, once per `DISCOVERY_TICK`. A quarter second
+    /// is plenty of granularity for a five-second gap, and when nothing is due
+    /// the tick costs one mutex read.
+>>>>>>> origin/feat/#272-codex-rollouts
     pub fn spawn_discovery(feed: Arc<Self>) {
         thread::Builder::new()
             .name("morrow-discovery".into())
             .spawn(move || {
                 loop {
+<<<<<<< HEAD
                     thread::sleep(Duration::from_millis(250));
                     feed.tick_discovery(now_ms());
+=======
+                    let started = Instant::now();
+                    feed.tick_discovery(now_ms());
+                    thread::sleep(discovery_tick_delay(started.elapsed()));
+>>>>>>> origin/feat/#272-codex-rollouts
                 }
             })
             .expect("spawn the discovery thread");
@@ -419,13 +448,19 @@ impl Feed {
 
     fn scan_stores_in(&self, home: &std::path::Path) -> morrow_core::discovery::scan::ScanResult {
         // Claude Code's config dir comes from the installer's own ladder (#258),
-        // so discovery reads the folder the hooks were written into.
+        // so discovery reads the folder the hooks were written into. The data
+        // dir stays the one `backfill` used before the tick: sharing these roots
+        // must not quietly move Codex's or OpenCode's stores.
         let config_dir = crate::hooks::claude_config_dir(
             home,
             std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
         )
         .unwrap_or_else(|| home.join(".claude"));
+<<<<<<< HEAD
         crate::discovery::scan_once(&config_dir, home)
+=======
+        crate::discovery::scan_once(&config_dir, &discovery_data_dir(home))
+>>>>>>> origin/feat/#272-codex-rollouts
     }
 
     /// One discovery scan, integrated as ordinary sessions.
@@ -741,6 +776,35 @@ mod tests {
         );
     }
 
+<<<<<<< HEAD
+=======
+    /// The tick shares `backfill`'s roots, so it must not move where Codex and
+    /// OpenCode are looked for: `~/.local/share`, as before the tick existed.
+    #[test]
+    fn the_tick_keeps_backfills_store_root() {
+        let home = Path::new("/home/someone");
+        assert_eq!(
+            discovery_data_dir(home),
+            PathBuf::from("/home/someone/.local/share")
+        );
+    }
+
+    /// A tick is one 250 ms window, scan included — not 250 ms of sleep after
+    /// up to 250 ms of scanning. An overrun starts the next tick at once.
+    #[test]
+    fn a_tick_sleeps_only_what_is_left_of_its_budget() {
+        assert_eq!(
+            discovery_tick_delay(Duration::from_millis(10)),
+            Duration::from_millis(240)
+        );
+        assert_eq!(discovery_tick_delay(DISCOVERY_TICK), Duration::ZERO);
+        assert_eq!(
+            discovery_tick_delay(Duration::from_millis(300)),
+            Duration::ZERO
+        );
+    }
+
+>>>>>>> origin/feat/#272-codex-rollouts
     /// A store that is not there adds nothing and does not mark the feed dirty.
     #[test]
     fn an_empty_scan_changes_nothing() {
