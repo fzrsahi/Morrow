@@ -492,11 +492,13 @@ impl Feed {
         book.sync_display_only(
             morrow_core::follow_up::FollowUpKind::Approval,
             &display_approvals,
+            &island_holds,
             now,
         );
         book.sync_display_only(
             morrow_core::follow_up::FollowUpKind::Question,
             &display_questions,
+            &island_holds,
             now,
         );
         let due = book.tick(&cards, held_back, now);

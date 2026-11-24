@@ -172,9 +172,9 @@ impl PushContent {
     /// reminder; one about an approval must.
     pub fn blocks_agent(&self) -> bool {
         match self {
-            Self::Reminder { pending, .. } => {
-                pending.as_ref().is_none_or(|pending| pending.blocks_agent())
-            }
+            Self::Reminder { pending, .. } => pending
+                .as_ref()
+                .is_none_or(|pending| pending.blocks_agent()),
             Self::AnswerElsewhere { pending, .. } => pending.blocks_agent(),
             _ => self.kind().blocks_agent(),
         }
