@@ -256,11 +256,13 @@ pub fn reduce_aiwork_frame(
 
     let before = display_only_wait::kind(before_status, island_holds_request);
     let after = display_only_wait::kind(snapshot.status, island_holds_request);
-    if after.is_some() && after != before {
-        return Some(AttentionMoment::DisplayOnlyWaitBegan {
-            kind: reminder_kind(after.expect("checked")),
-            announce: true,
-        });
+    if let Some(after_kind) = after {
+        if Some(after_kind) != before {
+            return Some(AttentionMoment::DisplayOnlyWaitBegan {
+                kind: reminder_kind(after_kind),
+                announce: true,
+            });
+        }
     }
     match event_name {
         "stream.started" => Some(AttentionMoment::TurnStarted { new_session }),
