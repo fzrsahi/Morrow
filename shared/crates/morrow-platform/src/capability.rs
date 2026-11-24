@@ -615,10 +615,11 @@ impl Environment {
     }
 
     pub fn has(&self, tool: &str) -> bool {
+        // Only PATH entries: a stray file in the working directory is not a
+        // tool the shell can spawn, so it may not make a row say "Supported".
         self.path_tools
             .iter()
             .any(|entry| Path::new(entry).join(tool).is_file())
-            || Path::new(tool).exists()
     }
 
     fn has_any(&self, tools: &[&str]) -> bool {

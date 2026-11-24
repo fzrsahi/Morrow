@@ -181,6 +181,10 @@ struct NotchPanelView: View {
     let notchHeight: CGFloat
     let notchW: CGFloat
     let screenWidth: CGFloat
+    var displayModeOverride: IslandDisplayMode? = nil
+    var isFullscreenOverride: Bool? = nil
+    var isPrimaryCoordinator: Bool = true
+    var onHoverChanged: ((Bool) -> Void)? = nil
 
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
@@ -190,7 +194,10 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.collapsedWidthScale) private var collapsedWidthScale = SettingsDefaults.collapsedWidthScale
     @AppStorage(SettingsKey.islandDisplayMode) private var islandDisplayModeRaw = SettingsDefaults.islandDisplayMode
     private var displayMode: IslandDisplayMode {
-        IslandDisplayMode.resolved(from: islandDisplayModeRaw)
+        displayModeOverride ?? IslandDisplayMode.resolved(from: islandDisplayModeRaw)
+    }
+    private var isFullscreenActive: Bool {
+        isFullscreenOverride ?? appState.isFullscreenMode
     }
     @AppStorage(SettingsKey.showClaudeQuota) private var showClaudeQuota = SettingsDefaults.showClaudeQuota
     @AppStorage(SettingsKey.claudeQuotaChip) private var claudeQuotaChip = SettingsDefaults.claudeQuotaChip
@@ -325,6 +332,7 @@ struct NotchPanelView: View {
     @State private var quotaChipWidth: CGFloat = 0
     /// Measured width of the collapsed left wing (0 until first laid out).
     @State private var leftWingWidth: CGFloat = 0
+    @State private var chargingAmbientPulse = false
     /// Measured width of the collapsed right wing (0 until first laid out).
     @State private var rightWingWidth: CGFloat = 0
     @State private var isHoveringRightWing = false
@@ -360,13 +368,21 @@ struct NotchPanelView: View {
         notchHeight: CGFloat,
         notchW: CGFloat,
         screenWidth: CGFloat,
-        initialTab: ExpandedContentTab = .agents
+        initialTab: ExpandedContentTab = .agents,
+        displayModeOverride: IslandDisplayMode? = nil,
+        isFullscreenOverride: Bool? = nil,
+        isPrimaryCoordinator: Bool = true,
+        onHoverChanged: ((Bool) -> Void)? = nil
     ) {
         self.appState = appState
         self.hasNotch = hasNotch
         self.notchHeight = notchHeight
         self.notchW = notchW
         self.screenWidth = screenWidth
+        self.displayModeOverride = displayModeOverride
+        self.isFullscreenOverride = isFullscreenOverride
+        self.isPrimaryCoordinator = isPrimaryCoordinator
+        self.onHoverChanged = onHoverChanged
         if initialTab != .agents {
             self.appState.expandedTab = initialTab
         } else if ProcessInfo.processInfo.arguments.contains("workspace") {
@@ -385,7 +401,7 @@ struct NotchPanelView: View {
     private var showBar: Bool {
         if workspaceManager.testWingPreview == .emptyIdle { return false }
         if workspaceManager.testWingPreview == .nonGitIdle || workspaceManager.testWingPreview == .nonGitThinking { return true }
-        if signals.isPlaying || nowPlaying.isPlaying || signals.showMiniPeekBanner || signals.showChargingBanner || mailManager.showMailArrivalAnimation || PrayerTimeManager.shared.testWingThinking { return true }
+        if signals.isPlaying || nowPlaying.isPlaying || mailManager.showMailArrivalAnimation || PrayerTimeManager.shared.testWingThinking { return true }
         return isActive && !(hideWhenNoSession && appState.activeSessionCount == 0)
     }
     private var shouldShowExpanded: Bool {
@@ -414,6 +430,7 @@ struct NotchPanelView: View {
     }
 
     private func triggerMusicAutoPeek() {
+        guard isPrimaryCoordinator else { return }
         guard !appState.surface.isPrompting,
               expandedTab != .game,
               !appState.isGameInteractionLocked else { return }
@@ -445,6 +462,7 @@ struct NotchPanelView: View {
     }
 
     private func triggerMailAutoPeek() {
+        guard isPrimaryCoordinator else { return }
         guard !appState.surface.isPrompting else { return }
         mailAutoCollapseTimer?.invalidate()
         mailDeferCollapseOnMouseLeave = false
@@ -868,11 +886,12 @@ struct NotchPanelView: View {
             return min(max(baseWidth, minWidth), maxPanelWidth)
         }
         if isToastOnly {
+            let targetToastWidth: CGFloat = signals.showMiniPeekBanner ? 500 : 380
             if displayMode == .dynamicIsland && !hasNotch {
-                return min(280, maxPanelWidth)
+                return min(targetToastWidth, maxPanelWidth)
             }
             let requiredActiveBarWidth = nw + symmetricWingWidth * 2
-            return min(max(280, requiredActiveBarWidth), maxPanelWidth)
+            return min(max(targetToastWidth, requiredActiveBarWidth), maxPanelWidth)
         }
         if showIdleIndicator {
             if displayMode == .dynamicIsland && !hasNotch {
@@ -925,12 +944,6 @@ struct NotchPanelView: View {
             return min(CGFloat(width) + prehoverExtra, maxSafe)
         }
         let requiredActiveBarWidth = collapsedNotchGapWidth + collapsedLeftWingWidth + collapsedRightWingWidth
-        if signals.showChargingBanner && !appState.surface.isExpanded {
-            return min(max(280, requiredActiveBarWidth), maxPanelWidth)
-        }
-        if signals.showMiniPeekBanner && !appState.surface.isExpanded {
-            return min(max(280, requiredActiveBarWidth), maxPanelWidth)
-        }
         let maxSafeCollapsed = maxSafeCollapsedBarWidth
         return min(requiredActiveBarWidth, maxSafeCollapsed)
     }
@@ -985,6 +998,7 @@ struct NotchPanelView: View {
     }
 
     private func handleStatusChange(_ newStatus: AgentStatus) {
+        guard isPrimaryCoordinator else { return }
         if newStatus == .idle {
             workspaceManager.refresh()
         }
@@ -1066,7 +1080,7 @@ struct NotchPanelView: View {
             musicAutoCollapseTimer = nil
             musicDeferCollapseOnMouseLeave = false
         }
-        if newTab == .workspace {
+        if isPrimaryCoordinator && newTab == .workspace {
             workspaceManager.resolveAndRefreshWorkspace(appState: appState)
         }
     }
@@ -1303,7 +1317,7 @@ struct NotchPanelView: View {
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             }
-        } else if appState.isFullscreenMode {
+        } else if isFullscreenActive {
             RoundedRectangle(cornerRadius: 7)
                 .fill(Color.black)
                 .overlay(
@@ -1312,20 +1326,325 @@ struct NotchPanelView: View {
                 )
                 .shadow(color: Color.black.opacity(0.8), radius: 8, y: 4)
         } else {
-            NotchPanelShape(
+            let shape = NotchPanelShape(
                 topExtension: currentTopExt,
                 bottomRadius: currentBottomRadius,
                 minHeight: effectiveNotchHeight
             )
-            .fill(Color.black)
-            .overlay(
-                NotchPanelShape(
-                    topExtension: currentTopExt,
-                    bottomRadius: currentBottomRadius,
-                    minHeight: effectiveNotchHeight
+            shape
+                .fill(Color.black)
+                .overlay(chargingAmbientLayer(for: shape))
+                .overlay(prayerAmbientLayer(for: shape))
+                .overlay(
+                    shape.stroke(
+                        signals.showChargingBanner && !appState.surface.isExpanded
+                            ? chargingAmbientColor.opacity(chargingAmbientStrokeOpacity)
+                            : (signals.showMiniPeekBanner && !appState.surface.isExpanded
+                                ? prayerAmbientAccentColor.opacity(0.22)
+                                : currentStrokeColor),
+                        lineWidth: currentStrokeWidth
+                    )
                 )
-                .stroke(currentStrokeColor, lineWidth: currentStrokeWidth)
-            )
+        }
+    }
+
+    private var chargingAmbientColor: Color {
+        sys.activeBannerState.accentColor
+    }
+
+    private var chargingAmbientBaseOpacity: Double {
+        switch sys.activeBannerState {
+        case .charging:
+            return 0.18
+        case .onHold:
+            return chargingAmbientPulse ? 0.20 : 0.12
+        case .fullyCharged:
+            return 0.20
+        case .lowBattery:
+            return chargingAmbientPulse ? 0.26 : 0.04
+        }
+    }
+
+    private var chargingAmbientStrokeOpacity: Double {
+        switch sys.activeBannerState {
+        case .charging:
+            return chargingAmbientPulse ? 0.34 : 0.20
+        case .onHold:
+            return chargingAmbientPulse ? 0.28 : 0.18
+        case .fullyCharged:
+            return 0.26
+        case .lowBattery:
+            return chargingAmbientPulse ? 0.38 : 0.08
+        }
+    }
+
+    private static let bayer4Matrix: [[Double]] = [
+        [ 0,  8,  2, 10],
+        [12,  4, 14,  6],
+        [ 3, 11,  1,  9],
+        [15,  7, 13,  5]
+    ]
+
+    @ViewBuilder
+    private func chargingBayerDitherLayer<S: Shape>(for shape: S) -> some View {
+        let isStaticFull: Bool = {
+            if case .fullyCharged = sys.activeBannerState { return true }
+            return false
+        }()
+
+        if isStaticFull {
+            chargingBayerDitherCanvas(time: 0)
+                .padding(.horizontal, -16)
+                .clipShape(shape)
+        } else {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                chargingBayerDitherCanvas(time: context.date.timeIntervalSinceReferenceDate)
+            }
+            .padding(.horizontal, -16)
+            .clipShape(shape)
+        }
+    }
+
+    private func bayerDitherCanvas(
+        maxHeight: Double,
+        color: Color,
+        opacity: Double,
+        wingCenter: Double,
+        wingFloor: Double,
+        intensityTransform: @escaping (Double, Double, Double) -> Double
+    ) -> some View {
+        Canvas { ctx, size in
+            let w = Double(size.width)
+            let maxY = min(maxHeight, Double(size.height))
+            let cell = 3.0
+            let dotColor = color.opacity(opacity)
+
+            var y = 0.0
+            var rowIdx = 0
+            while y < maxY {
+                let ny = y / maxHeight
+                let bayerRow = Self.bayer4Matrix[rowIdx & 3]
+                var x = 0.0
+                var colIdx = 0
+                while x < w {
+                    let nx = x / max(1.0, w)
+                    let leftBoost = exp(-pow((nx - wingCenter) / 0.18, 2.0))
+                    let rightBoost = exp(-pow((nx - (1.0 - wingCenter)) / 0.18, 2.0))
+                    let wingBoost = max(leftBoost, rightBoost, wingFloor)
+                    let baseIntensity = (1.0 - ny) * 0.72 * wingBoost
+                    let intensity = intensityTransform(nx, ny, baseIntensity)
+
+                    let threshold = bayerRow[colIdx & 3] / 16.0
+                    if intensity > threshold + 0.08 {
+                        ctx.fill(
+                            Path(CGRect(x: x, y: y, width: cell - 1.0, height: cell - 1.0)),
+                            with: .color(dotColor)
+                        )
+                    }
+                    x += cell
+                    colIdx += 1
+                }
+                y += cell
+                rowIdx += 1
+            }
+        }
+    }
+
+    private func chargingBayerDitherCanvas(time t: TimeInterval) -> some View {
+        let state = sys.activeBannerState
+        let sweep = ((t.truncatingRemainder(dividingBy: 1.8)) / 1.8) * 1.4 - 0.2
+        let freq: Double = {
+            if case .lowBattery = state { return 6.5 }
+            return 2.4
+        }()
+        let pulse = 0.5 + 0.5 * sin(t * freq)
+
+        return bayerDitherCanvas(
+            maxHeight: 44.0,
+            color: chargingAmbientColor,
+            opacity: 0.28,
+            wingCenter: 0.12,
+            wingFloor: 0.45
+        ) { nx, ny, base in
+            switch state {
+            case .charging:
+                let wave = exp(-pow((nx - sweep) / 0.14, 2.0)) * (1.0 - ny * 0.7)
+                return min(1.0, base * 0.75 + wave * 0.85)
+            case .onHold:
+                return base * (0.55 + 0.30 * pulse)
+            case .fullyCharged:
+                return base
+            case .lowBattery:
+                return base * (0.20 + 0.80 * pulse)
+            }
+        }
+    }
+
+    private var prayerAmbientAccentColor: Color {
+        let isModern = islandUITheme != IslandUITheme.pixel.rawValue
+        if (syncThemeWithAlbumArt || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
+        }
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: isModern)
+        )
+    }
+
+    @ViewBuilder
+    private func prayerAmbientLayer<S: Shape>(for shape: S) -> some View {
+        if signals.showMiniPeekBanner && !appState.surface.isExpanded {
+            let prayerAccent = prayerAmbientAccentColor
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                let t = context.date.timeIntervalSinceReferenceDate
+                let breath = 0.72 + 0.28 * (0.5 + 0.5 * sin(t * 2.1))
+                if islandUITheme == IslandUITheme.pixel.rawValue {
+                    bayerDitherCanvas(
+                        maxHeight: 90.0,
+                        color: prayerAccent,
+                        opacity: 0.20 * breath,
+                        wingCenter: 0.10,
+                        wingFloor: 0.52
+                    ) { _, _, base in
+                        base * 0.94 * breath
+                    }
+                    .padding(.horizontal, -16)
+                    .clipShape(shape)
+                } else {
+                    ZStack {
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [prayerAccent.opacity(0.18 * breath), Color.clear],
+                                center: UnitPoint(x: 0.12, y: 0.0),
+                                startRadiusFraction: 0.02,
+                                endRadiusFraction: 0.52
+                            )
+                        )
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [prayerAccent.opacity(0.18 * breath), Color.clear],
+                                center: UnitPoint(x: 0.88, y: 0.0),
+                                startRadiusFraction: 0.02,
+                                endRadiusFraction: 0.52
+                            )
+                        )
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [prayerAccent.opacity(0.12 * breath), Color.clear],
+                                center: UnitPoint(x: 0.5, y: 0.42),
+                                startRadiusFraction: 0.04,
+                                endRadiusFraction: 0.68
+                            )
+                        )
+                    }
+                }
+            }
+            .transition(.opacity)
+        }
+    }
+
+    @ViewBuilder
+    private func chargingAmbientLayer<S: Shape>(for shape: S) -> some View {
+        if signals.showChargingBanner && !appState.surface.isExpanded {
+            if islandUITheme == IslandUITheme.pixel.rawValue {
+                chargingBayerDitherLayer(for: shape)
+                    .transition(.opacity)
+            } else {
+                let wingY: CGFloat = 0.0
+            ZStack {
+                // Flush top-edge wash so there is no black band above the glow
+                shape.fill(
+                    LinearGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.55),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: UnitPoint(x: 0.5, y: 0.26)
+                    )
+                )
+                // Left & right wing glows (flush to top corners beside physical M2 notch)
+                shape.fill(
+                    EllipticalGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity),
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.3),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.08, y: wingY),
+                        startRadiusFraction: 0.02,
+                        endRadiusFraction: 0.48
+                    )
+                )
+                shape.fill(
+                    EllipticalGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity),
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.3),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.92, y: wingY),
+                        startRadiusFraction: 0.02,
+                        endRadiusFraction: 0.48
+                    )
+                )
+                // Soft bridge just below the hardware notch so it connects seamlessly
+                shape.fill(
+                    EllipticalGradient(
+                        colors: [
+                            chargingAmbientColor.opacity(chargingAmbientBaseOpacity * 0.75),
+                            Color.clear
+                        ],
+                        center: UnitPoint(x: 0.5, y: hasNotch ? 0.14 : 0.02),
+                        startRadiusFraction: 0.04,
+                        endRadiusFraction: 0.54
+                    )
+                )
+
+                if case .charging = sys.activeBannerState {
+                    TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                        let cycle = 1.8
+                        let progress = context.date.timeIntervalSinceReferenceDate
+                            .truncatingRemainder(dividingBy: cycle) / cycle
+                        let sweepX = -0.35 + progress * 1.70
+                        shape.fill(
+                            EllipticalGradient(
+                                colors: [
+                                    chargingAmbientColor.opacity(0.28),
+                                    chargingAmbientColor.opacity(0.10),
+                                    Color.clear
+                                ],
+                                center: UnitPoint(x: sweepX, y: wingY),
+                                startRadiusFraction: 0.02,
+                                endRadiusFraction: 0.42
+                            )
+                        )
+                    }
+                }
+            }
+            .transition(.opacity)
+            }
+        }
+    }
+
+    private func updateChargingAmbientAnimation(visible: Bool) {
+        chargingAmbientPulse = false
+        guard visible else { return }
+
+        switch sys.activeBannerState {
+        case .charging:
+            withAnimation(.easeInOut(duration: 1.35).repeatForever(autoreverses: true)) {
+                chargingAmbientPulse = true
+            }
+        case .onHold:
+            withAnimation(.easeInOut(duration: 2.6).repeatForever(autoreverses: true)) {
+                chargingAmbientPulse = true
+            }
+        case .fullyCharged:
+            break
+        case .lowBattery:
+            withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
+                chargingAmbientPulse = true
+            }
         }
     }
 
@@ -1335,62 +1654,83 @@ struct NotchPanelView: View {
                 let isFlushNonNotchToast = displayMode == .dynamicIsland && !hasNotch && isToastOnly && !shouldShowExpanded
                 if isFlushNonNotchToast {
                     belowNotchContent
-                        .frame(height: effectiveNotchHeight)
+                        .frame(minHeight: effectiveNotchHeight)
                 } else {
-                    if showBar || shouldShowExpanded {
-                        activeCompactBar
-                    } else if showIdleIndicator {
-                        IdleIndicatorBar(
-                            mascotSize: mascotSize,
-                            wingWidth: idleLeftIndicatorWingWidth,
-                            rightWingWidth: idleIndicatorWingWidth,
-                            notchW: collapsedNotchGapWidth,
-                            notchHeight: notchHeight,
-                            hasNotch: hasNotch,
-                            hovered: idleHovered,
-                            displayMode: displayMode,
-                            onExpand: {
-                                withAnimation(NotchAnimation.open) {
-                                    if signals.isPrayerPrioritized {
-                                        appState.transitionToTab(.prayer)
-                                    } else if signals.isPlaying || nowPlaying.isPlaying {
-                                        appState.transitionToTab(.music)
-                                    } else {
-                                        appState.transitionToTab(.agents)
+                    Group {
+                        if showBar || shouldShowExpanded {
+                            activeCompactBar
+                        } else if showIdleIndicator {
+                            IdleIndicatorBar(
+                                mascotSize: mascotSize,
+                                wingWidth: idleLeftIndicatorWingWidth,
+                                rightWingWidth: idleIndicatorWingWidth,
+                                notchW: collapsedNotchGapWidth,
+                                notchHeight: notchHeight,
+                                hasNotch: hasNotch,
+                                hovered: idleHovered,
+                                displayMode: displayMode,
+                                onExpand: {
+                                    withAnimation(NotchAnimation.open) {
+                                        if signals.isPrayerPrioritized {
+                                            appState.transitionToTab(.prayer)
+                                        } else if signals.isPlaying || nowPlaying.isPlaying {
+                                            appState.transitionToTab(.music)
+                                        } else {
+                                            appState.transitionToTab(.agents)
+                                        }
+                                        appState.surface = .sessionList
                                     }
-                                    appState.surface = .sessionList
+                                },
+                                onOpenMail: {
+                                    withAnimation(NotchAnimation.open) {
+                                        appState.transitionToTab(.mail)
+                                        appState.surface = .sessionList
+                                    }
                                 }
-                            },
-                            onOpenMail: {
-                                withAnimation(NotchAnimation.open) {
-                                    appState.transitionToTab(.mail)
-                                    appState.surface = .sessionList
-                                }
-                            }
-                        )
-                    } else {
-                        // Idle: just the notch shell
-                        Spacer()
-                            .frame(height: notchHeight)
+                            )
+                        } else {
+                            // Idle: just the notch shell
+                            Spacer()
+                                .frame(height: notchHeight)
+                        }
                     }
+                    .fixedSize(horizontal: !shouldShowExpanded, vertical: false)
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .opacity(isToastOnly ? 0 : 1)
+                    .blur(radius: isToastOnly ? 3 : 0)
+                    .scaleEffect(isToastOnly ? 0.92 : 1.0)
+                    .allowsHitTesting(!isToastOnly)
+                    .animation(.easeInOut(duration: 0.19), value: isToastOnly)
 
                     // Below-notch expanded content
                     if shouldShowExpanded || isToastOnly || signals.showChargingBanner {
                         belowNotchContent
+                            .frame(maxWidth: .infinity)
+                            .clipped()
                     }
                 }
             }
             .recordsCompletionCardChrome(in: cardSpace)
             .frame(width: panelWidth)
-            .clipShape(displayMode == .dynamicIsland ? dynamicIslandShape : AnyShape(Rectangle()))
-            .animation(.spring(response: 0.40, dampingFraction: 0.84), value: panelWidth)
+            .background(panelChromeBackground)
+            .clipShape(
+                displayMode == .dynamicIsland
+                    ? dynamicIslandShape
+                    : (appState.isFullscreenMode
+                        ? AnyShape(RoundedRectangle(cornerRadius: 7))
+                        : AnyShape(NotchPanelShape(
+                            topExtension: currentTopExt,
+                            bottomRadius: currentBottomRadius,
+                            minHeight: effectiveNotchHeight
+                        )))
+            )
+            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: panelWidth)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: shouldShowExpanded)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: displayMode)
-            .animation(.spring(response: 0.40, dampingFraction: 0.84), value: signals.showMiniPeekBanner)
-            .animation(.spring(response: 0.40, dampingFraction: 0.84), value: signals.showChargingBanner)
+            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: signals.showMiniPeekBanner)
+            .animation(.spring(response: 0.38, dampingFraction: 0.86), value: signals.showChargingBanner)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: mailManager.showMailArrivalAnimation)
             .animation(.spring(response: 0.38, dampingFraction: 0.82), value: expandedTab)
-            .background(panelChromeBackground)
             .offset(y: curtainOffset)
             .opacity(curtainOpacity)
             .onChange(of: showToolStatus) { _, newValue in
@@ -1413,29 +1753,35 @@ struct NotchPanelView: View {
             }
             .onAppear {
                 displayedToolStatus = showToolStatus
-                prayerManager.appState = appState
+                if isPrimaryCoordinator {
+                    prayerManager.appState = appState
+                }
             }
             .onChange(of: signals.musicTitle) { oldTitle, newTitle in
-                if !newTitle.isEmpty && newTitle != oldTitle && signals.isPlaying {
+                if isPrimaryCoordinator && !newTitle.isEmpty && newTitle != oldTitle && signals.isPlaying {
                     triggerMusicAutoPeek()
                 }
             }
             .onChange(of: signals.isPlaying) { _, isPlaying in
-                if isPlaying && expandedTab == .music && appState.surface.isExpanded {
+                if isPrimaryCoordinator && isPlaying && expandedTab == .music && appState.surface.isExpanded {
                     appState.transitionToTab(.music)
                 }
             }
             .onChange(of: appState.activeSessionId) { _, sid in
-                if let sid = sid, let cwd = appState.sessions[sid]?.cwd {
+                if isPrimaryCoordinator, let sid = sid, let cwd = appState.sessions[sid]?.cwd {
                     workspaceManager.updateCwdIfNeeded(cwd)
                 }
             }
             .onChange(of: appState.status) { _, newStatus in
                 handleStatusChange(newStatus)
-                prayerManager.checkAndFlushPendingBanner(appState: appState)
+                if isPrimaryCoordinator {
+                    prayerManager.checkAndFlushPendingBanner(appState: appState)
+                }
             }
             .onChange(of: appState.surface) { _, _ in
-                prayerManager.checkAndFlushPendingBanner(appState: appState)
+                if isPrimaryCoordinator {
+                    prayerManager.checkAndFlushPendingBanner(appState: appState)
+                }
             }
             .scaleEffect(shouldShowPrehover ? NotchHoverInteraction.prehoverScale : 1, anchor: .top)
             .contentShape(Rectangle())
@@ -1443,7 +1789,19 @@ struct NotchPanelView: View {
                 // The pointer is on the island itself — what follow-up
                 // reminders count as "reading this card" — whatever the
                 // hover then does to the surface below.
-                appState.followUps.pointerOverIsland = hovering
+                if let onHoverChanged {
+                    onHoverChanged(hovering)
+                } else {
+                    appState.followUps.pointerOverIsland = hovering
+                }
+                // Toast banners (charging / prayer mini-peek) own their own hover-hold;
+                // never auto-expand into the full session list while a toast is visible.
+                if isToastOnly {
+                    hoverTimer?.invalidate()
+                    hoverTimer = nil
+                    isHovered = hovering
+                    return
+                }
                 // Idle indicator hover — delay un-hover to prevent oscillation when
                 // the animated width change crosses the mouse position (#52).
                 if showIdleIndicator && !appState.surface.isExpanded {
@@ -1597,7 +1955,7 @@ struct NotchPanelView: View {
                     hoverTimer?.invalidate()
                     hoverTimer = Timer.scheduledTimer(withTimeInterval: NotchHoverInteraction.collapseDelay, repeats: false) { _ in
                         Task { @MainActor in
-                            guard !isHovered && !appState.isGameInteractionLocked else { return }
+                            guard !isHovered && !appState.followUps.pointerOverIsland && !appState.isGameInteractionLocked else { return }
                             hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .collapseDelayElapsed)
                             withAnimation(NotchAnimation.close) {
                                 appState.surface = .collapsed
@@ -1628,11 +1986,19 @@ struct NotchPanelView: View {
                     mailAutoCollapseTimer = nil
                     mailDeferCollapseOnMouseLeave = false
                 }
-                if newTab == .mail {
+                if isPrimaryCoordinator && newTab == .mail {
                     mailManager.refresh()
                 }
-                if newTab == .workspace {
+                if isPrimaryCoordinator && newTab == .workspace {
                     workspaceManager.resolveAndRefreshWorkspace(appState: appState)
+                }
+            }
+            .onChange(of: signals.showChargingBanner) { _, isVisible in
+                updateChargingAmbientAnimation(visible: isVisible)
+            }
+            .onChange(of: sys.activeBannerState) { _, _ in
+                if signals.showChargingBanner {
+                    updateChargingAmbientAnimation(visible: true)
                 }
             }
             // Outside onHover on purpose: the hover region moves with the bar.
@@ -1689,6 +2055,10 @@ struct NotchPanelView: View {
 
     // MARK: - Below-Notch Dynamic Island Banners & Expanded Cards
 
+    private var toastBannerTransition: AnyTransition {
+        .blurFade.combined(with: .offset(y: -10))
+    }
+
     @ViewBuilder
     private var belowNotchContent: some View {
         if signals.showChargingBanner && !appState.surface.isExpanded {
@@ -1698,22 +2068,16 @@ struct NotchPanelView: View {
                     sys.dismissChargingBanner()
                 }
             }
-            .transition(.asymmetric(
-                insertion: .move(edge: .top).combined(with: .opacity),
-                removal: .move(edge: .top).combined(with: .opacity)
-            ))
+            .transition(toastBannerTransition)
         } else if signals.showMiniPeekBanner && !appState.surface.isExpanded {
-            // PRAYER MINI PEEK BANNER: Buka tipis saat T-10m & saat masuk waktu salat
-            PrayerMiniPeekBannerView(manager: prayerManager) {
+            // PRAYER MINI PEEK BANNER: Sun-Arc compact notification at prayer entry (T-0m)
+            PrayerMiniPeekBannerView(manager: prayerManager, displayMode: displayMode) {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     appState.transitionToTab(.prayer)
                     appState.surface = .sessionList
                 }
             }
-            .transition(.asymmetric(
-                insertion: .move(edge: .top).combined(with: .opacity),
-                removal: .move(edge: .top).combined(with: .opacity)
-            ))
+            .transition(toastBannerTransition)
         } else {
             expandedSurfaceContent
         }
@@ -4451,10 +4815,19 @@ private struct NotchCardButton: View {
     /// Share a narrow row equally instead of hugging the label.
     var expands = false
     var systemImage: String? = nil
+    var isPixel = false
     let action: () -> Void
     @State private var hovering = false
 
     private var foreground: Color {
+        if isPixel {
+            switch role {
+            case .primary: return isEnabled ? Color.black : Color.black.opacity(0.55)
+            case .destructive: return Pixel16Palette.red
+            case .secondary: return Pixel16Palette.textWhite
+            case .quiet: return hovering ? Pixel16Palette.textWhite : Pixel16Palette.textMuted
+            }
+        }
         switch role {
         case .primary: return .white.opacity(isEnabled ? 1 : 0.6)
         case .destructive: return NotchCardPalette.deny
@@ -4464,6 +4837,16 @@ private struct NotchCardButton: View {
     }
 
     private var fill: Color {
+        if isPixel {
+            switch role {
+            case .primary:
+                guard isEnabled else { return Pixel16Palette.cyan.opacity(0.35) }
+                return hovering ? Pixel16Palette.cyan.opacity(0.92) : Pixel16Palette.cyan
+            case .destructive: return Pixel16Palette.red.opacity(hovering ? 0.18 : 0.08)
+            case .secondary: return hovering ? Pixel16Palette.surfaceRaised : Pixel16Palette.surface
+            case .quiet: return Pixel16Palette.surfaceRaised.opacity(hovering ? 0.85 : 0)
+            }
+        }
         switch role {
         case .primary:
             guard isEnabled else { return NotchCardPalette.allowFill.opacity(0.35) }
@@ -4475,6 +4858,14 @@ private struct NotchCardButton: View {
     }
 
     private var stroke: Color {
+        if isPixel {
+            switch role {
+            case .primary: return .clear
+            case .destructive: return Pixel16Palette.red.opacity(hovering ? 0.9 : 0.55)
+            case .secondary: return Pixel16Palette.bevelHighlight
+            case .quiet: return .clear
+            }
+        }
         switch role {
         case .primary: return .clear
         case .destructive: return NotchCardPalette.deny.opacity(hovering ? 0.9 : 0.7)
@@ -4499,8 +4890,12 @@ private struct NotchCardButton: View {
                     Image(systemName: systemImage)
                         .font(.system(size: fontSize - 2, weight: .semibold))
                 }
-                Text(label)
-                    .font(.system(size: fontSize, weight: role == .quiet ? .medium : .semibold))
+                Text(isPixel ? label.uppercased() : label)
+                    .font(.system(
+                        size: isPixel ? max(9.5, fontSize - 1) : fontSize,
+                        weight: isPixel ? .black : (role == .quiet ? .medium : .semibold),
+                        design: isPixel ? .monospaced : .default
+                    ))
                     .lineLimit(1)
                     .minimumScaleFactor(expands ? 0.8 : 1)
                 if let hint {
@@ -4515,9 +4910,9 @@ private struct NotchCardButton: View {
             .padding(.vertical, 6)
             .frame(minHeight: 26)
             .frame(maxWidth: expands ? .infinity : nil)
-            .background(RoundedRectangle(cornerRadius: 6).fill(fill))
-            .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(stroke, lineWidth: 1))
-            .contentShape(RoundedRectangle(cornerRadius: 6))
+            .background(RoundedRectangle(cornerRadius: isPixel ? 3 : 6).fill(fill))
+            .overlay(RoundedRectangle(cornerRadius: isPixel ? 3 : 6).strokeBorder(stroke, lineWidth: 1))
+            .contentShape(RoundedRectangle(cornerRadius: isPixel ? 3 : 6))
         }
         .buttonStyle(.plain)
         .disabled(!isEnabled)
@@ -4538,6 +4933,7 @@ private struct NotchCardTextLink: View {
     var hint: String? = nil
     var help: String? = nil
     var lineLimit = 1
+    var isPixel = false
     let action: () -> Void
     @State private var hovering = false
 
@@ -4545,7 +4941,11 @@ private struct NotchCardTextLink: View {
         Button(action: action) {
             HStack(alignment: .firstTextBaseline, spacing: 5) {
                 Text(label)
-                    .font(.system(size: fontSize, weight: .medium))
+                    .font(.system(
+                        size: isPixel ? max(9.5, fontSize - 1) : fontSize,
+                        weight: isPixel ? .bold : .medium,
+                        design: isPixel ? .monospaced : .default
+                    ))
                     .underline()
                     .lineLimit(lineLimit)
                     .truncationMode(.middle)
@@ -4557,7 +4957,7 @@ private struct NotchCardTextLink: View {
                         .fixedSize()
                 }
             }
-            .foregroundStyle(NotchCardPalette.link.opacity(hovering ? 1 : 0.9))
+            .foregroundStyle((isPixel ? Pixel16Palette.cyan : NotchCardPalette.link).opacity(hovering ? 1 : 0.9))
             .padding(.vertical, 4)
             .frame(minHeight: 26)
             .contentShape(Rectangle())
@@ -4575,16 +4975,21 @@ private struct NotchCardTag: View {
     let text: String
     let color: Color
     let fontSize: CGFloat
+    var isPixel = false
 
     var body: some View {
-        Text(text)
-            .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 5)
-            .padding(.vertical, 2)
-            .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+        if isPixel {
+            Pixel16Badge(text, color: Pixel16Palette.amber, isFilled: true)
+        } else {
+            Text(text)
+                .font(.system(size: fontSize, weight: .bold, design: .monospaced))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .fixedSize()
+                .padding(.horizontal, 5)
+                .padding(.vertical, 2)
+                .background(color.opacity(0.14), in: RoundedRectangle(cornerRadius: 4))
+        }
     }
 }
 
@@ -4719,6 +5124,9 @@ private struct ApprovalBar: View {
     @State private var jumpValidationTask: Task<Void, Never>?
     @AppStorage(SettingsKey.autoCollapseAfterSessionJump) private var autoCollapseAfterSessionJump = SettingsDefaults.autoCollapseAfterSessionJump
     @AppStorage(SettingsKey.contentFontSize) private var contentFontSize = SettingsDefaults.contentFontSize
+    @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
+
+    private var isPixel: Bool { islandUITheme == IslandUITheme.pixel.rawValue }
 
     private var serverName: String? {
         toolInput?["server_name"] as? String
@@ -4748,19 +5156,28 @@ private struct ApprovalBar: View {
 
             // What is being asked
             HStack(alignment: .firstTextBaseline, spacing: 7) {
-                NotchCardTag(text: L10n.shared["card_permission_tag"], color: NotchCardPalette.permission, fontSize: type.badge)
+                NotchCardTag(
+                    text: L10n.shared["card_permission_tag"],
+                    color: NotchCardPalette.permission,
+                    fontSize: type.badge,
+                    isPixel: isPixel
+                )
                 let title = ApprovalCopy.title(tool: tool, toolInput: toolInput)
-                Text(title)
-                    .font(.system(size: type.title, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.92))
+                Text(isPixel ? title.uppercased() : title)
+                    .font(.system(
+                        size: isPixel ? max(10, type.title - 1) : type.title,
+                        weight: isPixel ? .black : .semibold,
+                        design: isPixel ? .monospaced : .default
+                    ))
+                    .foregroundStyle(isPixel ? Pixel16Palette.textWhite : .white.opacity(0.92))
                     .lineLimit(2)
                     .truncationMode(.middle)
                     .fixedSize(horizontal: false, vertical: true)
                     .help(tool == title ? title : "\(title)\n\(tool)")
                 if let server = serverName {
                     Text("(\(server))")
-                        .font(.system(size: type.secondary))
-                        .foregroundStyle(Color(red: 0.6, green: 0.7, blue: 0.9))
+                        .font(.system(size: type.secondary, design: isPixel ? .monospaced : .default))
+                        .foregroundStyle(isPixel ? Pixel16Palette.textMuted : Color(red: 0.6, green: 0.7, blue: 0.9))
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
@@ -4777,7 +5194,14 @@ private struct ApprovalBar: View {
                         .padding(.vertical, 8)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.06)))
+                .background(
+                    RoundedRectangle(cornerRadius: isPixel ? 3 : 6)
+                        .fill(isPixel ? Pixel16Palette.slot : Color.white.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: isPixel ? 3 : 6)
+                        .strokeBorder(isPixel ? Pixel16Palette.amber.opacity(0.28) : Color.clear, lineWidth: 1)
+                )
                 .contentShape(Rectangle())
                 .onTapGesture { handleCardClick() }
             }
@@ -4838,6 +5262,7 @@ private struct ApprovalBar: View {
             hint: CardShortcutHint.text(for: .approveAlways),
             help: ApprovalHints.always(scope: alwaysScope),
             lineLimit: lineLimit,
+            isPixel: isPixel,
             action: onAlwaysAllow
         )
     }
@@ -4845,11 +5270,11 @@ private struct ApprovalBar: View {
     @ViewBuilder
     private func decisionButtons(_ type: NotchCardTypography, expands: Bool) -> some View {
         NotchCardButton(label: L10n.shared["card_hide"], role: .quiet, fontSize: type.button,
-                        help: L10n.shared["dismiss_card_hint"], action: onDismiss)
+                        help: L10n.shared["dismiss_card_hint"], isPixel: isPixel, action: onDismiss)
         NotchCardButton(label: L10n.shared["card_deny"], role: .destructive, fontSize: type.button,
-                        hint: CardShortcutHint.text(for: .deny), expands: expands, action: onDeny)
+                        hint: CardShortcutHint.text(for: .deny), expands: expands, isPixel: isPixel, action: onDeny)
         NotchCardButton(label: L10n.shared["card_allow_once"], role: .primary, fontSize: type.button,
-                        hint: CardShortcutHint.text(for: .approve), expands: expands, action: onAllow)
+                        hint: CardShortcutHint.text(for: .approve), expands: expands, isPixel: isPixel, action: onAllow)
     }
 
     // MARK: - Click-to-jump handling

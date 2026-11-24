@@ -8,6 +8,7 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
+  import BehaviorPage from './lib/components/BehaviorPage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
   import SoundPage from './lib/components/SoundPage.svelte';
   import {
@@ -18,6 +19,10 @@
     type SettingsPageId,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
+  import {
+    followUpMinutesFromSettings,
+    SETTINGS_KEY_FOLLOW_UP_MINUTES,
+  } from './lib/reminders';
   import { cssVariables } from './lib/tokens';
   import type {
     AutostartStatus,
@@ -43,6 +48,7 @@
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
   let cues = $state<SoundCue[]>([]);
+  let followUpMinutes = $state(1);
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -66,6 +72,9 @@
       autostart = a;
       cues = sound;
       appearance = appearanceFromSettings(stored);
+      followUpMinutes = followUpMinutesFromSettings(
+        (stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
+      );
       applyAppearance();
       error = null;
     } catch (cause) {
@@ -95,6 +104,11 @@
   // #241: the same answer the Capability table gives, read the same way, so
   // the page and the table cannot disagree about whether a sound can play.
   const soundSupported = $derived(isSupported(capabilities, 'Sound effects'));
+
+  function saveFollowUpMinutes(key: string, value: number) {
+    followUpMinutes = value;
+    void run(() => invoke('settings_set', { key, value }), false);
+  }
 
   onMount(() => {
     void load();
@@ -157,6 +171,8 @@
         />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} />
+      {:else if page === 'behavior'}
+        <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
       {:else if page === 'about'}
         <AboutPage />
       {/if}
