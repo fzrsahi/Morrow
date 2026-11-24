@@ -10,6 +10,7 @@
 pub mod claude_hooks;
 pub mod cline;
 pub mod codex_config;
+pub mod extension;
 pub mod json_editor;
 pub mod kimi;
 pub mod mimo;
