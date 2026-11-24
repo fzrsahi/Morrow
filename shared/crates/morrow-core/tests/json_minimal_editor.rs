@@ -228,3 +228,27 @@ fn comments_are_stripped_and_slashes_inside_strings_are_kept() {
     // What is left is plain JSON.
     assert!(serde_json::from_str::<Value>(&stripped).is_ok());
 }
+
+/// #98: "uninstall restores the original content". The install puts the key on
+/// its own line before the closing brace, so removing it has to take that line
+/// with it. The test above only parsed the result, so a stray newline survived
+/// every uninstall — found by the E2E-2 gate, not by the suite.
+#[test]
+fn deleting_the_last_key_gives_the_file_back_byte_for_byte() {
+    let original = "{\"theme\":\"dark\",\"permissions\":{\"allow\":[\"Bash(ls:*)\"]}}\n";
+    let installed =
+        set_top_level_value(original, "hooks", &json!({ "Stop": [] })).expect("install");
+    assert_ne!(installed, original, "the install wrote something");
+    let restored = delete_top_level_key(&installed, "hooks").expect("uninstall");
+    assert_eq!(restored, original);
+}
+
+/// The same promise when the file was pretty-printed by hand.
+#[test]
+fn deleting_the_last_key_keeps_the_indentation_of_the_one_before_it() {
+    let original = "{\n  \"a\": 1\n}\n";
+    let installed =
+        set_top_level_value(original, "hooks", &json!({ "Stop": [] })).expect("install");
+    let restored = delete_top_level_key(&installed, "hooks").expect("uninstall");
+    assert_eq!(restored, original);
+}

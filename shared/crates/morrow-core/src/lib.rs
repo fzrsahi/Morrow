@@ -26,6 +26,7 @@
 pub mod agent_tasks;
 pub mod attention;
 pub mod digest;
+pub mod discovery;
 pub mod git;
 pub mod installer;
 pub mod intake;
