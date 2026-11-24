@@ -4,12 +4,18 @@ import SwiftUI
 /// Unified Color Theme accessor for CodeIsland
 public enum AppColorTheme {
     @MainActor
-    public static func accent(for colorKey: String, isModern: Bool = false) -> Color {
+    public static func isAlbumSyncActive(for colorKey: String) -> Bool {
         let syncAlbum = UserDefaults.standard.bool(forKey: SettingsKey.syncThemeWithAlbumArt)
         let pc = MusicProgressColor(rawValue: colorKey) ?? .theme
-        if (syncAlbum || pc == .album)
+        return (syncAlbum || pc == .album)
             && NowPlayingManager.shared.isPlaying
-            && NowPlayingManager.shared.artworkImage != nil {
+            && NowPlayingManager.shared.artworkImage != nil
+    }
+
+    @MainActor
+    public static func accent(for colorKey: String, isModern: Bool = false) -> Color {
+        let pc = MusicProgressColor(rawValue: colorKey) ?? .theme
+        if isAlbumSyncActive(for: colorKey) {
             return NowPlayingManager.shared.albumPalette.primary
         }
 
@@ -29,11 +35,7 @@ public enum AppColorTheme {
     /// Secondary adaptive accent (uses playing album's secondary color when album sync is active, otherwise Amber).
     @MainActor
     public static func secondaryAccent(for colorKey: String) -> Color {
-        let syncAlbum = UserDefaults.standard.bool(forKey: SettingsKey.syncThemeWithAlbumArt)
-        let pc = MusicProgressColor(rawValue: colorKey) ?? .theme
-        if (syncAlbum || pc == .album)
-            && NowPlayingManager.shared.isPlaying
-            && NowPlayingManager.shared.artworkImage != nil {
+        if isAlbumSyncActive(for: colorKey) {
             return readableOnDark(NowPlayingManager.shared.albumPalette.secondary)
         }
         return Color(red: 1.0, green: 0.72, blue: 0.20)

@@ -131,4 +131,53 @@ final class IslandSignalsTests: XCTestCase {
         XCTAssertTrue(signals.hasLyrics)
         XCTAssertTrue(signals.isPlaying)
     }
+
+    func testAlbumPaletteRevisionBumpsOnlyOnChange() async {
+        let signals = IslandSignals()
+        let initialRev = signals.albumPaletteRevision
+        let customPalette = AlbumArtPalette(
+            primary: .pink,
+            secondary: .orange,
+            spectrum: RetroSpectrumPalette(base: .pink, mid: .orange, peak: .yellow)
+        )
+
+        let count = notificationCount { _ = signals.albumPaletteRevision }
+
+        signals.setAlbumPalette(.fallback, hasArtwork: false)
+        await Task.yield()
+        XCTAssertEqual(signals.albumPaletteRevision, initialRev)
+        XCTAssertEqual(count(), 0)
+
+        signals.setAlbumPalette(customPalette, hasArtwork: true)
+        await Task.yield()
+        XCTAssertEqual(signals.albumPaletteRevision, initialRev + 1)
+        XCTAssertEqual(count(), 1)
+
+        signals.setAlbumPalette(customPalette, hasArtwork: true)
+        await Task.yield()
+        XCTAssertEqual(signals.albumPaletteRevision, initialRev + 1)
+        XCTAssertEqual(count(), 1)
+    }
+
+    func testChargingBannerStateDeduplicatesUnchangedWrites() async {
+        let signals = IslandSignals()
+        let onHold = PowerBannerState.onHold(kind: .magSafe)
+        let low = PowerBannerState.lowBattery(percent: 15)
+
+        let count = notificationCount { _ = signals.chargingBannerState }
+
+        signals.setChargingBannerState(onHold)
+        await Task.yield()
+        XCTAssertEqual(signals.chargingBannerState, onHold)
+        XCTAssertEqual(count(), 1)
+
+        signals.setChargingBannerState(onHold)
+        await Task.yield()
+        XCTAssertEqual(count(), 1)
+
+        signals.setChargingBannerState(low)
+        await Task.yield()
+        XCTAssertEqual(signals.chargingBannerState, low)
+        XCTAssertEqual(count(), 2)
+    }
 }

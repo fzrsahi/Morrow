@@ -48,7 +48,11 @@ struct PixelRetroSessionCardView: View {
     private var accentColor: Color {
         _ = signals.isPlaying
         _ = signals.musicTitle
-        return AppColorTheme.accent(for: musicHUDProgressColor, isModern: false)
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: false)
+        )
     }
 
     /// 16-bit status color hierarchy
@@ -404,7 +408,7 @@ struct PixelRetroSessionCardView: View {
                         Text("APPROVE")
                             .font(.system(size: 8, weight: .black, design: .monospaced))
                     }
-                    .foregroundStyle(Color.black)
+                    .foregroundStyle(AppColorTheme.contrastingForeground(on: accentColor))
                 }
 
                 Pixel16Button(

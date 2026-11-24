@@ -9,10 +9,7 @@ public struct MagSafeChargingBanner: View {
     var displayMode: IslandDisplayMode = .notch
     var onDismiss: (() -> Void)? = nil
     @ObservedObject private var sys = SystemMonitorManager.shared
-    @ObservedObject private var nowPlaying = NowPlayingManager.shared
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
-    @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
-    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
     @State private var pulseRing = false
     @State private var animatedProgress: Double = 0
     @State private var rippleScale: CGFloat = 0.85
@@ -38,13 +35,12 @@ public struct MagSafeChargingBanner: View {
         self.onDismiss = onDismiss
     }
 
-    private var stateColor: Color {
-        if case .charging = effectiveState,
-           (syncThemeWithAlbumArt || musicHUDProgressColor == "album"),
-           nowPlaying.isPlaying, nowPlaying.artworkImage != nil {
-            return nowPlaying.albumPalette.primary
-        }
-        return effectiveState.accentColor
+    static func semanticColor(for state: PowerBannerState) -> Color {
+        state.accentColor
+    }
+
+    var stateColor: Color {
+        Self.semanticColor(for: effectiveState)
     }
 
     private var modernIconName: String {
@@ -303,6 +299,30 @@ public struct CyberSystemGaugeBar: View {
 
     public init() {}
 
+    static func batteryColor(for metrics: SystemMetrics) -> Color {
+        if case .onHold = metrics.powerBannerState {
+            return PowerBannerState.onHold(kind: .magSafe).accentColor
+        }
+        if case .fullyCharged = metrics.powerBannerState {
+            return PowerBannerState.fullyCharged(kind: .magSafe).accentColor
+        }
+        if !metrics.isCharging && metrics.batteryLevel <= 20 {
+            return PowerBannerState.lowBattery(percent: metrics.batteryLevel).accentColor
+        }
+        if metrics.isCharging {
+            return PowerBannerState.charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil).accentColor
+        }
+        return Color.white.opacity(0.8)
+    }
+
+    static func batteryIcon(for metrics: SystemMetrics) -> String {
+        if metrics.isCharging { return "battery.100.bolt" }
+        if case .fullyCharged = metrics.powerBannerState { return "battery.100" }
+        if metrics.batteryLevel <= 20 { return "battery.25" }
+        if metrics.batteryLevel >= 99 { return "battery.100" }
+        return "battery.75"
+    }
+
     /// Sampling runs only while this gauge is on screen: appearing starts it,
     /// disappearing (the Workspace tab closing) stops it.
     private struct SamplingLifecycle: ViewModifier {
@@ -347,10 +367,12 @@ public struct CyberSystemGaugeBar: View {
             }
 
             // Battery
+            let batteryColor = Self.batteryColor(for: m)
+            let batteryIcon = Self.batteryIcon(for: m)
             HStack(spacing: 2) {
-                Image(systemName: m.isCharging ? "battery.100.bolt" : "battery.75")
+                Image(systemName: batteryIcon)
                     .font(.system(size: 7.5, weight: .bold))
-                    .foregroundStyle(m.isCharging ? Color(red: 0.0, green: 0.90, blue: 0.46) : Color.white.opacity(0.8))
+                    .foregroundStyle(batteryColor)
                 Text("\(m.batteryLevel)%")
                     .font(.system(size: 7.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.85))

@@ -391,7 +391,7 @@ public struct MailArrivalWingView: View {
                                 .stroke(
                                     LinearGradient(
                                         colors: [
-                                            Color.cyan.opacity(0.35),
+                                            accentColor.opacity(0.35),
                                             accentColor.opacity(0.85),
                                             Color.white.opacity(0.95)
                                         ],
@@ -654,53 +654,55 @@ private struct CompactPixelEnvelopeView: View {
             px(10, 8, paperEdge)
             px(11, 9, paperEdge)
 
+            let inkAccent = AppColorTheme.envelopeAccentStroke(for: accentColor)
+
             if flapOpen > 0.62 {
                 // Open flap stepped upward across rows 0..2
                 for col in 5...7 { px(col, 0, paperBack) }
                 for col in 3...9 { px(col, 1, paperBack) }
                 for col in 1...11 { px(col, 2, paper) }
                 // Highlight flap crest in accent color
-                px(5, 0, accentColor)
-                px(6, 0, accentColor)
-                px(7, 0, accentColor)
-                px(3, 1, accentColor)
-                px(4, 1, accentColor)
-                px(8, 1, accentColor)
-                px(9, 1, accentColor)
+                px(5, 0, inkAccent)
+                px(6, 0, inkAccent)
+                px(7, 0, inkAccent)
+                px(3, 1, inkAccent)
+                px(4, 1, inkAccent)
+                px(8, 1, inkAccent)
+                px(9, 1, inkAccent)
                 // Shaded interior pocket
                 for col in 2...10 { px(col, 3, pocketDark) }
                 for col in 4...8 { px(col, 4, pocketDark) }
                 px(6, 5, pocketDark)
             } else if flapOpen > 0.25 {
                 // Mid-fold across top hinge
-                for col in 1...11 { px(col, 3, accentColor) }
+                for col in 1...11 { px(col, 3, inkAccent) }
                 for col in 3...9 { px(col, 4, paperEdge) }
             } else {
                 // Sealed V-flap crease in accent color
-                px(1, 3, accentColor)
-                px(2, 4, accentColor)
-                px(3, 4, accentColor)
-                px(4, 5, accentColor)
-                px(5, 5, accentColor)
-                px(6, 6, accentColor)
-                px(7, 5, accentColor)
-                px(8, 5, accentColor)
-                px(9, 4, accentColor)
-                px(10, 4, accentColor)
-                px(11, 3, accentColor)
+                px(1, 3, inkAccent)
+                px(2, 4, inkAccent)
+                px(3, 4, inkAccent)
+                px(4, 5, inkAccent)
+                px(5, 5, inkAccent)
+                px(6, 6, inkAccent)
+                px(7, 5, inkAccent)
+                px(8, 5, inkAccent)
+                px(9, 4, inkAccent)
+                px(10, 4, inkAccent)
+                px(11, 3, inkAccent)
             }
 
             // Pixel wax seal centered on closed apex (6, 6)
             if sealScale > 0.65 {
                 for row in 5...7 {
                     for col in 5...7 {
-                        px(col, row, accentColor)
+                        px(col, row, inkAccent)
                     }
                 }
                 px(5, 5, .white.opacity(0.65))
             } else if sealScale > 0.15 {
-                px(6, 6, accentColor)
-                px(6, 5, accentColor)
+                px(6, 6, inkAccent)
+                px(6, 5, inkAccent)
             }
         }
         .frame(width: 25.35, height: 21.45)

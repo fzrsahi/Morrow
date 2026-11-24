@@ -118,4 +118,113 @@ final class NotificationBannerTests: XCTestCase {
             XCTAssertGreaterThan(prayerHost.fittingSize.width, 0)
         }
     }
+
+    func testChargingBannerKeepsSemanticColorsWhenAutoAlbumThemeActive() {
+        let defaults = UserDefaults.standard
+        let prevSync = defaults.object(forKey: SettingsKey.syncThemeWithAlbumArt)
+        let prevColor = defaults.object(forKey: SettingsKey.musicHUDProgressColor)
+        let nowPlaying = NowPlayingManager.shared
+        let prevPlaying = nowPlaying.isPlaying
+        let prevArtwork = nowPlaying.artworkImage
+        let prevPalette = nowPlaying.albumPalette
+        defer {
+            if let prevSync { defaults.set(prevSync, forKey: SettingsKey.syncThemeWithAlbumArt) } else { defaults.removeObject(forKey: SettingsKey.syncThemeWithAlbumArt) }
+            if let prevColor { defaults.set(prevColor, forKey: SettingsKey.musicHUDProgressColor) } else { defaults.removeObject(forKey: SettingsKey.musicHUDProgressColor) }
+            nowPlaying.isPlaying = prevPlaying
+            nowPlaying.artworkImage = prevArtwork
+            nowPlaying.albumPalette = prevPalette
+        }
+
+        defaults.set(true, forKey: SettingsKey.syncThemeWithAlbumArt)
+        defaults.set(MusicProgressColor.album.rawValue, forKey: SettingsKey.musicHUDProgressColor)
+        nowPlaying.isPlaying = true
+        nowPlaying.artworkImage = NSImage(size: NSSize(width: 10, height: 10))
+        let pinkAlbum = AlbumArtPalette(
+            primary: Color(red: 1.0, green: 0.10, blue: 0.50),
+            secondary: Color(red: 0.50, green: 0.20, blue: 0.90),
+            spectrum: RetroSpectrumPalette(base: .pink, mid: .purple, peak: .white)
+        )
+        nowPlaying.albumPalette = pinkAlbum
+
+        // MusicProgressColor honors syncThemeWithAlbumArt / album
+        XCTAssertEqual(MusicProgressColor.cyan.color, pinkAlbum.primary)
+        XCTAssertEqual(MusicProgressColor.album.color, pinkAlbum.primary)
+
+        // Battery/charging states stay strictly semantic (green / amber / red), never album-colored
+        let charging = PowerBannerState.charging(kind: .magSafe, watts: 140, timeToFullMinutes: 20)
+        let full = PowerBannerState.fullyCharged(kind: .magSafe)
+        let onHold = PowerBannerState.onHold(kind: .magSafe)
+        let low = PowerBannerState.lowBattery(percent: 15)
+
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: charging), charging.accentColor)
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: full), full.accentColor)
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: onHold), onHold.accentColor)
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: low), low.accentColor)
+        XCTAssertNotEqual(MagSafeChargingBanner.semanticColor(for: charging), pinkAlbum.primary)
+    }
+
+    func testCyberSystemGaugeBarBatteryColorAndIconCoverAllPowerStates() {
+        let full100 = SystemMetrics(
+            batteryLevel: 100,
+            isCharging: false,
+            isACPowered: true,
+            powerBannerState: .fullyCharged(kind: .magSafe)
+        )
+        XCTAssertEqual(CyberSystemGaugeBar.batteryColor(for: full100), PowerBannerState.fullyCharged(kind: .magSafe).accentColor)
+        XCTAssertEqual(CyberSystemGaugeBar.batteryIcon(for: full100), "battery.100")
+
+        let full99 = SystemMetrics(
+            batteryLevel: 99,
+            isCharging: false,
+            isACPowered: true,
+            powerBannerState: .fullyCharged(kind: .usbC)
+        )
+        XCTAssertEqual(CyberSystemGaugeBar.batteryColor(for: full99), PowerBannerState.fullyCharged(kind: .magSafe).accentColor)
+        XCTAssertEqual(CyberSystemGaugeBar.batteryIcon(for: full99), "battery.100")
+
+        let onHold = SystemMetrics(
+            batteryLevel: 80,
+            isCharging: false,
+            isACPowered: true,
+            powerBannerState: .onHold(kind: .magSafe)
+        )
+        XCTAssertEqual(CyberSystemGaugeBar.batteryColor(for: onHold), PowerBannerState.onHold(kind: .magSafe).accentColor)
+        XCTAssertEqual(CyberSystemGaugeBar.batteryIcon(for: onHold), "battery.75")
+
+        let low = SystemMetrics(
+            batteryLevel: 15,
+            isCharging: false,
+            isACPowered: false,
+            powerBannerState: .lowBattery(percent: 15)
+        )
+        XCTAssertEqual(CyberSystemGaugeBar.batteryColor(for: low), PowerBannerState.lowBattery(percent: 15).accentColor)
+        XCTAssertEqual(CyberSystemGaugeBar.batteryIcon(for: low), "battery.25")
+
+        let charging = SystemMetrics(
+            batteryLevel: 50,
+            isCharging: true,
+            isACPowered: true,
+            powerBannerState: .charging(kind: .magSafe, watts: 140, timeToFullMinutes: 20)
+        )
+        XCTAssertEqual(CyberSystemGaugeBar.batteryColor(for: charging), PowerBannerState.charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil).accentColor)
+        XCTAssertEqual(CyberSystemGaugeBar.batteryIcon(for: charging), "battery.100.bolt")
+
+        let dischargingNormal = SystemMetrics(
+            batteryLevel: 65,
+            isCharging: false,
+            isACPowered: false,
+            powerBannerState: .charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil)
+        )
+        XCTAssertEqual(CyberSystemGaugeBar.batteryColor(for: dischargingNormal), Color.white.opacity(0.8))
+        XCTAssertEqual(CyberSystemGaugeBar.batteryIcon(for: dischargingNormal), "battery.75")
+
+        let dischargingFull = SystemMetrics(
+            batteryLevel: 100,
+            isCharging: false,
+            isACPowered: false,
+            powerBannerState: .charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil)
+        )
+        XCTAssertEqual(CyberSystemGaugeBar.batteryColor(for: dischargingFull), Color.white.opacity(0.8))
+        XCTAssertEqual(CyberSystemGaugeBar.batteryIcon(for: dischargingFull), "battery.100")
+    }
 }
