@@ -4,6 +4,7 @@
 //! the hook rate.
 
 use std::collections::HashSet;
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
@@ -101,6 +102,8 @@ struct State {
     /// The scan policy's clock (#259): how often a visible panel may look for
     /// sessions, and the one place the gap is defined.
     discovery: morrow_core::scan_policy::ScanThrottle,
+    /// How often the session list may be rewritten (#238 AC 6).
+    saving: morrow_core::session_store::SaveThrottle,
 }
 
 impl Default for State {
@@ -119,8 +122,50 @@ impl Default for State {
             discovery: morrow_core::scan_policy::ScanThrottle::new(
                 morrow_core::scan_policy::MINIMUM_GAP_MS,
             ),
+            saving: morrow_core::session_store::SaveThrottle::new(),
         }
     }
+}
+
+/// `~/.morrow`, unless `MORROW_SESSIONS_DIR` (or the old name) says otherwise.
+fn sessions_directory(home: &Path) -> std::path::PathBuf {
+    let override_dir = std::env::var("MORROW_SESSIONS_DIR")
+        .ok()
+        .or_else(|| std::env::var("CODEISLAND_SESSIONS_DIR").ok());
+    morrow_core::session_store::directory(override_dir.as_deref(), home)
+}
+
+/// `$CODEX_HOME` (a leading `~` expanded) or `~/.codex`, where `session_index.jsonl`
+/// keeps the thread names.
+fn codex_home(home: &Path) -> std::path::PathBuf {
+    match std::env::var("CODEX_HOME") {
+        Ok(raw) if !raw.trim().is_empty() => morrow_core::session_store::expand(raw.trim(), home),
+        _ => home.join(".codex"),
+    }
+}
+
+/// The first and last 64 KB of a transcript: a rename lands at the end of the file, and a
+/// session whose tail is one enormous tool result has its title only at the start.
+fn read_head_and_tail(path: &Path) -> Option<(String, String)> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const WINDOW: u64 = 64 * 1024;
+    let mut file = std::fs::File::open(path).ok()?;
+    let size = file.metadata().ok()?.len();
+    let window = size.min(WINDOW);
+    let mut head = Vec::new();
+    (&mut file).take(window).read_to_end(&mut head).ok()?;
+    if size <= window {
+        let text = String::from_utf8_lossy(&head).into_owned();
+        return Some((text.clone(), text));
+    }
+    let mut tail = Vec::new();
+    file.seek(SeekFrom::Start(size - window)).ok()?;
+    file.read_to_end(&mut tail).ok()?;
+    Some((
+        String::from_utf8_lossy(&head).into_owned(),
+        String::from_utf8_lossy(&tail).into_owned(),
+    ))
 }
 
 fn now_ms() -> u64 {
@@ -366,6 +411,48 @@ impl Feed {
     /// Linux/Windows have no watch in this shell yet. The cost is bounded by the
     /// gap and, for the stores a reader can re-read, by `ScanCache` — which the
     /// readers do not use yet, which is why the gap is five seconds and not one.
+    /// Put the session list a previous launch wrote back (#238 AC 6).
+    ///
+    /// Titles come from the store that named them: Claude's transcript carries them
+    /// inline, Codex keeps a `session_index.jsonl` per root and `codex_index` is its
+    /// text. Both are injected so this can be exercised without a real home.
+    pub fn restore_sessions(&self, dir: &Path, codex_indexes: &[String]) -> usize {
+        let rows = morrow_core::session_store::load(dir);
+        if rows.is_empty() {
+            return 0;
+        }
+        let mut state = self.lock();
+        state
+            .sessions
+            .restore(rows, |row| match row.source.as_str() {
+                "codex" => morrow_core::session_store::codex_thread_name_from_roots(
+                    &codex_indexes.iter().map(String::as_str).collect::<Vec<_>>(),
+                    &row.session_id,
+                )
+                .map(|title| morrow_core::session_store::ResolvedSessionTitle {
+                    title,
+                    source: morrow_core::session_store::SessionTitleSource::CodexThreadName,
+                }),
+                "claude" => {
+                    let path = row.transcript_path.as_deref()?;
+                    let (head, tail) = read_head_and_tail(Path::new(path))?;
+                    morrow_core::session_store::claude_title(&head, &tail)
+                }
+                _ => None,
+            })
+    }
+
+    /// Write the session list out, at most once per save gap.
+    pub fn save_sessions(&self, dir: &Path, now_ms: u64) -> bool {
+        let mut state = self.lock();
+        if !state.saving.due(now_ms) {
+            return false;
+        }
+        let rows = state.sessions.persisted();
+        morrow_core::session_store::save(dir, &rows);
+        true
+    }
+
     pub fn tick_discovery(&self, now_ms: u64) -> usize {
         self.tick_discovery_with(now_ms, |_home| self.scan_stores())
     }
@@ -410,6 +497,33 @@ impl Feed {
         thread::Builder::new()
             .name("morrow-discovery".into())
             .spawn(move || {
+                // #238 AC 6: what the last launch left behind, before the first
+                // scan — a hook that arrives first wins, the file is only a memory.
+                let home = std::path::PathBuf::from(feed.lock().sessions.home_directory());
+                let sessions_dir = sessions_directory(&home);
+                // Swift iterates every Codex root, not only $CODEX_HOME: a
+                // thread renamed in another account's index keeps its title.
+                let mut codex_roots = vec![codex_home(&home)];
+                for entry in std::fs::read_dir(&home).into_iter().flatten().flatten() {
+                    let path = entry.path();
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("");
+                    if name.starts_with(".codex")
+                        && path != codex_roots[0]
+                        && path.join("session_index.jsonl").is_file()
+                    {
+                        codex_roots.push(path);
+                    }
+                }
+                let codex_indexes: Vec<String> = codex_roots
+                    .iter()
+                    .filter_map(|root| {
+                        std::fs::read_to_string(root.join("session_index.jsonl")).ok()
+                    })
+                    .collect();
+                feed.restore_sessions(&sessions_dir, &codex_indexes);
                 let mut watcher = feed.watcher();
                 loop {
                     // A watcher that reports a change wakes the loop early; one
@@ -424,7 +538,9 @@ impl Feed {
                     if !moved {
                         thread::sleep(Duration::from_millis(250));
                     }
-                    feed.tick_discovery(now_ms());
+                    let now = now_ms();
+                    feed.tick_discovery(now);
+                    feed.save_sessions(&sessions_dir, now);
                 }
             })
             .expect("spawn the discovery thread");
@@ -1052,6 +1168,75 @@ mod tests {
         );
         assert!(!feed.lock().tails.has("a"), "pruning stops its tail too");
     }
+    /// #238 AC 6: the title comes from the store that names the session, not from the
+    /// file — Claude's transcript carries it, Codex's index does.
+    #[test]
+    fn a_restored_session_asks_its_own_store_for_the_title() {
+        use morrow_core::session_store;
+
+        let root = std::env::temp_dir().join(format!(
+            "morrow-titles-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let transcript = root.join("claude.jsonl");
+        fs::write(
+            &transcript,
+            "{\"type\":\"ai-title\",\"aiTitle\":\"Suggested\"}\n{\"type\":\"custom-title\",\"customTitle\":\"Typed by me\"}\n",
+        )
+        .unwrap();
+
+        let row = |id: &str, source: &str, path: Option<String>| session_store::PersistedSession {
+            session_id: id.into(),
+            source: source.into(),
+            cwd: Some("/work/proj".into()),
+            transcript_path: path,
+            start_time: "2026-01-02T03:04:05Z".into(),
+            last_activity: "2026-01-02T03:04:05Z".into(),
+            ..session_store::PersistedSession::default()
+        };
+        session_store::save(
+            &root,
+            &[
+                row(
+                    "claude-1",
+                    "claude",
+                    Some(transcript.to_string_lossy().into_owned()),
+                ),
+                row("codex-1", "codex", None),
+                // A provider that names its own sessions is not guessed at.
+                row("cursor-1", "cursor", None),
+            ],
+        );
+        let index = "{\"id\":\"codex-1\",\"thread_name\":\"Fix the flaky test\",\"updated_at\":\"2026-01-02T03:00:00Z\"}\n";
+
+        let feed = Feed::default();
+        assert_eq!(feed.restore_sessions(&root, &[index.to_owned()]), 3);
+        let titles: Vec<(String, Option<String>)> = feed
+            .lock()
+            .sessions
+            .persisted()
+            .into_iter()
+            .map(|row| (row.session_id, row.session_title))
+            .collect();
+        let title = |id: &str| {
+            titles
+                .iter()
+                .find(|(row, _)| row == id)
+                .and_then(|(_, title)| title.clone())
+        };
+        assert_eq!(title("claude-1"), Some("Typed by me".to_owned()));
+        assert_eq!(title("codex-1"), Some("Fix the flaky test".to_owned()));
+        assert_eq!(title("cursor-1"), None);
+
+        // The save gap holds: a second call inside it writes nothing.
+        assert!(feed.save_sessions(&root, 1_000));
+        assert!(!feed.save_sessions(&root, 1_500));
+        assert!(feed.save_sessions(&root, 3_000));
+
+        let _ = fs::remove_dir_all(&root);
     #[test]
     fn snapshot_carries_the_prayer_card_and_can_clear_it() {
         let feed = Feed::default();
