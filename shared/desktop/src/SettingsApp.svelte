@@ -9,16 +9,20 @@
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
+  import ShortcutsPage from './lib/components/ShortcutsPage.svelte';
+  import UnavailablePage from './lib/components/UnavailablePage.svelte';
   import SoundPage from './lib/components/SoundPage.svelte';
   import {
     DEFAULT_APPEARANCE,
     SETTINGS_KEYS,
     SETTINGS_NAV,
     appearanceFromSettings,
+    pageLabel,
     type AppearanceSettings,
     type SettingsPageId,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
+  import { resolveLanguage, type Language } from './lib/strings';
   import { cssVariables } from './lib/tokens';
   import type {
     AutostartStatus,
@@ -33,8 +37,10 @@
 
   function initialPage(): SettingsPageId {
     const requested = new URLSearchParams(window.location.search).get('page');
+    // #239 AC 3: unavailable pages are reachable too — they open onto the reason
+    // instead of a dead sidebar row.
     const found = SETTINGS_NAV.flatMap((group) => group.items).find(
-      (item) => item.id === requested && item.available,
+      (item) => item.id === requested,
     );
     return found?.id ?? 'hooks';
   }
@@ -47,6 +53,29 @@
   // #239 AC 1: shown on About so the file the user may want to back up or paste
   // into a bug report is reachable without knowing the convention.
   let settingsFile = $state('');
+  // #239 AC 4: one language for the window. `system` is not a table —
+  // `resolveLanguage` narrows it, as Swift's `effectiveLanguage` does. Derived,
+  // so switching the stored tag redraws the sidebar without a restart.
+  let language = $derived(
+    resolveLanguage(typeof navigator === 'undefined' ? 'en' : navigator.language, appearance.language),
+  );
+  // #239 AC 3: the page being shown, for the unavailable ones that have no
+  // component of their own. Read from the same list the sidebar draws, so a
+  // reason can never be a second copy.
+  let pendingPage = $derived(
+    SETTINGS_NAV.flatMap((group) => group.items).find((item) => item.id === page && !item.available),
+  );
+  let hotkeySupported = $derived(isSupported(capabilities, 'Global hotkey'));
+  // The same row the Capability table prints, so the reason a key did not
+  // register is not retyped here.
+  let hotkeyDetail = $derived.by(() => {
+    const row = capabilities.find((entry) => entry.feature === 'Global hotkey');
+    if (!row) return null;
+    const { capability } = row;
+    if ('Degraded' in capability) return capability.Degraded;
+    if ('Unsupported' in capability) return capability.Unsupported;
+    return null;
+  });
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -125,12 +154,14 @@
           <button
             class="item"
             class:on={page === item.id}
-            disabled={!item.available}
+            class:pending={!item.available}
             aria-current={page === item.id ? 'page' : undefined}
             onclick={() => (page = item.id)}
           >
             <PixelIcon name={item.icon} size={1.1} />
-            <span>{item.label}</span>
+            <!-- #239 AC 4: the label is the string macOS draws, from
+                 shared/contract/strings — not a second copy typed here. -->
+            <span>{pageLabel(item, language)}</span>
           </button>
         {/each}
       {/each}
@@ -169,10 +200,15 @@
           {busy}
           onPreview={(cue) => run(() => invoke('sound_preview', { cue }), false)}
         />
+      {:else if page === 'shortcuts'}
+        <ShortcutsPage hotkeySupported={hotkeySupported} hotkeyDetail={hotkeyDetail} />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} onResetPosition={resetPosition} />
       {:else if page === 'about'}
         <AboutPage {settingsFile} />
+      {:else}
+        <!-- The five pages with no controls: an argument, not a blank pane. -->
+        <UnavailablePage title={pendingPage?.label ?? ''} reason={pendingPage?.reason ?? ''} />
       {/if}
     </div>
   </div>
