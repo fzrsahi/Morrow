@@ -2,7 +2,13 @@
 // only owns the timer and the invoke; every decision is made here, on an
 // injected clock, so the macOS policy can be tested without a desktop.
 import { describe, expect, test } from 'bun:test';
-import { FOLLOW_UP_MS, FollowUpReminders, type ReminderRoom } from './reminders';
+import {
+  FOLLOW_UP_MS,
+  FollowUpReminders,
+  followUpIntervalMs,
+  followUpMinutesFromSettings,
+  type ReminderRoom,
+} from './reminders';
 import type { Card } from './types';
 
 const awake: ReminderRoom = { capable: true, locked: false, quiet: false };
@@ -125,5 +131,39 @@ describe('FollowUpReminders (#201)', () => {
 
   test('the interval is the smallest non-zero macOS follow-up choice', () => {
     expect(FOLLOW_UP_MS).toBe(60_000);
+  });
+});
+
+describe('follow-up interval choices (#201 PR203 review)', () => {
+  test('Swift choices are [0,1,2,3,5] minutes; 0 disables, unknown falls back to 1', () => {
+    expect(followUpIntervalMs(0)).toBeNull();
+    expect(followUpIntervalMs(1)).toBe(60_000);
+    expect(followUpIntervalMs(2)).toBe(120_000);
+    expect(followUpIntervalMs(3)).toBe(180_000);
+    expect(followUpIntervalMs(5)).toBe(300_000);
+    expect(followUpIntervalMs(7)).toBe(60_000);
+  });
+
+  test('a stored value is read as one of the offered choices', () => {
+    expect(followUpMinutesFromSettings(0)).toBe(0);
+    expect(followUpMinutesFromSettings('5')).toBe(5);
+    expect(followUpMinutesFromSettings(null)).toBe(1);
+    expect(followUpMinutesFromSettings(9)).toBe(1);
+  });
+
+  test('off never collects and never schedules a wake-up', () => {
+    const reminders = new FollowUpReminders(0);
+    reminders.sync([approval(7)], 0);
+    expect(reminders.enabled).toBe(false);
+    expect(reminders.collect(600_000, awake)).toEqual([]);
+    expect(reminders.nextDue(0, awake)).toBeNull();
+  });
+
+  test('changing the setting restarts every wait without a wall clock', () => {
+    const reminders = new FollowUpReminders(1);
+    reminders.sync([approval(7)], 0);
+    reminders.configure(2, 0);
+    expect(reminders.collect(60_000, awake)).toEqual([]);
+    expect(reminders.collect(120_000, awake)).toHaveLength(1);
   });
 });

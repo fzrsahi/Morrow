@@ -4,19 +4,42 @@ What each adapter uses on Windows, why that and not something else, and what
 only a Windows host can confirm. The Linux answers are in
 [`handoff-windows-linux-port.md`](handoff-windows-linux-port.md); the Capability
 table that reports these rows is `morrow-platform::capability`, and it is
-probed per OS (`Environment::os`), so Settings says the truth on both.
+probed per OS (`Environment::os`).
+
+A row may only say `Supported` or `Limited` when `capability::ADAPTERS` names
+the module behind it, and `tests/capability_and_settings.rs` fails when one does
+not (#235). That is what keeps this document honest: the table below describes
+adapters that exist, and the ones that do not are listed at the end.
 
 | Ability | Linux ran | Windows uses | Verified by |
 |---|---|---|---|
 | Now Playing | `playerctl` (MPRIS over D-Bus) | `GlobalSystemMediaTransportControlsSessionManager` (WinRT SMTC) | W-006 |
 | Volume | `wpctl` / `pactl` | `IAudioEndpointVolume` (Core Audio) | W-006 |
 | Screen lock | `loginctl … LockedHint` | `WTSSessionInfoEx` → `SessionFlags` | W-007 |
-| Fullscreen | `_NET_WM_STATE_FULLSCREEN` | `SHQueryUserNotificationState` | W-007 |
+| Fullscreen | — no reader yet (see below) | `SHQueryUserNotificationState` | W-007 |
 | Reminders | `notify-send` | `ToastNotificationManager` | W-009 (installed app) |
 | Start at login | `~/.config/autostart/*.desktop` | `HKCU\…\CurrentVersion\Run` via `reg.exe` | W-009 |
 | Jump to terminal | `swaymsg`/`hyprctl`/`wmctrl` by app id | the session's process chain, then `SetForegroundWindow` | W-005 |
-| Pointer | X11 only | `GetCursorPos`, global here | — |
-| Secrets | session bus | Credential Manager | W-008 |
+| Pointer | — no reader yet (see below) | `GetCursorPos`, global here | — |
+| Sound effects | `pw-play` / `paplay` / `canberra-gtk-play` | `PlaySoundW` with `SND_ASYNC` | — |
+| Secrets | — no adapter yet (see below) | — no adapter yet (see below) | W-008 |
+
+## What is not wired yet (#235)
+
+These rows answer `Not supported` with a reason on both OSes, because no module
+behind them exists. They are the list the Capability table used to overstate:
+
+`Synthetic input` · `System stats` · `Geolocation` · `Secret storage` ·
+`Claude credentials` · `Bluetooth (ESP32)` · `Updates`
+
+On Linux only, for the same reason: `Fullscreen detection`, `Pointer outside
+the island`, `Terminal visibility`. The Windows adapters for the first two are
+real (`windows/fullscreen.rs`, `windows/pointer.rs`); the Linux readers
+(`_NET_WM_STATE`, `XQueryPointer`, `_NET_ACTIVE_WINDOW`) are not written yet, so
+the commands answer `false`/`None` and the table says so instead of promising.
+
+Adding a row back is two steps: write the adapter, then add it to
+`capability::ADAPTERS` — the guard test fails until both are true.
 
 ## The three worth arguing about
 

@@ -33,19 +33,9 @@ pub fn capabilities() -> Vec<capability::Row> {
             row.capability = outcome;
         }
     }
-    // #197: `fullscreen` has no probe behind it off Windows — it returns
-    // false on every Linux session, X11 included. The generic table would
-    // still promise "Supported" there; say so instead, and keep the island
-    // visible. Windows keeps the probe's own answer from the table.
-    #[cfg(not(windows))]
-    if let Some(row) = rows
-        .iter_mut()
-        .find(|row| row.feature == Feature::Fullscreen.name())
-    {
-        row.capability = capability::Capability::Unsupported(
-            "fullscreen detection is Windows-only; the island stays visible".into(),
-        );
-    }
+    // #235: the Fullscreen row used to be corrected here because the generic
+    // table promised "Supported" on every Linux session. The probe says so
+    // itself now, so the shell no longer keeps a second copy of that answer.
     rows
 }
 

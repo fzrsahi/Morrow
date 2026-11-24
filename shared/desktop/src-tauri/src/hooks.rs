@@ -85,6 +85,10 @@ pub fn hooks_status(site: State<'_, HooksSite>) -> HooksSnapshot {
 /// machine or its config does not parse.
 #[tauri::command]
 pub fn opencode_install(site: State<'_, HooksSite>) -> Result<bool, String> {
+    install_opencode(&site)
+}
+
+pub(crate) fn install_opencode(site: &HooksSite) -> Result<bool, String> {
     opencode::install(&site.opencode, &stamp())
         .map(|done| done.is_some())
         .map_err(|error| error.to_string())
@@ -94,6 +98,10 @@ pub fn opencode_install(site: State<'_, HooksSite>) -> Result<bool, String> {
 /// this machine.
 #[tauri::command]
 pub fn kimi_install(site: State<'_, HooksSite>) -> Result<bool, String> {
+    install_kimi(&site)
+}
+
+pub(crate) fn install_kimi(site: &HooksSite) -> Result<bool, String> {
     kimi::install(&site.kimi, &stamp())
         .map(|done| done.is_some())
         .map_err(|error| error.to_string())
@@ -102,6 +110,10 @@ pub fn kimi_install(site: State<'_, HooksSite>) -> Result<bool, String> {
 /// Take Kimi's blocks back out, restoring a legacy scalar if there was one.
 #[tauri::command]
 pub fn kimi_uninstall(site: State<'_, HooksSite>) -> Result<bool, String> {
+    uninstall_kimi(&site)
+}
+
+pub(crate) fn uninstall_kimi(site: &HooksSite) -> Result<bool, String> {
     kimi::uninstall(&site.kimi, &stamp())
         .map(|done| done.is_some())
         .map_err(|error| error.to_string())
@@ -111,25 +123,30 @@ pub fn kimi_uninstall(site: State<'_, HooksSite>) -> Result<bool, String> {
 /// not on this machine.
 #[tauri::command]
 pub fn yaml_install(site: State<'_, HooksSite>, source: String) -> Result<bool, String> {
-    let entry = site
-        .yaml
-        .iter()
-        .find(|entry| entry.source.source == source)
-        .ok_or_else(|| format!("no YAML source named {source}"))?;
-    yaml_hooks::install(entry, &stamp())
+    install_yaml(&site, &source)
+}
+
+pub(crate) fn install_yaml(site: &HooksSite, source: &str) -> Result<bool, String> {
+    yaml_hooks::install(yaml_site(site, source)?, &stamp())
         .map(|done| done.is_some())
         .map_err(|error| error.to_string())
+}
+
+fn yaml_site<'a>(site: &'a HooksSite, source: &str) -> Result<&'a yaml_hooks::Site, String> {
+    site.yaml
+        .iter()
+        .find(|entry| entry.source.source == source)
+        .ok_or_else(|| format!("no YAML source named {source}"))
 }
 
 /// Take one YAML source's block back out.
 #[tauri::command]
 pub fn yaml_uninstall(site: State<'_, HooksSite>, source: String) -> Result<bool, String> {
-    let entry = site
-        .yaml
-        .iter()
-        .find(|entry| entry.source.source == source)
-        .ok_or_else(|| format!("no YAML source named {source}"))?;
-    yaml_hooks::uninstall(entry, &stamp())
+    uninstall_yaml(&site, &source)
+}
+
+pub(crate) fn uninstall_yaml(site: &HooksSite, source: &str) -> Result<bool, String> {
+    yaml_hooks::uninstall(yaml_site(site, source)?, &stamp())
         .map(|done| done.is_some())
         .map_err(|error| error.to_string())
 }
@@ -137,6 +154,10 @@ pub fn yaml_uninstall(site: State<'_, HooksSite>, source: String) -> Result<bool
 /// Take OpenCode's plugin and its registration back out.
 #[tauri::command]
 pub fn opencode_uninstall(site: State<'_, HooksSite>) -> Result<bool, String> {
+    uninstall_opencode(&site)
+}
+
+pub(crate) fn uninstall_opencode(site: &HooksSite) -> Result<bool, String> {
     opencode::uninstall(&site.opencode, &stamp())
         .map(|done| done.is_some())
         .map_err(|error| error.to_string())
@@ -145,11 +166,15 @@ pub fn opencode_uninstall(site: State<'_, HooksSite>) -> Result<bool, String> {
 /// Install or repair.
 #[tauri::command]
 pub fn hooks_install(site: State<'_, HooksSite>) -> Result<Report, String> {
+    install_claude(&site)
+}
+
+pub(crate) fn install_claude(site: &HooksSite) -> Result<Report, String> {
     let version = claude_version();
     let epoch = stamp();
     #[cfg(windows)]
     return hooks_windows::install(
-        &windows_paths(&site),
+        &windows_paths(site),
         site.bridge_source.as_deref(),
         version.as_deref(),
         &epoch,
@@ -209,8 +234,12 @@ pub fn target_uninstall(
 /// Remove: the script, the bridge, and our entries in `settings.json`.
 #[tauri::command]
 pub fn hooks_uninstall(site: State<'_, HooksSite>) -> Result<Report, String> {
+    uninstall_claude(&site)
+}
+
+pub(crate) fn uninstall_claude(site: &HooksSite) -> Result<Report, String> {
     #[cfg(windows)]
-    return hooks_windows::uninstall(&windows_paths(&site)).map_err(|error| error.to_string());
+    return hooks_windows::uninstall(&windows_paths(site)).map_err(|error| error.to_string());
     #[cfg(unix)]
     return hooks::uninstall(&site.paths).map_err(|error| error.to_string());
 }
@@ -218,7 +247,7 @@ pub fn hooks_uninstall(site: State<'_, HooksSite>) -> Result<Report, String> {
 /// The Claude hook's paths on Windows: `%USERPROFILE%`, with Claude Code's own
 /// folder taken from the site the shell already resolved (#108).
 #[cfg(windows)]
-fn windows_paths(site: &HooksSite) -> hooks_windows::Paths {
+pub(crate) fn windows_paths(site: &HooksSite) -> hooks_windows::Paths {
     // The unix `Paths` already resolved `$CLAUDE_CONFIG_DIR` against a `.claude`
     // default, so its settings folder is the config folder — unless it is the
     // default, which `Paths::new` derives again from the same home.
@@ -295,7 +324,7 @@ fn claude_version() -> Option<String> {
 
 /// Seconds since the epoch, for the back-up name: unique enough for one
 /// machine's first write, and not worth a date library.
-fn stamp() -> String {
+pub(crate) fn stamp() -> String {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())

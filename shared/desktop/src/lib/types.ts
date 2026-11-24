@@ -203,3 +203,6 @@ export type CapabilityRow = {
 };
 
 export type AutostartStatus = { installed: boolean; path: string };
+
+/** #241 — one row of the Sound page, from the shell's cue table. */
+export type SoundCue = { name: string; file: string };
