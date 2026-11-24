@@ -12,6 +12,7 @@
   import SoundPage from './lib/components/SoundPage.svelte';
   import {
     DEFAULT_APPEARANCE,
+    SETTINGS_KEYS,
     SETTINGS_NAV,
     appearanceFromSettings,
     type AppearanceSettings,
@@ -43,6 +44,9 @@
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
   let cues = $state<SoundCue[]>([]);
+  // #239 AC 1: shown on About so the file the user may want to back up or paste
+  // into a bug report is reachable without knowing the convention.
+  let settingsFile = $state('');
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -54,17 +58,19 @@
 
   async function load() {
     try {
-      const [h, c, a, stored, sound] = await Promise.all([
+      const [h, c, a, stored, sound, file] = await Promise.all([
         invoke<HooksSnapshot>('hooks_status'),
         invoke<CapabilityRow[]>('capabilities'),
         invoke<AutostartStatus>('autostart_status'),
         invoke<unknown>('settings_load'),
         invoke<SoundCue[]>('sound_cues'),
+        invoke<string>('settings_path'),
       ]);
       hooks = h;
       capabilities = c;
       autostart = a;
       cues = sound;
+      settingsFile = file;
       appearance = appearanceFromSettings(stored);
       applyAppearance();
       error = null;
@@ -90,6 +96,14 @@
     appearance = next;
     applyAppearance();
     void run(() => invoke('settings_set', { key, value }), false);
+  }
+
+  // #239 AC 1: the island's offset is per monitor and lives in the shell's own
+  // store, so the settings key alone cannot move it back. Both are reset: the key
+  // is what the page reads, the store is what the window obeys.
+  function resetPosition() {
+    saveSetting(SETTINGS_KEYS.position, DEFAULT_APPEARANCE.position);
+    void run(() => invoke('reset_island_position'));
   }
 
   // #241: the same answer the Capability table gives, read the same way, so
@@ -156,9 +170,9 @@
           onPreview={(cue) => run(() => invoke('sound_preview', { cue }), false)}
         />
       {:else if page === 'appearance'}
-        <AppearancePage {appearance} onChange={saveSetting} />
+        <AppearancePage {appearance} onChange={saveSetting} onResetPosition={resetPosition} />
       {:else if page === 'about'}
-        <AboutPage />
+        <AboutPage {settingsFile} />
       {/if}
     </div>
   </div>
