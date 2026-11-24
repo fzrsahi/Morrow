@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  DEFAULT_HOTKEY,
   appearanceFromSettings,
   describeCapability,
   sessionDensityFromSettings,
@@ -54,6 +55,7 @@ describe('appearance settings', () => {
       position: 'Top centre · primary monitor',
       expandOnHover: false,
       collapseOnLeave: false,
+      language: 'system',
     });
   });
 
@@ -151,5 +153,50 @@ describe('appearance settings', () => {
         true,
       );
     }
+  });
+});
+
+// #239 AC 3 — a Settings page with no controls is a statement about the port, so
+// it has to carry its argument. These tests are the difference between "not
+// built" and "hidden": a greyed-out row with no reason reads as a permission
+// problem, and the next person cannot tell whether it is a bug.
+describe('the pages that have no controls say why', () => {
+  const items = SETTINGS_NAV.flatMap((group) => group.items);
+
+  test('every unavailable page carries a reason and every available one does not', () => {
+    for (const item of items) {
+      if (item.available) {
+        expect(item.reason, `${item.id} is built but still argues`).toBeUndefined();
+      } else {
+        expect(item.reason, `${item.id} has no controls and no reason`).toBeTruthy();
+      }
+    }
+  });
+
+  test('a reason names something specific, not "not implemented"', () => {
+    // A placeholder would satisfy the type and defeat the criterion.
+    for (const item of items.filter((entry) => !entry.available)) {
+      const reason = item.reason ?? '';
+      expect(reason.length, `${item.id}: ${reason}`).toBeGreaterThan(60);
+      expect(reason.toLowerCase()).not.toMatch(/^(not implemented|todo|coming soon|unsupported)\.?$/);
+    }
+  });
+
+  test('five pages are still empty and six are built', () => {
+    // Measured, not assumed: #239 counted seven empty pages; Sound was filled by
+    // #241 and Shortcuts by this change, so five remain.
+    expect(items.filter((entry) => !entry.available).map((entry) => entry.id)).toEqual([
+      'general',
+      'mascots',
+      'agents',
+      'music',
+      'behavior',
+    ]);
+    expect(items.filter((entry) => entry.available).length).toBe(6);
+  });
+
+  test('the shortcut the page prints is the one the shell registers', () => {
+    // Two copies of a binding drift; `hotkey.rs` names this string once.
+    expect(DEFAULT_HOTKEY).toBe('Super+Space');
   });
 });

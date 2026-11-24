@@ -5,7 +5,9 @@
 //! No polling here: the card asks when it is open, which is the only time a
 //! music card is on screen.
 
+#[cfg(unix)]
 use std::sync::OnceLock;
+#[cfg(unix)]
 use std::time::Instant;
 
 use morrow_core::music::{LyricLine, Track};
@@ -17,6 +19,10 @@ use morrow_platform::music::{NowPlaying, SystemVolume};
 
 static RUNNER: SystemRunner = SystemRunner;
 
+/// Unix-only since #239 AC 1: its one Windows caller was `music_position`, an IPC
+/// command with no caller. Removing it left this unused on Windows, which
+/// `windows/ci/check.sh` (`-D warnings`) said out loud.
+#[cfg(unix)]
 fn monotonic() -> i64 {
     static START: OnceLock<Instant> = OnceLock::new();
     let start = START.get_or_init(Instant::now);
@@ -31,14 +37,6 @@ pub fn music_track() -> Result<Option<Track>, String> {
     return morrow_platform::windows::media::track();
     #[cfg(unix)]
     return NowPlaying::new(&RUNNER, monotonic()).track();
-}
-
-/// Where the track is *now*, in microseconds: the card ticks without asking
-/// the player again, and the player is not required to announce position.
-#[tauri::command]
-pub fn music_position(track: Track, read_at_ms: i64) -> i64 {
-    morrow_core::music::Position::new(track.position_us, read_at_ms, track.status, track.length_us)
-        .at(monotonic())
 }
 
 #[tauri::command]
