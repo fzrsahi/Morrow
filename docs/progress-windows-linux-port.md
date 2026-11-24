@@ -2,6 +2,7 @@
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
 **Checkpoint terakhir:** 2026-11-22 (keduabelas) — dua puluh empat slice remediasi (#249–#287). #232 tertutup kecuali gate hardware: **tiga belas reader**, cache scan tersambung, dan observer peristiwa ada (kedua lengan platform belum pernah berjalan). Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+
 **Checkpoint terakhir:** 2026-11-22 — audit #240 dan dua slice remediasi pertama. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan delapan sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
@@ -73,6 +74,7 @@ Status: `belum` · `sedang` · `PR dibuka` · `revisi` · `merged` · `gagal` ·
 | 6 | #241 → PR #250 | outlet suara: `PlaySound` diputar, tabel cue, `PlaySoundW` di Windows, halaman Settings → Sound | `PR dibuka` (stacked #249) | 643 test Rust, 211 frontend, `windows/ci/check.sh` PASS |
 | 6 | #242 → PR #251 | dokumen status cocok dengan kode: 33 baris papan, kolom Status §5.1/§5.2 | `PR dibuka` (stacked #250) | `rg` tidak menemukan klaim yang dibantah |
 | 6 | #243 → PR #252 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `PR dibuka` (stacked #251) | self-check 11/11; gate penuh butuh host dengan `claude` |
+
 | 6 | #243 → PR #253 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `revisi` (stacked #251) | self-check 14/14 di checkout bersih; gate penuh **belum jalan** di host mana pun |
 
 Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge commit*, hapus branch setelah merge.
@@ -104,6 +106,7 @@ Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge com
 `linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude` dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Itu bisa dijalankan siapa pun, di mesin mana pun, dan 11 pemeriksaannya lulus pada 2026-11-22. Separuh panel (CLI asli + klik) tetap butuh host.
 
 `windows/ci/e2e2.ps1` **belum pernah dijalankan di host Windows**. Bagian installer-nya otomatis; bagian panel masih manual dan tercetak sebagai langkah di blok Evidence-nya.
+
 `linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude`, tanpa frontend, dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Ia tidak memanggil `x11_binaries`/`x11_workdir`, jadi jalan di checkout bersih asal ada biner aplikasi (`MORROW_APP`, atau `target/debug/morrow-app`) — Tauri memerlukan `dist` saat mengompilasi, jadi skrip tidak lagi membangunnya sendiri. 14 pemeriksaan (11 installer + 3 untuk logika file marker). Separuh panel (CLI asli + klik) tetap butuh host.
 
 `windows/ci/e2e2.ps1` **ditulis tetapi belum pernah dijalankan di host Windows mana pun**. Bagian installer-nya otomatis; bagian panel masih manual dan tercetak sebagai langkah di blok Evidence-nya. Baris `PASS` skrip itu hanya untuk separuh installer, bukan untuk gate.
@@ -223,6 +226,7 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 - **Bukti:** `cargo test --workspace` 666 lulus (647 sebelum dua slice ini); `cargo test -p morrow-core --lib config_roots` 7 lulus; `swift test --filter DiscoveryFixtureExporter` lulus (fixture di disk memang keluaran Swift); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11 (installer tetap byte-for-byte).
 - **Berikutnya:** #247b (`ConfigPathIdentity`: `realpath`, symlink, `writeTarget`), #247c (walk + `SQLiteReader`), #247d (tangga `resolve` sebagai perubahan perilaku installer), lalu #246 (`AgentProcessFinder`), #248 (policy + backfill), #244.
 - **Blocker:** sama seperti sebelumnya — dan `CLAUDE_CONFIG_DIR` yang berupa symlink masih bisa membuat penulisan mengganti link itu dengan file biasa sampai #247b mendarat.
+
 ### 2026-11-23 (revisi review #253) — gate kini bisa gagal, dan jalan di checkout bersih
 
 - **Sudah:** menanggapi `CHANGES_REQUESTED` fzrsahi di #253. (1) Efek tool sekarang berupa **file marker per-run**: prompt memuat path (`__MARKER_FILE__`), approve memeriksa isi file itu, deny memeriksa ketiadaannya — bukan lagi `grep` pada pane yang menggemaikan prompt; `pipe-pane` dipasang sebelum `send-keys`, dan pengecekan efek dilakukan setelah kartu hilang. (2) `--self-check` tidak lagi memanggil `x11_binaries`/`x11_workdir`: tidak butuh frontend, display, socket, atau bridge. (3) `windows/ci/e2e2.ps1` jujur: "ditulis tetapi belum pernah dijalankan di host Windows", default biner rilis, `try/finally` membersihkan `%TEMP%\e2e2-*`, dan `PASS`-nya hanya untuk separuh installer. (4) Baris papan diperbaiki ke #253; AC jalan nyata di #98/#108 dinyatakan masih terbuka di Merge Danger.
