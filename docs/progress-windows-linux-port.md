@@ -1,9 +1,9 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (kedelapan) — empat belas slice remediasi (#249–#271). #246, #247, #248 selesai; dua reader terdaftar; sisa #232 adalah #244 dan jalur process-first untuk Cursor/Gemini. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (keduabelas) — dua puluh empat slice remediasi (#249–#287). #232 tertutup kecuali gate hardware: **tiga belas reader**, cache scan tersambung, dan observer peristiwa ada (kedua lengan platform belum pernah berjalan). Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+
 **Checkpoint terakhir:** 2026-11-22 — audit #240 dan dua slice remediasi pertama. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan delapan sub-issue #240.
-**Checkpoint terakhir:** 2026-11-22 (kesepuluh) — delapan belas slice remediasi (#249–#277). #246, #247, #248 selesai penuh; **lima reader terdaftar** (Claude, Codex, OpenCode, Cursor, Gemini); sisa #232 adalah #244 batch 2. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -73,6 +73,8 @@ Status: `belum` · `sedang` · `PR dibuka` · `revisi` · `merged` · `gagal` ·
 | 6 | #235 → PR #249 | Capability jujur: 11 baris Linux / 8 Windows turun ke `Unsupported(reason)`, registry `ADAPTERS` + test penjaga | `PR dibuka` (stacked #203) | 635 test Rust; guard merah dulu untuk 11 baris |
 | 6 | #241 → PR #250 | outlet suara: `PlaySound` diputar, tabel cue, `PlaySoundW` di Windows, halaman Settings → Sound | `PR dibuka` (stacked #249) | 643 test Rust, 211 frontend, `windows/ci/check.sh` PASS |
 | 6 | #242 → PR #251 | dokumen status cocok dengan kode: 33 baris papan, kolom Status §5.1/§5.2 | `PR dibuka` (stacked #250) | `rg` tidak menemukan klaim yang dibantah |
+| 6 | #243 → PR #252 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `PR dibuka` (stacked #251) | self-check 11/11; gate penuh butuh host dengan `claude` |
+
 | 6 | #243 → PR #253 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `revisi` (stacked #251) | self-check 14/14 di checkout bersih; gate penuh **belum jalan** di host mana pun |
 
 Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge commit*, hapus branch setelah merge.
@@ -100,6 +102,10 @@ Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge com
 |---|---|---|---|---|---|
 | `E2E-1` | 1 | hook JSON sintetis | kabel tersambung dua arah | Xvfb (smoke) → host Debian X11 (final) | `linux/ci/e2e1.sh` |
 | `E2E-2` | 3, 4 | `claude` asli + hook terinstall | produk bekerja terhadap CLI nyata | host Debian; Windows QEMU/hardware | `linux/ci/e2e2.sh` · `windows/ci/e2e2.ps1` |
+
+`linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude` dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Itu bisa dijalankan siapa pun, di mesin mana pun, dan 11 pemeriksaannya lulus pada 2026-11-22. Separuh panel (CLI asli + klik) tetap butuh host.
+
+`windows/ci/e2e2.ps1` **belum pernah dijalankan di host Windows**. Bagian installer-nya otomatis; bagian panel masih manual dan tercetak sebagai langkah di blok Evidence-nya.
 
 `linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude`, tanpa frontend, dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Ia tidak memanggil `x11_binaries`/`x11_workdir`, jadi jalan di checkout bersih asal ada biner aplikasi (`MORROW_APP`, atau `target/debug/morrow-app`) — Tauri memerlukan `dist` saat mengompilasi, jadi skrip tidak lagi membangunnya sendiri. 14 pemeriksaan (11 installer + 3 untuk logika file marker). Separuh panel (CLI asli + klik) tetap butuh host.
 
@@ -130,6 +136,26 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (keduabelas) — #232 ditutup, kecuali yang tidak bisa dijalankan
+
+- **Sudah:** **#284 → PR #285** cache scan tersambung + gerbang kesegaran. **#286 → PR #287** crate `morrow-watch` (inotify, `ReadDirectoryChangesW`, fallback poll) dan penyambungannya ke tick.
+- **Yang ditemukan saat mengukur:** `ClaudeTranscripts::read` membaca **setiap** transkrip di setiap proyek — 4000 file, empat kali per detik. **1,5 detik per scan.** Gerbang kesegaran sebelum membaca memotongnya jadi 88 ms; cache memotong bacaannya jadi nol pada tick berikutnya. Cache teks memakai `Arc<str>` karena menyerahkan salinan 64 KB × 4000 file berarti 250 MB memcpy per scan.
+- **Kekhawatiran saya sendiri yang tidak berdasar:** "O(9 × proses)" yang saya ulang di tiga PR. Diukur: **2,9 ms** terhadap scan 84 ms — 3,4%. Sekarang ada angkanya, bukan penilaian.
+- **Yang tidak selesai:** E2E-2 penuh (#240 kriteria 4) butuh host dengan `claude` asli. Lengan Linux dan Windows `morrow-watch` di-type-check untuk kedua target tapi **belum pernah berjalan** — dinyatakan di dokumentasi crate.
+- **Bukti:** `cargo test --workspace` 848 lulus (843 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS (kini termasuk `morrow-watch`); `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** menurunkan rantai 26 PR ke `main` dan me-review satu slice dari ujung ke ujung di mesin Linux. Tidak ada PR yang pernah merge.
+
+### 2026-11-22 (kesebelas) — #244 batch 2: enam agent, tiga PR
+
+- **Sudah:** **#278 → PR #279** Cline (store-first, tanpa proses: ekstensi VS Code) dan flat store Qoder/CodeBuddy/Factory sebagai satu reader bertabel. **#280 → PR #281** Copilot (direktori dinamai sesi, cwd dibaca dari aliran event) dan Grok (direktori dinamai cwd yang di-percent-encode, `%2F` bukan `-`). **#282 → PR #283** Kimi (index = peta; legacy `md5(cwd)`) dan Kiro (V3 per-workspace + V2 `sessions/cli`).
+- **Dengan itu #244 tertutup**, dan #232 hanya menyisakan observer peristiwa dan `ScanCache`.
+- **Bug yang ditemukan test sendiri:** `{{` literal di dalam `concat!` (benih Grok bukan JSON); reader Copilot membaca satu tingkat terlalu tinggi; envelope legacy Kimi dikenali dari objek `message` sehingga `context.append_message` tertelan; `is_session_process` tanpa aturan untuk `cursor`/`qoder`/`codebuddy`/`droid`; dan modul baru dua kali masuk **ke dalam doc block modul lain** — tertangkap clippy `doc_lazy_continuation`.
+- **Dua ekspektasi test saya sendiri yang salah:** md5 yang membandingkan hash dengan dirinya, dan urutan giliran Kiro yang mengandaikan "tiga user lalu tiga balasan" padahal reader menggabung menurut indeks baris.
+- **Biaya baru yang terlihat:** `scan_with` menjalankan **sembilan** reader proses atas tabel proses tiap scan — O(9 × proses), sekali per lima detik. Tiga PR berturut-turut menaikkannya.
+- **Bukti:** `cargo test --workspace` 843 lulus (792 sebelum batch 2); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** menyambungkan `ScanCache` (#263) ke reader — satu-satunya AC yang masih saya tandai "sebagian", dan sekarang penghalang utama biaya scan.
+- **Blocker:** gate hardware tidak berubah.
 
 ### 2026-11-22 (kesepuluh) — Cursor dan Gemini, dari prosesnya
 
@@ -178,6 +204,29 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 - **Blocker:** gate hardware tidak berubah.
 
 ### 2026-11-22 (kelima) — store SQLite, dan guard yang ternyata mati
+
+- **Sudah:** **#247c → PR #257** `morrow-core::sqlite` (buka read-only, fallback `immutable`, `table_columns` dengan nama tabel yang ditolak kecuali identifier polos, `non_empty_text`) dan `discovery::opencode` (sesi terbaru untuk sebuah cwd lewat `directory` **atau** `path.cwd` di pesan setelah `/cd`, `root_sessions_only` untuk sesi subagent MiMo, model dari pesan terbaru, tiga turn teks terakhir). Dependensi baru: `rusqlite` dengan feature `bundled`.
+- **Bug yang ditemukan:** guard `SQLITE_CANTOPEN` yang saya tulis pertama **tidak pernah terpicu** — SQLite di mesin ini melaporkan `SQLITE_IOERR` untuk keadaan yang sama, dan untuk WAL yang ditutup bersih tanpa sidecar ia bahkan tidak gagal. Fallback sekarang dipicu kegagalan probe apa pun. Selain itu SQL saya sendiri menghasilkan `WHERE AND (…)` saat kedua filter opsional kosong; statement gagal prepare dan `None` dikembalikan — yang terlihat persis seperti "tidak ada agen berjalan".
+- **Tidak dikerjakan:** AC "walk direktori punya batas kedalaman" **tidak punya padanan di Swift** — `Discovery/` hanya me-list satu direktori, tidak pernah rekursif. Walk rekursif di sini akan jadi port dari tidak-apa-apa; AC-nya perlu ditulis ulang.
+- **Bukti:** `cargo test --workspace` 703 lulus (684 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS termasuk `rusqlite` bundled untuk MSVC; `e2e2.sh --self-check` 11/11; `bun test` 211.
+- **Berikutnya:** #247d (tangga `resolve` sebagai perubahan perilaku installer), #246 (`AgentProcessFinder`), #248 (coordinator + backfill + dedupe yang memakai `identity`), #244.
+- **Blocker:** tidak ada slice #232 yang bisa "dipakai" sampai #248 menyambungkannya; gate hardware tetap butuh host Debian/Windows.
+
+### 2026-11-22 (keempat) — path identity, dan klaim yang harus dicabut
+
+- **Sudah:** **#247b → PR #256** `morrow-core::path_identity`: `resolved` (symlink diikuti, komponen memakai ejaan di disk, ekor yang belum ada dipertahankan, dangling link diikuti ke targetnya), `identity` (case fold hanya di Windows), `lexically_normalized` (sadar `PathStyle`, bisa diuji di host POSIX). Pemanggil nyatanya `discovery::transcript_files::list` — **direktori** project di-resolve, entri **tidak**, karena project dir yang berupa symlink adalah cara dua akun berbagi satu project, sementara transkrip yang di-symlink harus melaporkan mtime-nya sendiri.
+- **Dicabut:** klaim di checkpoint sebelumnya bahwa `CLAUDE_CONFIG_DIR` berupa symlink membuat penulisan mengganti link dengan file biasa. **Tidak benar** — `fs::write` membuka path dan truncate *menembus* link, jadi link bertahan. `ConfigPathIdentity.writeTarget` hanya ada karena `String.write(atomically:)` di Swift me-rename salinan sementara di atas file. Tidak ada yang perlu diport; ada test yang memaku perilaku Rust-nya supaya "perbaikan" atomik tidak memasukkannya kembali.
+- **Bukti:** `cargo test --workspace` 684 lulus (666 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11.
+- **Berikutnya:** #247c (`SQLiteReader` + batas kedalaman walk + visited-set anti-loop), #247d (tangga `resolve`), #246 (`AgentProcessFinder`), #248 (policy + backfill + dedupe yang akhirnya memakai `identity`).
+- **Blocker:** `identity` belum punya pemanggil produksi sampai #248; cabang Windows `resolved` hanya di-compile-check, tidak dijalankan.
+
+### 2026-11-22 (ketiga) — discovery: seam pembaca, seam config-root, dan `~` yang ditulis literal
+
+- **Sudah:** tiga slice discovery. **#243 → PR #253** gate E2E-2 (lihat entri di bawah). **#245 → PR #254** seam `morrow-core::discovery`: `DiscoveryHit`, `ProjectDirEncoding`, tiga pembaca murni (model [CC], transkrip Cursor, file sesi Gemini) dengan fixture yang **diekspor dari Swift**, bukan diketik tangan. **#247 → PR #255** seam `morrow-core::config_roots`, dan bug yang ia temukan: `CLAUDE_CONFIG_DIR` dibaca mentah oleh installer, jadi `CLAUDE_CONFIG_DIR=~/work/claude` menulis `settings.json` ke folder bernama literal `~` sambil melaporkan sukses — [CC] membaca hook-nya dari tempat lain dan tidak melihat apa pun.
+- **Bukti:** `cargo test --workspace` 666 lulus (647 sebelum dua slice ini); `cargo test -p morrow-core --lib config_roots` 7 lulus; `swift test --filter DiscoveryFixtureExporter` lulus (fixture di disk memang keluaran Swift); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11 (installer tetap byte-for-byte).
+- **Berikutnya:** #247b (`ConfigPathIdentity`: `realpath`, symlink, `writeTarget`), #247c (walk + `SQLiteReader`), #247d (tangga `resolve` sebagai perubahan perilaku installer), lalu #246 (`AgentProcessFinder`), #248 (policy + backfill), #244.
+- **Blocker:** sama seperti sebelumnya — dan `CLAUDE_CONFIG_DIR` yang berupa symlink masih bisa membuat penulisan mengganti link itu dengan file biasa sampai #247b mendarat.
+
 ### 2026-11-23 (revisi review #253) — gate kini bisa gagal, dan jalan di checkout bersih
 
 - **Sudah:** menanggapi `CHANGES_REQUESTED` fzrsahi di #253. (1) Efek tool sekarang berupa **file marker per-run**: prompt memuat path (`__MARKER_FILE__`), approve memeriksa isi file itu, deny memeriksa ketiadaannya — bukan lagi `grep` pada pane yang menggemaikan prompt; `pipe-pane` dipasang sebelum `send-keys`, dan pengecekan efek dilakukan setelah kartu hilang. (2) `--self-check` tidak lagi memanggil `x11_binaries`/`x11_workdir`: tidak butuh frontend, display, socket, atau bridge. (3) `windows/ci/e2e2.ps1` jujur: "ditulis tetapi belum pernah dijalankan di host Windows", default biner rilis, `try/finally` membersihkan `%TEMP%\e2e2-*`, dan `PASS`-nya hanya untuk separuh installer. (4) Baris papan diperbaiki ke #253; AC jalan nyata di #98/#108 dinyatakan masih terbuka di Merge Danger.

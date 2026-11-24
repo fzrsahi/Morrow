@@ -88,6 +88,23 @@ the blocks. Names are the Swift ones (`MarkdownBlock`, `MarkdownList`,
 Known difference: Swift counts and splits `Character`s (grapheme clusters),
 the port counts and splits `char`s (scalar values).
 
+## `markdown_preview`: MarkdownPreviewText
+
+The one line a card can afford (`macos/Sources/MorrowCore/MarkdownPreviewText.swift`).
+`markdown` gives the blocks; this folds them into running text: a heading loses its
+`##`, list items join with ` · `, a table row becomes "cell, cell", a code block shows
+its first line plus ` …`. `preview_source` cuts the reply at `SOURCE_BUDGET` bytes of
+prose before any of that happens, because flattening a 139 KB Codex output to show 160
+characters took ~120 ms per streamed chunk.
+
+What it does **not** carry is styling: Swift returns an `AttributedString` so the notch
+can keep a heading bold and a code run monospaced, and this returns `String` because the
+ported card draws plain text. The segments are the place to grow that back.
+
+Known difference: Swift counts `sourceBudget` in UTF-8 bytes but cuts with
+`line.prefix(allowance)`, which counts `Character`s; the port counts bytes on both
+sides and never splits a character.
+
 ## `git`: GitBranchReader
 
 The checked-out branch of a session's `cwd`, read from `.git` rather than by
@@ -259,9 +276,29 @@ managed YAML region (14), `tests/json_minimal_editor.rs` is `JSONMinimalEditorTe
 the version gates, the legacy-name cleanup, install/repair/uninstall and the
 back-up rule).
 
+`tests/markdown_preview_conformance.rs` runs the 16 cases of
+`shared/contract/fixtures/core/markdown_preview.json` — exported from Swift by
+`MarkdownPreviewFixtureExporter` — through both preview modes and `preview_source`, so a
+change on the macOS side that nobody mirrored fails here instead of on a card.
+
 `tests/transcript_tailer.rs` is `JSONLTailerTests` and
 `JSONLTailerCursorQuestionTests` ported: 70 tests, all the parsing ones as
 they are and the attach/replacement ones driven through `TailState` with the
 bytes a watcher would have read. Two Swift tests are the watcher's own and
 have no counterpart (a dispatch source that stops firing, a delayed reopen
 after a rename).
+
+## Out of scope, not "not yet ported"
+
+`AppDistribution` (`macos/Sources/MorrowCore/AppDistribution.swift`) is Sparkle: a
+macOS appcast, an Ed25519 signature over a DMG, and `UpdateChecker`. There is no Linux
+or Windows translation of it, and there never will be — the port ships
+`tauri-plugin-updater` with `dist/latest.json` per `OS-ARCH`, and macOS keeps Sparkle
+because it is the only channel that can replace a signed `.app` in place. Listed here so
+the difference between "nobody wrote it" and "it does not belong here" survives the next
+audit.
+
+The same goes for the Apple-only surfaces in the macOS tree: hardware-notch detection,
+Live Activities, the Apple Companion (`CBPeripheralManager` + `MultipeerConnectivity`),
+Apple Mail, `NSHapticFeedbackManager` and the AppleScript media controls — the port
+answers them with SMTC, MPRIS and its own geometry.

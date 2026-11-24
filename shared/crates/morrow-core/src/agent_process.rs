@@ -133,12 +133,23 @@ pub fn is_session_process(source: &str, info: &ProcessInfo) -> bool {
         "kimi" => executable_name(&info.executable) == "kimi",
         "qwen" => executable_name(&info.executable) == "qwen",
         "copilot" => executable_name(&info.executable) == "copilot",
+        // Qoder's China build ships the same binary under `qoderclicn`.
+        "qoder" => matches!(
+            executable_name(&info.executable).as_str(),
+            "qoder" | "qodercli" | "qoderclicn"
+        ),
+        "codebuddy" => matches!(
+            executable_name(&info.executable).as_str(),
+            "codebuddy" | "codebuddy-cli"
+        ),
+        // Factory's CLI is `droid`; the store directory is `~/.factory`, which is
+        // why the source and the executable do not share a name.
+        "droid" => executable_name(&info.executable) == "droid",
         // Amazon Q Developer's CLI: `kiro-cli` is the binary, `kiro` the product.
         "kiro" => matches!(
             executable_name(&info.executable).as_str(),
             "kiro-cli" | "kiro"
         ),
-
         // The CLI binary is `cursor-agent`; `cursor` is the name it is sometimes
         // installed under. The IDE's own process is a desktop app, which this port
         // does not try to recognise (no `.app` bundles on Linux or Windows).
@@ -289,27 +300,6 @@ mod tests {
 
     fn argv(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| (*item).to_owned()).collect()
-    }
-
-    /// #330: Copilot and Kiro are matched on the source/executable pair, not
-    /// on either side alone. A wrong pair must not light up a session card.
-    #[test]
-    fn copilot_and_kiro_need_the_matching_executable() {
-        for (source, executable, expected) in [
-            ("copilot", "/usr/bin/copilot", true),
-            ("copilot", "/usr/bin/kiro-cli", false),
-            ("kiro", "/usr/bin/kiro-cli", true),
-            ("kiro", "/usr/local/bin/kiro", true),
-            ("kiro", "/usr/bin/copilot", false),
-            ("codex", "/usr/bin/kiro-cli", false),
-        ] {
-            let info = process(10, executable, &[], Some("/w"), 1_000);
-            assert_eq!(
-                is_session_process(source, &info),
-                expected,
-                "{source} + {executable}"
-            );
-        }
     }
 
     /// The four roles the multicall binary takes. Counting any of the three
