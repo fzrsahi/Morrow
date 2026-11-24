@@ -25,6 +25,7 @@
 
 pub mod agent_process;
 pub mod agent_tasks;
+pub mod aiwork;
 pub mod attention;
 pub mod buddy;
 pub mod codex_rules;
