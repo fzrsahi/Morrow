@@ -1048,6 +1048,546 @@ pub mod flat_store {
     }
 }
 
+/// Kimi sessions (#282): kimi-code's session index and legacy kimi-cli's per-cwd
+/// directories, and the wire-protocol transcript reader for both.
+pub mod kimi {
+    use super::ChatMessage;
+
+    /// Legacy kimi-cli names the per-cwd directory `md5(cwd)`.
+    ///
+    /// The one read of a hash anywhere in this port, and it is here because the
+    /// directory name cannot be derived any other way. kimi-code's index is
+    /// preferred precisely so this path is the fallback.
+    pub fn workdir_hash(cwd: &str) -> String {
+        use md5::{Digest, Md5};
+        let digest = Md5::digest(cwd.as_bytes());
+        digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// What `session_index.jsonl` says about a session.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct IndexEntry {
+        pub session_id: String,
+        /// The directory holding `agents/main/wire.jsonl`.
+        pub session_dir: String,
+        pub work_dir: String,
+    }
+
+    /// Every usable row of kimi-code's index.
+    ///
+    /// A row missing any of the three fields is skipped rather than half-used: a
+    /// session without a directory has no transcript to read.
+    pub fn index_entries(jsonl: &str) -> Vec<IndexEntry> {
+        jsonl
+            .lines()
+            .filter(|line| !line.is_empty())
+            .filter_map(|line| {
+                let json = serde_json::from_str::<serde_json::Value>(line).ok()?;
+                let field = |key: &str| {
+                    json.get(key)
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                };
+                Some(IndexEntry {
+                    session_id: field("sessionId")?,
+                    session_dir: field("sessionDir")?,
+                    work_dir: field("workDir")?,
+                })
+            })
+            .collect()
+    }
+
+    /// The last three turns of a `wire.jsonl`, in either dialect.
+    ///
+    /// Two protocols share the file. Legacy kimi-cli wraps each record in
+    /// `{"message":{"type":…}}` with `TurnBegin`/`ContentPart`/`TurnEnd`; kimi-code
+    /// writes `turn.prompt` / `context.append_message` /
+    /// `context.append_loop_event` at the top level. The state machine is the same
+    /// for both: open a turn on the prompt, collect the assistant's parts, flush on
+    /// the next prompt.
+    pub fn recent_messages(tail: &str) -> Vec<ChatMessage> {
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        let mut user: Option<String> = None;
+        let mut assistant = String::new();
+        // A turn opened by `context.append_message` so a later `turn.prompt` can
+        // replace the user text instead of flushing a duplicate line.
+        let mut opened_by_append = false;
+
+        for line in tail.lines().filter(|line| !line.is_empty()) {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+
+            // The legacy envelope is recognised by a `type` *inside* `message`.
+            // kimi-code's `context.append_message` also carries a `message`
+            // object, so a bare object check would swallow it here.
+            let envelope = json.get("message").filter(|value| {
+                value.is_object() && value.get("type").is_some_and(|kind| kind.is_string())
+            });
+            if let Some(envelope) = envelope {
+                let kind = envelope.get("type").and_then(|kind| kind.as_str());
+                match kind {
+                    Some("TurnBegin") => {
+                        flush(&mut messages, &mut user, &mut assistant);
+                        if let Some(payload) = envelope.get("payload") {
+                            user = text_parts(payload.get("user_input"));
+                        }
+                    }
+                    Some("ContentPart") => {
+                        if let Some(payload) = envelope.get("payload") {
+                            if payload.get("type").and_then(|kind| kind.as_str()) == Some("text") {
+                                if let Some(text) = payload.get("text").and_then(|t| t.as_str()) {
+                                    assistant.push_str(text);
+                                }
+                            }
+                        }
+                    }
+                    Some("TurnEnd") => flush(&mut messages, &mut user, &mut assistant),
+                    _ => {}
+                }
+                continue;
+            }
+
+            match json.get("type").and_then(|kind| kind.as_str()) {
+                Some("turn.prompt") => {
+                    let prompt = text_parts(json.get("input"));
+                    if opened_by_append && assistant.is_empty() {
+                        // An empty prompt must not wipe the appended line.
+                        if prompt.as_deref().is_some_and(|text| !text.is_empty()) {
+                            user = prompt;
+                        }
+                    } else {
+                        flush(&mut messages, &mut user, &mut assistant);
+                        user = prompt;
+                    }
+                    opened_by_append = false;
+                }
+                Some("context.append_message") => {
+                    let is_user = json
+                        .get("message")
+                        .and_then(|message| message.get("role"))
+                        .and_then(|role| role.as_str())
+                        == Some("user");
+                    if is_user {
+                        let text = json
+                            .get("message")
+                            .and_then(|message| text_parts(message.get("content")));
+                        if let Some(text) = text.filter(|text| !text.is_empty()) {
+                            // `turn.prompt` is preferred when both exist for one
+                            // turn, so only start a turn here if none is open.
+                            if user.is_none() {
+                                user = Some(text);
+                                opened_by_append = true;
+                            }
+                        }
+                    }
+                }
+                Some("context.append_loop_event") => {
+                    if let Some(event) = json.get("event") {
+                        if event.get("type").and_then(|kind| kind.as_str()) == Some("content.part")
+                        {
+                            if let Some(part) = event.get("part") {
+                                if part.get("type").and_then(|kind| kind.as_str()) == Some("text") {
+                                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                                        assistant.push_str(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        flush(&mut messages, &mut user, &mut assistant);
+        let start = messages.len().saturating_sub(3);
+        messages.split_off(start)
+    }
+
+    fn flush(messages: &mut Vec<ChatMessage>, user: &mut Option<String>, assistant: &mut String) {
+        if let Some(text) = user.take().filter(|text| !text.is_empty()) {
+            messages.push(ChatMessage {
+                is_user: true,
+                text,
+            });
+            if !assistant.is_empty() {
+                messages.push(ChatMessage {
+                    is_user: false,
+                    text: std::mem::take(assistant),
+                });
+            }
+        }
+        assistant.clear();
+    }
+
+    /// The joined `text` of a content-part list. Parts that are not text carry no
+    /// words to show, so they contribute nothing.
+    fn text_parts(value: Option<&serde_json::Value>) -> Option<String> {
+        let parts = value?.as_array()?;
+        let joined: String = parts
+            .iter()
+            .filter(
+                |part| match part.get("type").and_then(|kind| kind.as_str()) {
+                    Some(kind) => kind == "text",
+                    None => true,
+                },
+            )
+            .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+            .collect();
+        Some(joined)
+    }
+}
+
+/// Kiro CLI sessions (#282): `~/.kiro/sessions/<workspace>/<session>/session.json`
+/// and the two older layouts beside it.
+pub mod kiro {
+    use super::ChatMessage;
+
+    /// What `session.json` says about a session.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Metadata {
+        pub session_id: Option<String>,
+        /// `workspacePaths` first, then `rootPaths`: the workspace can list
+        /// several roots, and the first is the one the session was opened in.
+        pub cwd: Option<String>,
+        pub model: Option<String>,
+        pub activity_at_ms: Option<u64>,
+    }
+
+    pub fn session_metadata(session_json: &str) -> Option<Metadata> {
+        let json = serde_json::from_str::<serde_json::Value>(session_json).ok()?;
+        let first_string = |key: &str| {
+            json.get(key)?
+                .as_array()?
+                .iter()
+                .find_map(|value| value.as_str().filter(|value| !value.is_empty()))
+                .map(str::to_owned)
+        };
+        Some(Metadata {
+            session_id: json
+                .get("id")
+                .and_then(|id| id.as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            cwd: first_string("workspacePaths").or_else(|| first_string("rootPaths")),
+            model: json
+                .get("modelId")
+                .and_then(|model| model.as_str())
+                .filter(|model| !model.is_empty())
+                .map(str::to_owned),
+            activity_at_ms: json
+                .get("lastModifiedAt")
+                .and_then(|stamp| stamp.as_str())
+                .and_then(super::time::parse_iso8601_ms),
+        })
+    }
+
+    /// The last three turns of `messages.jsonl`, across the three layouts Kiro has
+    /// shipped.
+    ///
+    /// They are recognised by shape rather than by a version field, which is what
+    /// the Swift reader does too — the newest layout has no version marker:
+    ///
+    /// | shape | how it reads |
+    /// |---|---|
+    /// | `payload.type` | V3: `user`/`assistant` with a string `content` |
+    /// | `type` | direct: `message.content`, any shape `extractTextContent` knows |
+    /// | `kind == "Prompt"` | V2: `data.content[].data` |
+    ///
+    /// `payload.reasoningModelId` is the model when nothing else names one, with
+    /// Kiro's `qdev::` prefix removed.
+    pub fn recent_messages(tail: &str) -> (Option<String>, Vec<ChatMessage>) {
+        let mut users: Vec<(usize, String)> = Vec::new();
+        let mut assistants: Vec<(usize, String)> = Vec::new();
+        let mut detected_model: Option<String> = None;
+
+        for (index, line) in tail.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+
+            if let Some(payload) = json.get("payload").filter(|value| value.is_object()) {
+                let kind = payload.get("type").and_then(|kind| kind.as_str());
+                let content = payload
+                    .get("content")
+                    .and_then(|content| content.as_str())
+                    .filter(|content| !content.is_empty());
+                match (kind, content) {
+                    (Some("user"), Some(text)) => users.push((index, text.to_owned())),
+                    (Some("assistant"), Some(text)) => assistants.push((index, text.to_owned())),
+                    _ => {
+                        if let Some(model) = payload
+                            .get("reasoningModelId")
+                            .and_then(|model| model.as_str())
+                        {
+                            detected_model = Some(model.replace("qdev::", ""));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if let Some(kind) = json.get("type").and_then(|kind| kind.as_str()) {
+                // A direct row may still nest the turn under `message`.
+                let message = json.get("message").unwrap_or(&json);
+                let text = super::extract_text_content(message.get("content"));
+                match (kind, text) {
+                    ("user", Some(text)) => users.push((index, text)),
+                    ("assistant", Some(text)) => assistants.push((index, text)),
+                    _ => {}
+                }
+                continue;
+            }
+
+            if json.get("kind").and_then(|kind| kind.as_str()) == Some("Prompt") {
+                let prompt = json
+                    .get("data")
+                    .and_then(|data| data.get("content"))
+                    .and_then(|content| content.as_array());
+                if let Some(prompt) = prompt {
+                    for item in prompt {
+                        if let Some(text) = item
+                            .get("data")
+                            .and_then(|data| data.as_str())
+                            .filter(|text| !text.is_empty())
+                        {
+                            users.push((index, text.to_owned()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let start = users.len().saturating_sub(3);
+        let mut combined: Vec<(usize, ChatMessage)> = users
+            .split_off(start)
+            .into_iter()
+            .map(|(index, text)| {
+                (
+                    index,
+                    ChatMessage {
+                        is_user: true,
+                        text,
+                    },
+                )
+            })
+            .collect();
+        let start = assistants.len().saturating_sub(3);
+        combined.extend(
+            assistants
+                .split_off(start)
+                .into_iter()
+                .map(|(index, text)| {
+                    (
+                        index,
+                        ChatMessage {
+                            is_user: false,
+                            text,
+                        },
+                    )
+                }),
+        );
+        combined.sort_by_key(|(index, _)| *index);
+        let start = combined.len().saturating_sub(3);
+        (
+            detected_model,
+            combined
+                .split_off(start)
+                .into_iter()
+                .map(|(_, t)| t)
+                .collect(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod kimi_tests {
+    use super::kimi;
+
+    #[test]
+    fn the_legacy_directory_is_the_md5_of_the_cwd() {
+        // The one hash in this port, and it is here because the directory name
+        // cannot be derived any other way. Known vectors, so a wrong digest is not
+        // a directory that merely looks plausible.
+        assert_eq!(kimi::workdir_hash(""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(
+            kimi::workdir_hash("abc"),
+            "900150983cd24fb0d6963f7d28e17f72"
+        );
+        assert_eq!(kimi::workdir_hash("/a").len(), 32);
+        assert_ne!(kimi::workdir_hash("/a"), kimi::workdir_hash("/b"));
+    }
+
+    #[test]
+    fn an_index_row_missing_a_field_is_skipped_rather_than_half_used() {
+        let jsonl = concat!(
+            r#"{"sessionId":"s1","sessionDir":"/k/s1","workDir":"/home/dev/p"}"#,
+            "\n",
+            r#"{"sessionId":"s2","workDir":"/home/dev/p"}"#,
+            "\n",
+            "not json",
+            "\n",
+            r#"{"sessionId":"","sessionDir":"/k/s3","workDir":"/home/dev/p"}"#
+        );
+        let entries = kimi::index_entries(jsonl);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].session_id, "s1");
+        assert_eq!(entries[0].session_dir, "/k/s1");
+        assert_eq!(entries[0].work_dir, "/home/dev/p");
+    }
+
+    #[test]
+    fn the_kimi_code_dialect_becomes_turns() {
+        let tail = r#"{"type":"turn.prompt","input":[{"type":"text","text":"Why is it slow?"}]}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Because of the "}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"N+1 query."}}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Why is it slow?");
+        assert!(messages[0].is_user);
+        // Two parts of one answer are one answer, not two.
+        assert_eq!(messages[1].text, "Because of the N+1 query.");
+    }
+
+    #[test]
+    fn the_legacy_dialect_becomes_the_same_turns() {
+        let tail = r#"{"message":{"type":"TurnBegin","payload":{"user_input":[{"type":"text","text":"Hello"}]}}}
+{"message":{"type":"ContentPart","payload":{"type":"text","text":"Hi there"}}}
+{"message":{"type":"TurnEnd"}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Hello");
+        assert_eq!(messages[1].text, "Hi there");
+        assert!(!messages[1].is_user);
+    }
+
+    #[test]
+    fn a_prompt_after_an_appended_message_replaces_it_instead_of_duplicating() {
+        // kimi-code writes `turn.prompt`, then `context.append_message` with the
+        // same text. Two user lines for one turn would be a visible duplicate.
+        let tail = r#"{"type":"turn.prompt","input":[{"type":"text","text":"One question"}]}
+{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"One question"}]}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 1, "one turn, one user line");
+        assert_eq!(messages[0].text, "One question");
+    }
+
+    #[test]
+    fn an_appended_message_opens_a_turn_when_no_prompt_came_first() {
+        let tail = r#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"From a hook"}]}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].is_user);
+    }
+
+    #[test]
+    fn only_the_last_three_turns_are_kept() {
+        let mut lines = Vec::new();
+        for turn in 1..=5 {
+            lines.push(format!(
+                r#"{{"type":"turn.prompt","input":[{{"type":"text","text":"ask {turn}"}}]}}"#
+            ));
+            lines.push(format!(
+                r#"{{"type":"context.append_loop_event","event":{{"type":"content.part","part":{{"type":"text","text":"answer {turn}"}}}}}}"#
+            ));
+        }
+        let messages = kimi::recent_messages(&lines.join("\n"));
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "answer 4");
+    }
+}
+
+#[cfg(test)]
+mod kiro_tests {
+    use super::kiro;
+
+    #[test]
+    fn the_first_workspace_path_is_the_cwd() {
+        let json = r#"{"id":"s1","workspacePaths":["/home/dev/p","/home/dev/q"],
+                       "modelId":"claude-sonnet","lastModifiedAt":"2025-11-22T10:00:00Z"}"#;
+        let meta = kiro::session_metadata(json).expect("metadata");
+        assert_eq!(meta.session_id.as_deref(), Some("s1"));
+        assert_eq!(meta.cwd.as_deref(), Some("/home/dev/p"));
+        assert_eq!(meta.model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(meta.activity_at_ms, Some(1_763_805_600_000));
+    }
+
+    #[test]
+    fn root_paths_are_the_fallback_when_there_is_no_workspace_list() {
+        let json = r#"{"rootPaths":["/home/dev/root"]}"#;
+        assert_eq!(
+            kiro::session_metadata(json).unwrap().cwd.as_deref(),
+            Some("/home/dev/root")
+        );
+        assert_eq!(
+            kiro::session_metadata(r#"{"workspacePaths":[],"rootPaths":["/r"]}"#)
+                .unwrap()
+                .cwd
+                .as_deref(),
+            Some("/r")
+        );
+        assert_eq!(kiro::session_metadata("not json"), None);
+    }
+
+    #[test]
+    fn the_v3_payload_shape_becomes_turns_and_names_the_model() {
+        let tail = r#"{"payload":{"type":"user","content":"Refactor this"}}
+{"payload":{"type":"assistant","content":"Done"}}
+{"payload":{"reasoningModelId":"qdev::claude-opus"}}"#;
+        let (model, messages) = kiro::recent_messages(tail);
+        assert_eq!(
+            model.as_deref(),
+            Some("claude-opus"),
+            "the qdev:: prefix is Kiro's"
+        );
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Refactor this");
+        assert_eq!(messages[1].text, "Done");
+    }
+
+    #[test]
+    fn the_direct_shape_reads_nested_content() {
+        let tail = r#"{"type":"user","message":{"content":[{"type":"text","text":"Run the tests"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"All green"}]}}"#;
+        let (model, messages) = kiro::recent_messages(tail);
+        assert_eq!(model, None);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Run the tests");
+    }
+
+    #[test]
+    fn the_v2_prompt_shape_becomes_one_user_turn_per_part() {
+        let tail = r#"{"kind":"Prompt","data":{"content":[{"data":"first"},{"data":"second"}]}}"#;
+        let (_, messages) = kiro::recent_messages(tail);
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| message.is_user));
+        assert_eq!(messages[1].text, "second");
+    }
+
+    #[test]
+    fn the_last_three_turns_are_chosen_from_both_roles_in_order() {
+        let tail = r#"{"payload":{"type":"user","content":"one"}}
+{"payload":{"type":"assistant","content":"two"}}
+{"payload":{"type":"user","content":"three"}}
+{"payload":{"type":"assistant","content":"four"}}
+{"payload":{"type":"user","content":"five"}}"#;
+        let (_, messages) = kiro::recent_messages(tail);
+        // The last three per role are collected, then merged by line index and cut
+        // again — so the cut is chronological, not "three users then three replies".
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "three");
+        assert!(messages[0].is_user);
+        assert_eq!(messages[1].text, "four");
+        assert!(!messages[1].is_user);
+        assert_eq!(messages[2].text, "five");
+    }
+}
+
 #[cfg(test)]
 mod time_tests {
     use super::time::parse_iso8601_ms;

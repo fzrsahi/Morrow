@@ -778,6 +778,325 @@ impl ProcessReader for GrokSessions {
     }
 }
 
+/// Kimi (#282), found from a process.
+///
+/// Two layouts, and the modern one is preferred because it is a **map**: kimi-code
+/// writes `~/.kimi-code/session_index.jsonl` with `{sessionId, sessionDir, workDir}`,
+/// so the session is looked up by cwd. Legacy kimi-cli instead names the directory
+/// `md5(cwd)`, which is the only reason this port carries a hash at all.
+pub struct KimiSessions {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+/// Five minutes, as macOS uses.
+pub const KIMI_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for KimiSessions {
+    fn source(&self) -> &'static str {
+        "kimi"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl KimiSessions {
+    /// The indexed session for `cwd`, newest activity first.
+    fn indexed_session(&self, cwd: &str) -> Option<DiscoveryHit> {
+        let index =
+            std::fs::read_to_string(Path::new(&self.home).join(".kimi-code/session_index.jsonl"))
+                .ok()?;
+        let mut best: Option<(u64, String, String)> = None;
+        for entry in morrow_core::discovery::kimi::index_entries(&index) {
+            if entry.work_dir != cwd {
+                continue;
+            }
+            // `state.json` moves whenever the session does; the directory's own
+            // mtime does not.
+            let state = Path::new(&entry.session_dir).join("state.json");
+            let stamp = transcript_files::mtime_ms(&state.to_string_lossy())
+                .or_else(|| transcript_files::mtime_ms(&entry.session_dir))?;
+            if best.as_ref().is_none_or(|(best, _, _)| stamp > *best) {
+                best = Some((stamp, entry.session_id, entry.session_dir));
+            }
+        }
+        let (modified_ms, session_id, session_dir) = best?;
+        let wire = Path::new(&session_dir).join("agents/main/wire.jsonl");
+        let recent_messages = read_tail(&wire)
+            .map(|tail| morrow_core::discovery::kimi::recent_messages(&tail))
+            .unwrap_or_default();
+        Some(DiscoveryHit {
+            session_id,
+            source: "kimi",
+            cwd: cwd.to_owned(),
+            tty: None,
+            // kimi-code's index records no model.
+            model: None,
+            pid: None,
+            modified_at: Some(modified_ms),
+            recent_messages,
+            transcript_path: wire.is_file().then(|| wire.to_string_lossy().into_owned()),
+        })
+    }
+
+    /// Legacy kimi-cli: `~/.kimi-code/sessions/<md5(cwd)>/<id>/wire.jsonl`.
+    fn hashed_session(&self, cwd: &str) -> Option<DiscoveryHit> {
+        let hash = morrow_core::discovery::kimi::workdir_hash(cwd);
+        let mut best: Option<(u64, String, String)> = None;
+        for base in [".kimi-code/sessions", ".kimi/sessions"] {
+            let workdir = Path::new(&self.home).join(base).join(&hash);
+            let Ok(entries) = std::fs::read_dir(&workdir) else {
+                continue;
+            };
+            for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
+                let wire = entry.path().join("wire.jsonl");
+                let Some(stamp) = transcript_files::mtime_ms(&wire.to_string_lossy()) else {
+                    continue;
+                };
+                let Some(session_id) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if best.as_ref().is_none_or(|(best, _, _)| stamp > *best) {
+                    best = Some((stamp, session_id, wire.to_string_lossy().into_owned()));
+                }
+            }
+        }
+        let (modified_ms, session_id, wire) = best?;
+        let recent_messages = read_tail(Path::new(&wire))
+            .map(|tail| morrow_core::discovery::kimi::recent_messages(&tail))
+            .unwrap_or_default();
+        Some(DiscoveryHit {
+            session_id,
+            source: "kimi",
+            cwd: cwd.to_owned(),
+            tty: None,
+            model: None,
+            pid: None,
+            modified_at: Some(modified_ms),
+            recent_messages,
+            transcript_path: Some(wire),
+        })
+    }
+}
+
+impl ProcessReader for KimiSessions {
+    fn source(&self) -> &'static str {
+        "kimi"
+    }
+
+    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        // The index first; the hashed layout only when it has nothing.
+        let hit = self
+            .indexed_session(cwd)
+            .or_else(|| self.hashed_session(cwd));
+        let Some(mut hit) = hit else {
+            return Vec::new();
+        };
+        let Some(modified_ms) = hit.modified_at else {
+            return Vec::new();
+        };
+        if self.now_ms.saturating_sub(modified_ms) > KIMI_FRESHNESS_MS {
+            return Vec::new();
+        }
+        hit.pid = Some(process.pid);
+        vec![hit]
+    }
+}
+
+/// Kiro CLI (#282), found from a process.
+///
+/// Three layouts under `~/.kiro/sessions`: the V3 workspace directories, and the V2
+/// `cli/<id>.json`. `session-leases` is **not** read: a lease names a pid and its
+/// parent, and following it needs a liveness syscall this port does not have — the
+/// kiro process rule already covers `kiro-cli`, so a lease would only add sessions
+/// whose process this port cannot see anyway.
+pub struct KiroSessions {
+    pub home: String,
+}
+
+/// Five minutes, as macOS uses.
+pub const KIRO_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for KiroSessions {
+    fn source(&self) -> &'static str {
+        "kiro"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl KiroSessions {
+    fn root(&self) -> PathBuf {
+        Path::new(&self.home).join(".kiro")
+    }
+}
+
+impl ProcessReader for KiroSessions {
+    fn source(&self) -> &'static str {
+        "kiro"
+    }
+
+    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        let sessions = self.root().join("sessions");
+        let mut best: Option<DiscoveryHit> = None;
+
+        // V3: sessions/<workspace>/<id>/session.json
+        if let Ok(workspaces) = std::fs::read_dir(&sessions) {
+            for workspace in workspaces.flatten().filter(|entry| entry.path().is_dir()) {
+                // `cli` is the V2 directory, not a workspace.
+                if workspace.file_name().to_str() == Some("cli") {
+                    continue;
+                }
+                let Ok(children) = std::fs::read_dir(workspace.path()) else {
+                    continue;
+                };
+                for child in children.flatten().filter(|entry| entry.path().is_dir()) {
+                    let session_json = child.path().join("session.json");
+                    let Ok(json) = std::fs::read_to_string(&session_json) else {
+                        continue;
+                    };
+                    let Some(metadata) = morrow_core::discovery::kiro::session_metadata(&json)
+                    else {
+                        continue;
+                    };
+                    if metadata.cwd.as_deref() != Some(cwd) {
+                        continue;
+                    }
+                    let modified_ms = metadata
+                        .activity_at_ms
+                        .or_else(|| transcript_files::mtime_ms(&session_json.to_string_lossy()));
+                    let Some(modified_ms) = modified_ms else {
+                        continue;
+                    };
+                    if let Some(started_ms) = process.start_time_ms {
+                        // A session that last moved long before the process began is
+                        // another session in the same workspace.
+                        if modified_ms.saturating_add(KIRO_FRESHNESS_MS) < started_ms {
+                            continue;
+                        }
+                    }
+                    let messages = child.path().join("messages.jsonl");
+                    let (model, recent_messages) = read_kiro_messages(&messages);
+                    let session_id = metadata
+                        .session_id
+                        .or_else(|| child.file_name().to_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    if session_id.is_empty() {
+                        continue;
+                    }
+                    let hit = DiscoveryHit {
+                        session_id,
+                        source: "kiro",
+                        cwd: cwd.to_owned(),
+                        tty: None,
+                        model: metadata.model.or(model),
+                        pid: Some(process.pid),
+                        modified_at: Some(modified_ms),
+                        recent_messages,
+                        transcript_path: messages
+                            .is_file()
+                            .then(|| messages.to_string_lossy().into_owned()),
+                    };
+                    if best
+                        .as_ref()
+                        .is_none_or(|best| best.modified_at.unwrap_or(0) < modified_ms)
+                    {
+                        best = Some(hit);
+                    }
+                }
+            }
+        }
+        if best.is_some() {
+            return best.into_iter().collect();
+        }
+
+        // V2: sessions/cli/<id>.json, with the transcript beside it.
+        if let Ok(entries) = std::fs::read_dir(sessions.join("cli")) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(json) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+                    continue;
+                };
+                if value.get("cwd").and_then(|cwd| cwd.as_str()) != Some(cwd) {
+                    continue;
+                }
+                let messages = path.with_extension("jsonl");
+                let (model, recent_messages) = read_kiro_messages(&messages);
+                let Some(session_id) = path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                let modified_ms = value
+                    .get("updated_at")
+                    .and_then(|stamp| stamp.as_str())
+                    .and_then(morrow_core::discovery::time::parse_iso8601_ms)
+                    .or_else(|| transcript_files::mtime_ms(&path.to_string_lossy()))
+                    .unwrap_or(0);
+                if let Some(started_ms) = process.start_time_ms {
+                    // A V2 session that last moved long before the process began is
+                    // another session, just as in the V3 loop above.
+                    if modified_ms.saturating_add(KIRO_FRESHNESS_MS) < started_ms {
+                        continue;
+                    }
+                }
+                return vec![DiscoveryHit {
+                    session_id,
+                    source: "kiro",
+                    cwd: cwd.to_owned(),
+                    tty: None,
+                    model,
+                    pid: Some(process.pid),
+                    modified_at: Some(modified_ms),
+                    recent_messages,
+                    transcript_path: messages
+                        .is_file()
+                        .then(|| messages.to_string_lossy().into_owned()),
+                }];
+            }
+        }
+        Vec::new()
+    }
+}
+
+/// `(model, messages)` from a Kiro transcript, whichever layout wrote it.
+fn read_kiro_messages(path: &Path) -> (Option<String>, Vec<ChatMessage>) {
+    read_tail(path)
+        .map(|tail| morrow_core::discovery::kiro::recent_messages(&tail))
+        .unwrap_or((None, Vec::new()))
+}
+
 /// The first `limit` bytes of a file, for a store that names the session rather
 /// than the cwd.
 fn read_head(path: &Path, limit: u64) -> Option<String> {
@@ -1113,8 +1432,15 @@ pub fn scan_with(
         home: home.to_string_lossy().into_owned(),
         now_ms,
     };
+    let kimi = KimiSessions {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let kiro = KiroSessions {
+        home: home.to_string_lossy().into_owned(),
+    };
     let process_readers: Vec<&dyn ProcessReader> = vec![
-        &cursor, &gemini, &qoder, &codebuddy, &droid, &copilot, &grok,
+        &cursor, &gemini, &qoder, &codebuddy, &droid, &copilot, &grok, &kimi, &kiro,
     ];
     scan::run_all(
         readers,
@@ -2077,6 +2403,217 @@ mod tests {
                 .iter()
                 .all(|h| h.source != "grok")
         );
+    }
+
+    /// #282: kimi-code's index names the session directory, so no hash is needed.
+    #[test]
+    fn a_kimi_index_entry_becomes_a_session() {
+        let scratch = Scratch::new("kimi-index");
+        let cwd = "/home/dev/project";
+        let session = scratch.0.join(".kimi-code/sessions/s1");
+        std::fs::create_dir_all(session.join("agents/main")).expect("a store");
+        std::fs::write(session.join("state.json"), "{}").expect("a state file");
+        std::fs::write(
+            session.join("agents/main/wire.jsonl"),
+            concat!(
+                r#"{"type":"turn.prompt","input":[{"type":"text","text":"Read the logs"}]}"#,
+                "\n",
+                r#"{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Found it"}}}"#
+            ),
+        )
+        .expect("a wire transcript");
+        std::fs::write(
+            scratch.0.join(".kimi-code/session_index.jsonl"),
+            format!(
+                r#"{{"sessionId":"s1","sessionDir":"{}","workDir":"{cwd}"}}"#,
+                session.to_string_lossy()
+            ),
+        )
+        .expect("an index");
+
+        let table = vec![process_with_cwd(91, "/usr/bin/kimi", "kimi", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kimi").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "s1");
+        assert_eq!(hits[0].pid, Some(91));
+        assert_eq!(hits[0].recent_messages.len(), 2);
+    }
+
+    /// The legacy layout is the fallback, and its directory is `md5(cwd)`.
+    #[test]
+    fn a_kimi_legacy_hashed_directory_is_the_fallback() {
+        let scratch = Scratch::new("kimi-hash");
+        let cwd = "/home/dev/project";
+        let session = scratch
+            .0
+            .join(".kimi/sessions")
+            .join(morrow_core::discovery::kimi::workdir_hash(cwd))
+            .join("legacy-1");
+        std::fs::create_dir_all(&session).expect("a store");
+        std::fs::write(
+            session.join("wire.jsonl"),
+            concat!(
+                r#"{"message":{"type":"TurnBegin","payload":{"user_input":[{"type":"text","text":"Why?"}]}}}"#,
+                "\n",
+                r#"{"message":{"type":"TurnEnd"}}"#
+            ),
+        )
+        .expect("a wire transcript");
+
+        let table = vec![process_with_cwd(92, "/usr/bin/kimi", "kimi", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kimi").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "legacy-1");
+        assert_eq!(hits[0].recent_messages.len(), 1);
+    }
+
+    /// #282: Kiro's V3 layout puts the session under a workspace directory, and the
+    /// workspace list is what says it belongs to this cwd.
+    #[test]
+    fn a_kiro_v3_session_becomes_a_session() {
+        let scratch = Scratch::new("kiro-v3");
+        let cwd = "/home/dev/project";
+        let session = scratch.0.join(".kiro/sessions/workspace-hash/kiro-1");
+        std::fs::create_dir_all(&session).expect("a store");
+        std::fs::write(
+            session.join("session.json"),
+            format!(r#"{{"id":"kiro-1","workspacePaths":["{cwd}"],"modelId":"claude-sonnet"}}"#),
+        )
+        .expect("a session file");
+        std::fs::write(
+            session.join("messages.jsonl"),
+            concat!(
+                r#"{"payload":{"type":"user","content":"Explain this repo"}}"#,
+                "\n",
+                r#"{"payload":{"type":"assistant","content":"It is a notch app"}}"#
+            ),
+        )
+        .expect("a transcript");
+
+        let table = vec![process_with_cwd(101, "/usr/bin/kiro-cli", "kiro-cli", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "kiro-1");
+        assert_eq!(hits[0].model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(hits[0].recent_messages.len(), 2);
+    }
+
+    /// The V2 layout keeps one file per session under `sessions/cli`, and `cli` is
+    /// not a workspace.
+    #[test]
+    fn a_kiro_v2_session_becomes_a_session() {
+        let scratch = Scratch::new("kiro-v2");
+        let cwd = "/home/dev/project";
+        let cli = scratch.0.join(".kiro/sessions/cli");
+        std::fs::create_dir_all(&cli).expect("a store");
+        std::fs::write(
+            cli.join("kiro-legacy.json"),
+            format!(r#"{{"cwd":"{cwd}","updated_at":"{}"}}"#, iso8601(now_ms())),
+        )
+        .expect("a session file");
+        std::fs::write(
+            cli.join("kiro-legacy.jsonl"),
+            r#"{"type":"user","message":{"content":[{"type":"text","text":"Hello"}]}}"#,
+        )
+        .expect("a transcript");
+
+        let table = vec![process_with_cwd(102, "/usr/bin/kiro-cli", "kiro-cli", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "kiro-legacy");
+        assert_eq!(hits[0].recent_messages.len(), 1);
+    }
+
+    /// A session in the same workspace that last moved long before the process
+    /// began is not what it is running.
+    #[test]
+    fn a_kiro_session_older_than_its_process_is_skipped() {
+        let scratch = Scratch::new("kiro-old");
+        let cwd = "/home/dev/project";
+        let session = scratch.0.join(".kiro/sessions/shared/kiro-old");
+        std::fs::create_dir_all(&session).expect("a store");
+        std::fs::write(
+            session.join("session.json"),
+            format!(
+                r#"{{"id":"kiro-old","workspacePaths":["{cwd}"],"lastModifiedAt":"{}"}}"#,
+                iso8601(now_ms() - 86_400_000)
+            ),
+        )
+        .expect("a session file");
+
+        let mut process = process_with_cwd(103, "/usr/bin/kiro-cli", "kiro-cli", cwd);
+        // Started long after that session last moved.
+        process.start_time_ms = Some(now_ms());
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &[process], now_ms())
+                .hits
+                .iter()
+                .all(|h| h.source != "kiro")
+        );
+    }
+
+    /// #282: the V2 `sessions/cli` layout must skip a session that last moved long
+    /// before the process began, the same rule the V3 loop applies.
+    #[test]
+    fn a_kiro_v2_session_older_than_its_process_is_skipped() {
+        let scratch = Scratch::new("kiro-v2-old");
+        let cwd = "/home/dev/project";
+        let cli = scratch.0.join(".kiro/sessions/cli");
+        std::fs::create_dir_all(&cli).expect("a store");
+        std::fs::write(
+            cli.join("kiro-v2-old.json"),
+            format!(
+                r#"{{"cwd":"{cwd}","updated_at":"{}"}}"#,
+                iso8601(now_ms() - 86_400_000)
+            ),
+        )
+        .expect("a session file");
+
+        let mut process = process_with_cwd(104, "/usr/bin/kiro-cli", "kiro-cli", cwd);
+        process.start_time_ms = Some(now_ms());
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &[process], now_ms())
+                .hits
+                .iter()
+                .all(|h| h.source != "kiro")
+        );
+    }
+
+    /// A V2 session that moved after the process began is still a hit, even with a
+    /// real (non-epoch) process start time.
+    #[test]
+    fn a_fresh_kiro_v2_session_after_process_start_is_a_session() {
+        let scratch = Scratch::new("kiro-v2-fresh");
+        let cwd = "/home/dev/project";
+        let cli = scratch.0.join(".kiro/sessions/cli");
+        std::fs::create_dir_all(&cli).expect("a store");
+        let started_ms = now_ms() - 60_000;
+        std::fs::write(
+            cli.join("kiro-v2-fresh.json"),
+            format!(
+                r#"{{"cwd":"{cwd}","updated_at":"{}"}}"#,
+                iso8601(started_ms + 60_000)
+            ),
+        )
+        .expect("a session file");
+
+        let mut process = process_with_cwd(105, "/usr/bin/kiro-cli", "kiro-cli", cwd);
+        process.start_time_ms = Some(started_ms);
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &[process], now_ms());
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "kiro-v2-fresh");
     }
 
     /// An ISO 8601 stamp for a millisecond instant, so a fresh store can be seeded

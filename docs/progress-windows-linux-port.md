@@ -1,7 +1,7 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (kesepuluh) — delapan belas slice remediasi (#249–#277). #246, #247, #248 selesai penuh; **lima reader terdaftar** (Claude, Codex, OpenCode, Cursor, Gemini); sisa #232 adalah #244 batch 2. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+**Checkpoint terakhir:** 2026-11-22 (kesebelas) — dua puluh satu slice remediasi (#249–#283). #244, #246, #247, #248 selesai penuh; **tiga belas reader terdaftar** dan #232 hanya menyisakan observer peristiwa serta `ScanCache`. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
 ---
@@ -126,6 +126,17 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (kesebelas) — #244 batch 2: enam agent, tiga PR
+
+- **Sudah:** **#278 → PR #279** Cline (store-first, tanpa proses: ekstensi VS Code) dan flat store Qoder/CodeBuddy/Factory sebagai satu reader bertabel. **#280 → PR #281** Copilot (direktori dinamai sesi, cwd dibaca dari aliran event) dan Grok (direktori dinamai cwd yang di-percent-encode, `%2F` bukan `-`). **#282 → PR #283** Kimi (index = peta; legacy `md5(cwd)`) dan Kiro (V3 per-workspace + V2 `sessions/cli`).
+- **Dengan itu #244 tertutup**, dan #232 hanya menyisakan observer peristiwa dan `ScanCache`.
+- **Bug yang ditemukan test sendiri:** `{{` literal di dalam `concat!` (benih Grok bukan JSON); reader Copilot membaca satu tingkat terlalu tinggi; envelope legacy Kimi dikenali dari objek `message` sehingga `context.append_message` tertelan; `is_session_process` tanpa aturan untuk `cursor`/`qoder`/`codebuddy`/`droid`; dan modul baru dua kali masuk **ke dalam doc block modul lain** — tertangkap clippy `doc_lazy_continuation`.
+- **Dua ekspektasi test saya sendiri yang salah:** md5 yang membandingkan hash dengan dirinya, dan urutan giliran Kiro yang mengandaikan "tiga user lalu tiga balasan" padahal reader menggabung menurut indeks baris.
+- **Biaya baru yang terlihat:** `scan_with` menjalankan **sembilan** reader proses atas tabel proses tiap scan — O(9 × proses), sekali per lima detik. Tiga PR berturut-turut menaikkannya.
+- **Bukti:** `cargo test --workspace` 843 lulus (792 sebelum batch 2); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** menyambungkan `ScanCache` (#263) ke reader — satu-satunya AC yang masih saya tandai "sebagian", dan sekarang penghalang utama biaya scan.
+- **Blocker:** gate hardware tidak berubah.
 
 ### 2026-11-22 (kesepuluh) — Cursor dan Gemini, dari prosesnya
 
