@@ -3,7 +3,7 @@
 Windows packaging and the Windows-only CI lane. The Windows *app* is not here: it
 is the shared Tauri v2 shell in [`shared/desktop/`](../shared/desktop), with the
 Windows backends selected by `#[cfg]` in `morrow-platform`
-(see [`docs/memory/`](../docs/memory/README.md))..
+(see [`.agents/memory/`](../.agents/memory/memory.md))..
 
 | Path | What it is |
 |---|---|
@@ -20,4 +20,4 @@ code for a while before that: no CI job built it, `global.json` pinned an SDK
 nobody installed, and the contract it implemented was not the frozen one in
 [`shared/contract/`](../shared/contract).
 
-The decision and its context are recorded in [`docs/memory/`](../docs/memory/README.md) and [`docs/adr/0002-tauri-v2-shell.md`](../docs/adr/0002-tauri-v2-shell.md). `git log -- windows/` still has every line of the code itself.
+The decision and its context are recorded in [`.agents/memory/`](../.agents/memory/memory.md) and [`docs/adr/0002-tauri-v2-shell.md`](../docs/adr/0002-tauri-v2-shell.md). `git log -- windows/` still has every line of the code itself.

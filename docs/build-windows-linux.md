@@ -74,7 +74,7 @@ bun run build
 cargo tauri build --bundles nsis
 ```
 
-The NSIS bundle is configured for a per-user install. Beta builds are unsigned, so Windows SmartScreen shows a warning until you choose More info and Run anyway. The per-user NSIS decision and deferred beta signing are recorded in `docs/memory/`.
+The NSIS bundle is configured for a per-user install. Beta builds are unsigned, so Windows SmartScreen shows a warning until you choose More info and Run anyway. The per-user NSIS decision and deferred beta signing are recorded in `.agents/memory/`.
 
 ### Known limits
 
@@ -84,7 +84,7 @@ The NSIS bundle is configured for a per-user install. Beta builds are unsigned, 
 
 ## What to read next
 
-- `docs/memory/` for the packaging and signing decisions.
+- `.agents/memory/` for the packaging and signing decisions.
 - `docs/windows-adapters.md` for the capability table per OS.
 - `shared/desktop/README.md` for the panel and its hook wire format.
 - `AGENTS.md` section 2 before touching `.woodpecker/` or any runner script. Those files belong to @aazhrt.

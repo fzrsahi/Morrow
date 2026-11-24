@@ -31,7 +31,7 @@ Until the experiment runs, Rust is the default and no Rust code beyond Phase 1's
 
 ## Decision after the experiment (2026-11-19)
 
-The #85 experiment met the decision rule: `MorrowCore` built on Linux and 96.8% of pure-logic tests passed ([`docs/memory/2026-11-21.md`](../memory/2026-11-21.md), ADR-0003). The maintainers nevertheless chose **option B, a Rust core**, in PR #117. The rule was written as a trigger for reconsidering, and it was reconsidered; it does not bind the outcome.
+The #85 experiment met the decision rule: `MorrowCore` built on Linux and 96.8% of pure-logic tests passed ([`.agents/memory/2026-11-21.md`](../../.agents/memory/2026-11-21.md), ADR-0003). The maintainers nevertheless chose **option B, a Rust core**, in PR #117. The rule was written as a trigger for reconsidering, and it was reconsidered; it does not bind the outcome.
 
 The trade-offs weighed (PR #117):
 

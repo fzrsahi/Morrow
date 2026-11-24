@@ -34,6 +34,12 @@ android-watch/**/build/
 .agents/*
 !.agents/docs/
 !.agents/docs/*.md
+!.agents/memory/
+!.agents/memory/*.md
+!.agents/rules/
+!.agents/rules/*.md
+!.agents/skills/
+!.agents/skills/**
 .augment/
 .bob/
 .claude/
@@ -71,6 +77,7 @@ android-watch/**/build/
 .windsurf/
 .zencoder/
 skills/
+!.agents/skills/
 skills-lock.json
 .impeccable/
 .github/agents/
