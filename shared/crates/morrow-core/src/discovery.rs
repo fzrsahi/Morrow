@@ -548,6 +548,16 @@ pub mod transcript_files {
         pub modified_ms: u64,
     }
 
+    /// One file's modification time, in milliseconds, without listing its
+    /// directory. `None` when it is not there.
+    pub fn mtime_ms(path: &str) -> Option<u64> {
+        let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|since| since.as_millis() as u64)
+    }
+
     /// The same listing with any extension, for a store that is not JSONL
     /// (Gemini's chats are `*.json`).
     pub fn list_any(directory: &str, extension: &str) -> Option<Vec<TranscriptFile>> {
@@ -624,6 +634,1258 @@ pub mod transcript_files {
                 Some(start) => file.modified_ms + START_SLACK_MS >= start,
             })
             .max_by_key(|file| file.modified_ms)
+    }
+}
+
+/// Timestamps, parsed the one way every store here needs (#279).
+///
+/// Not a general ISO 8601 implementation: Grok, Kiro and Cline write
+/// `YYYY-MM-DDTHH:MM:SS[.fff](Z|±HH:MM)` and nothing else, and a full parser would
+/// be more surface than the three callers need.
+pub mod time {
+    /// Milliseconds since the Unix epoch. `None` for anything that is not the
+    /// shape above — a guess here would put a session in the wrong order.
+    pub fn parse_iso8601_ms(text: &str) -> Option<u64> {
+        let text = text.trim();
+        let bytes = text.as_bytes();
+        if bytes.len() < 19 {
+            return None;
+        }
+        let year: i64 = text.get(0..4)?.parse().ok()?;
+        let month: u32 = text.get(5..7)?.parse().ok()?;
+        let day: u32 = text.get(8..10)?.parse().ok()?;
+        let hour: i64 = text.get(11..13)?.parse().ok()?;
+        let minute: i64 = text.get(14..16)?.parse().ok()?;
+        let second: i64 = text.get(17..19)?.parse().ok()?;
+        if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+            return None;
+        }
+        // The separators are checked rather than skipped: nineteen digits parse
+        // field by field and are not a timestamp.
+        if bytes[4] != b'-' || bytes[7] != b'-' {
+            return None;
+        }
+        if bytes[10] != b'T' && bytes[10] != b' ' {
+            return None;
+        }
+        if bytes[13] != b':' || bytes[16] != b':' {
+            return None;
+        }
+
+        let mut rest = &text[19..];
+        let mut millis: u64 = 0;
+        if let Some(fraction) = rest.strip_prefix('.') {
+            let digits: String = fraction.chars().take_while(char::is_ascii_digit).collect();
+            if digits.is_empty() {
+                return None;
+            }
+            // `.5` is half a second, not five milliseconds.
+            let scaled = format!("{digits:0<3}");
+            millis = scaled.get(0..3)?.parse().ok()?;
+            rest = &fraction[digits.len()..];
+        }
+
+        let offset_seconds: i64 = match rest {
+            "" | "Z" | "z" => 0,
+            _ => {
+                let (sign, tail) = match rest.split_at(1) {
+                    ("+", tail) => (1, tail),
+                    ("-", tail) => (-1, tail),
+                    _ => return None,
+                };
+                let tail = tail.strip_suffix(['Z', 'z']).unwrap_or(tail);
+                let (hours, minutes) = tail.split_once(':')?;
+                let hours: i64 = hours.parse().ok()?;
+                let minutes: i64 = minutes.parse().ok()?;
+                sign * (hours * 3600 + minutes * 60)
+            }
+        };
+
+        let days = days_from_civil(year, month, day);
+        let seconds = days * 86_400 + hour * 3_600 + minute * 60 + second - offset_seconds;
+        if seconds < 0 {
+            return None;
+        }
+        Some(seconds as u64 * 1_000 + millis)
+    }
+
+    /// Howard Hinnant's `days_from_civil`: days since 1970-01-01, for a proleptic
+    /// Gregorian date. Written out rather than pulled in, because the alternative
+    /// is a date crate for three callers.
+    fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+        let year = if month <= 2 { year - 1 } else { year };
+        let era = if year >= 0 { year } else { year - 399 } / 400;
+        let year_of_era = year - era * 400;
+        let month_prime = (month as i64 + 9) % 12;
+        let day_of_year = (153 * month_prime + 2) / 5 + day as i64 - 1;
+        let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+        era * 146_097 + day_of_era - 719_468
+    }
+}
+
+/// GitHub Copilot CLI sessions (#279): `~/.copilot/session-state/<id>/events.jsonl`,
+/// where the event stream itself records which cwd the session belongs to.
+pub mod copilot {
+    use super::ChatMessage;
+
+    /// Whether the head of an event stream belongs to `cwd`.
+    ///
+    /// Two events carry it: `session.start` under `data.context.cwd` and
+    /// `hook.start` under `data.input.cwd`. Either is enough — a session recorded
+    /// by a hook-only path has no `session.start`.
+    pub fn matches_cwd(head: &str, cwd: &str) -> bool {
+        for line in head.lines().filter(|line| !line.is_empty()) {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let kind = json.get("type").and_then(|kind| kind.as_str());
+            let data = json.get("data");
+            let found = match kind {
+                Some("session.start") => data
+                    .and_then(|data| data.get("context"))
+                    .and_then(|context| context.get("cwd")),
+                Some("hook.start") => data
+                    .and_then(|data| data.get("input"))
+                    .and_then(|input| input.get("cwd")),
+                _ => None,
+            };
+            if found.and_then(|found| found.as_str()) == Some(cwd) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// The last three turns from an event stream, and the model if it names one.
+    ///
+    /// Copilot is the second agent whose model is spelled three ways
+    /// (`currentModel`, `model`, or the keys of `modelMetrics`); the first one seen
+    /// wins, as in the Swift reader.
+    pub fn recent_messages(tail: &str) -> (Option<String>, Vec<ChatMessage>) {
+        let mut model: Option<String> = None;
+        let mut turns: Vec<(usize, ChatMessage)> = Vec::new();
+        for (index, line) in tail.lines().filter(|line| !line.is_empty()).enumerate() {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let kind = json.get("type").and_then(|kind| kind.as_str());
+            let Some(payload) = json.get("data") else {
+                continue;
+            };
+            if model.is_none() {
+                model = ["currentModel", "model"]
+                    .into_iter()
+                    .find_map(|key| {
+                        payload
+                            .get(key)
+                            .and_then(|model| model.as_str())
+                            .filter(|model| !model.is_empty())
+                            .map(str::to_owned)
+                    })
+                    .or_else(|| {
+                        // `modelMetrics` is keyed by model name; the last key is the
+                        // one sorted last, which is what the Swift reader takes.
+                        let metrics = payload.get("modelMetrics")?.as_object()?;
+                        let mut keys: Vec<&String> = metrics.keys().collect();
+                        keys.sort();
+                        keys.last()
+                            .filter(|key| !key.is_empty())
+                            .map(|key| (*key).clone())
+                    });
+            }
+            let text = payload
+                .get("content")
+                .and_then(|content| content.as_str())
+                .filter(|text| !text.is_empty());
+            let Some(text) = text else { continue };
+            let is_user = match kind {
+                Some("user.message") => true,
+                Some("assistant.message") => false,
+                _ => continue,
+            };
+            turns.push((
+                index,
+                ChatMessage {
+                    is_user,
+                    text: text.to_owned(),
+                },
+            ));
+        }
+        let start = turns.len().saturating_sub(3);
+        (
+            model,
+            turns.split_off(start).into_iter().map(|(_, t)| t).collect(),
+        )
+    }
+}
+
+/// Grok CLI sessions (#279): `~/<GROK_HOME>/sessions/<percent-encoded cwd>/<id>/`.
+pub mod grok {
+    /// Grok percent-encodes the **whole** cwd into one path component, `/` as
+    /// `%2F`, so `/Users/me` becomes `%2FUsers%2Fme`.
+    ///
+    /// Unreserved characters only (`A-Z a-z 0-9 - . _ ~`), which is what
+    /// `addingPercentEncoding(withAllowedCharacters:)` is given on the Swift side.
+    /// A different allowed set produces a directory Grok never wrote, and the
+    /// reader then finds nothing while looking correct.
+    pub fn encoded_cwd(cwd: &str) -> String {
+        let mut encoded = String::with_capacity(cwd.len());
+        for byte in cwd.as_bytes() {
+            let keep = byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~');
+            if keep {
+                encoded.push(*byte as char);
+            } else {
+                encoded.push_str(&format!("%{byte:02X}"));
+            }
+        }
+        encoded
+    }
+
+    /// What `summary.json` says about a session.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Summary {
+        pub session_id: Option<String>,
+        pub cwd: Option<String>,
+        pub model: Option<String>,
+        /// The newest of `last_active_at`, `updated_at`, `created_at`.
+        pub activity_at_ms: Option<u64>,
+    }
+
+    pub fn summary_metadata(summary_json: &str) -> Option<Summary> {
+        let json = serde_json::from_str::<serde_json::Value>(summary_json).ok()?;
+        let info = json.get("info");
+        let string = |value: Option<&serde_json::Value>| {
+            value
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+        };
+        let activity = ["last_active_at", "updated_at", "created_at"]
+            .into_iter()
+            .filter_map(|key| {
+                super::time::parse_iso8601_ms(json.get(key).and_then(|v| v.as_str())?)
+            })
+            .max();
+        Some(Summary {
+            session_id: string(info.and_then(|info| info.get("id"))),
+            cwd: string(info.and_then(|info| info.get("cwd"))),
+            model: string(json.get("current_model_id")),
+            activity_at_ms: activity,
+        })
+    }
+
+    /// Grok mints UUIDv7 session ids, whose leading 48 bits are the creation time
+    /// in Unix milliseconds. That stands in for `created_at` when the summary has
+    /// none, and it is the only creation time an index-only session has.
+    pub fn creation_ms_from_session_id(session_id: &str) -> Option<u64> {
+        let hex: String = session_id.chars().filter(|c| *c != '-').collect();
+        if hex.len() != 32 {
+            return None;
+        }
+        let first_twelve = hex.get(0..12)?;
+        // Version 7 and the RFC 4122 variant, or this is not a time-ordered id.
+        if hex.get(12..13)? != "7" || !matches!(hex.get(16..17)?, "8" | "9" | "a" | "b") {
+            return None;
+        }
+        u64::from_str_radix(first_twelve, 16).ok()
+    }
+}
+
+/// Cline sessions (#278): the VS Code extension `saoudrizwan.claude-dev`.
+///
+/// No process: Cline is an extension inside VS Code, so macOS gives it no pid
+/// either — and that makes it the one reader of this batch that can be backfilled
+/// with nothing running.
+pub mod cline {
+    use super::ChatMessage;
+    use super::extract_text_content;
+
+    /// One row of `state/taskHistory.json`, newest last.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Task {
+        pub id: String,
+        pub cwd: Option<String>,
+        pub model: Option<String>,
+        /// Milliseconds since the epoch, as Cline writes it.
+        pub ts_ms: Option<f64>,
+    }
+
+    /// The most recent task, by `ts`.
+    ///
+    /// The list is not reliably ordered — it is whatever order the extension last
+    /// wrote — so the newest is chosen by timestamp rather than by position.
+    pub fn latest_task(history_json: &str) -> Option<Task> {
+        let history: Vec<serde_json::Value> = serde_json::from_str(history_json).ok()?;
+        history
+            .iter()
+            .filter_map(|entry| {
+                Some(Task {
+                    id: entry.get("id")?.as_str()?.to_owned(),
+                    cwd: entry
+                        .get("cwdOnTaskInitialization")
+                        .and_then(|cwd| cwd.as_str())
+                        .filter(|cwd| !cwd.is_empty())
+                        .map(str::to_owned),
+                    model: entry
+                        .get("modelId")
+                        .and_then(|model| model.as_str())
+                        .filter(|model| !model.is_empty())
+                        .map(str::to_owned),
+                    ts_ms: entry.get("ts").and_then(|ts| ts.as_f64()),
+                })
+            })
+            .filter(|task| !task.id.is_empty())
+            .max_by(|a, b| {
+                a.ts_ms
+                    .unwrap_or(f64::MIN)
+                    .total_cmp(&b.ts_ms.unwrap_or(f64::MIN))
+            })
+    }
+
+    /// The last three turns of `tasks/<id>/api_conversation_history.json`.
+    pub fn recent_messages(conversation_json: &str) -> Vec<ChatMessage> {
+        let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(conversation_json) else {
+            return Vec::new();
+        };
+        let mut turns: Vec<(usize, ChatMessage)> = Vec::new();
+        for (index, entry) in entries.iter().enumerate() {
+            let Some(role) = entry.get("role").and_then(|role| role.as_str()) else {
+                continue;
+            };
+            let Some(text) = extract_text_content(entry.get("content")) else {
+                continue;
+            };
+            match role {
+                "user" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: true,
+                        text,
+                    },
+                )),
+                "assistant" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: false,
+                        text,
+                    },
+                )),
+                _ => {}
+            }
+        }
+        let start = turns.len().saturating_sub(3);
+        turns.split_off(start).into_iter().map(|(_, t)| t).collect()
+    }
+}
+
+/// Flat stores (#278): Qoder, CodeBuddy and Factory (droid) each keep JSONL
+/// transcripts one directory per project, and each spells the store slightly
+/// differently. What differs is only the encoding and the file's flavour.
+pub mod flat_store {
+    use super::ChatMessage;
+
+    /// CodeBuddy's own transcript flavour: `{type:"message", role, content,
+    /// providerData:{model}}`. Qoder and Factory write Claude's format, so they
+    /// borrow `read_transcript_tail` instead.
+    pub fn codebuddy_recent(tail: &str) -> (Option<String>, Vec<ChatMessage>) {
+        let mut model: Option<String> = None;
+        let mut turns: Vec<(usize, ChatMessage)> = Vec::new();
+        for (index, line) in tail.lines().filter(|line| !line.is_empty()).enumerate() {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if json.get("type").and_then(|kind| kind.as_str()) != Some("message") {
+                continue;
+            }
+            let Some(role) = json.get("role").and_then(|role| role.as_str()) else {
+                continue;
+            };
+            let Some(text) = super::extract_text_content(json.get("content")) else {
+                continue;
+            };
+            if model.is_none() {
+                model = json
+                    .get("providerData")
+                    .and_then(|data| data.get("model"))
+                    .and_then(|model| model.as_str())
+                    .filter(|model| !model.is_empty())
+                    .map(str::to_owned);
+            }
+            match role {
+                "user" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: true,
+                        text,
+                    },
+                )),
+                "assistant" => turns.push((
+                    index,
+                    ChatMessage {
+                        is_user: false,
+                        text,
+                    },
+                )),
+                _ => {}
+            }
+        }
+        let start = turns.len().saturating_sub(3);
+        (
+            model,
+            turns.split_off(start).into_iter().map(|(_, t)| t).collect(),
+        )
+    }
+
+    /// Factory keeps the model beside the transcript rather than in it:
+    /// `x.jsonl` has a sibling `x.settings.json` holding `{"model": …}`.
+    pub fn factory_model_from_settings(settings_json: &str) -> Option<String> {
+        serde_json::from_str::<serde_json::Value>(settings_json)
+            .ok()?
+            .get("model")
+            .and_then(|model| model.as_str())
+            .filter(|model| !model.is_empty())
+            .map(str::to_owned)
+    }
+}
+
+/// Kimi sessions (#282): kimi-code's session index and legacy kimi-cli's per-cwd
+/// directories, and the wire-protocol transcript reader for both.
+pub mod kimi {
+    use super::ChatMessage;
+
+    /// Legacy kimi-cli names the per-cwd directory `md5(cwd)`.
+    ///
+    /// The one read of a hash anywhere in this port, and it is here because the
+    /// directory name cannot be derived any other way. kimi-code's index is
+    /// preferred precisely so this path is the fallback.
+    pub fn workdir_hash(cwd: &str) -> String {
+        use md5::{Digest, Md5};
+        let digest = Md5::digest(cwd.as_bytes());
+        digest.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// What `session_index.jsonl` says about a session.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct IndexEntry {
+        pub session_id: String,
+        /// The directory holding `agents/main/wire.jsonl`.
+        pub session_dir: String,
+        pub work_dir: String,
+    }
+
+    /// Every usable row of kimi-code's index.
+    ///
+    /// A row missing any of the three fields is skipped rather than half-used: a
+    /// session without a directory has no transcript to read.
+    pub fn index_entries(jsonl: &str) -> Vec<IndexEntry> {
+        jsonl
+            .lines()
+            .filter(|line| !line.is_empty())
+            .filter_map(|line| {
+                let json = serde_json::from_str::<serde_json::Value>(line).ok()?;
+                let field = |key: &str| {
+                    json.get(key)
+                        .and_then(|value| value.as_str())
+                        .filter(|value| !value.is_empty())
+                        .map(str::to_owned)
+                };
+                Some(IndexEntry {
+                    session_id: field("sessionId")?,
+                    session_dir: field("sessionDir")?,
+                    work_dir: field("workDir")?,
+                })
+            })
+            .collect()
+    }
+
+    /// The last three turns of a `wire.jsonl`, in either dialect.
+    ///
+    /// Two protocols share the file. Legacy kimi-cli wraps each record in
+    /// `{"message":{"type":…}}` with `TurnBegin`/`ContentPart`/`TurnEnd`; kimi-code
+    /// writes `turn.prompt` / `context.append_message` /
+    /// `context.append_loop_event` at the top level. The state machine is the same
+    /// for both: open a turn on the prompt, collect the assistant's parts, flush on
+    /// the next prompt.
+    pub fn recent_messages(tail: &str) -> Vec<ChatMessage> {
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        let mut user: Option<String> = None;
+        let mut assistant = String::new();
+        // A turn opened by `context.append_message` so a later `turn.prompt` can
+        // replace the user text instead of flushing a duplicate line.
+        let mut opened_by_append = false;
+
+        for line in tail.lines().filter(|line| !line.is_empty()) {
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+
+            // The legacy envelope is recognised by a `type` *inside* `message`.
+            // kimi-code's `context.append_message` also carries a `message`
+            // object, so a bare object check would swallow it here.
+            let envelope = json.get("message").filter(|value| {
+                value.is_object() && value.get("type").is_some_and(|kind| kind.is_string())
+            });
+            if let Some(envelope) = envelope {
+                let kind = envelope.get("type").and_then(|kind| kind.as_str());
+                match kind {
+                    Some("TurnBegin") => {
+                        flush(&mut messages, &mut user, &mut assistant);
+                        if let Some(payload) = envelope.get("payload") {
+                            user = text_parts(payload.get("user_input"));
+                        }
+                    }
+                    Some("ContentPart") => {
+                        if let Some(payload) = envelope.get("payload") {
+                            if payload.get("type").and_then(|kind| kind.as_str()) == Some("text") {
+                                if let Some(text) = payload.get("text").and_then(|t| t.as_str()) {
+                                    assistant.push_str(text);
+                                }
+                            }
+                        }
+                    }
+                    Some("TurnEnd") => flush(&mut messages, &mut user, &mut assistant),
+                    _ => {}
+                }
+                continue;
+            }
+
+            match json.get("type").and_then(|kind| kind.as_str()) {
+                Some("turn.prompt") => {
+                    let prompt = text_parts(json.get("input"));
+                    if opened_by_append && assistant.is_empty() {
+                        // An empty prompt must not wipe the appended line.
+                        if prompt.as_deref().is_some_and(|text| !text.is_empty()) {
+                            user = prompt;
+                        }
+                    } else {
+                        flush(&mut messages, &mut user, &mut assistant);
+                        user = prompt;
+                    }
+                    opened_by_append = false;
+                }
+                Some("context.append_message") => {
+                    let is_user = json
+                        .get("message")
+                        .and_then(|message| message.get("role"))
+                        .and_then(|role| role.as_str())
+                        == Some("user");
+                    if is_user {
+                        let text = json
+                            .get("message")
+                            .and_then(|message| text_parts(message.get("content")));
+                        if let Some(text) = text.filter(|text| !text.is_empty()) {
+                            // `turn.prompt` is preferred when both exist for one
+                            // turn, so only start a turn here if none is open.
+                            if user.is_none() {
+                                user = Some(text);
+                                opened_by_append = true;
+                            }
+                        }
+                    }
+                }
+                Some("context.append_loop_event") => {
+                    if let Some(event) = json.get("event") {
+                        if event.get("type").and_then(|kind| kind.as_str()) == Some("content.part")
+                        {
+                            if let Some(part) = event.get("part") {
+                                if part.get("type").and_then(|kind| kind.as_str()) == Some("text") {
+                                    if let Some(text) = part.get("text").and_then(|t| t.as_str()) {
+                                        assistant.push_str(text);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        flush(&mut messages, &mut user, &mut assistant);
+        let start = messages.len().saturating_sub(3);
+        messages.split_off(start)
+    }
+
+    fn flush(messages: &mut Vec<ChatMessage>, user: &mut Option<String>, assistant: &mut String) {
+        if let Some(text) = user.take().filter(|text| !text.is_empty()) {
+            messages.push(ChatMessage {
+                is_user: true,
+                text,
+            });
+            if !assistant.is_empty() {
+                messages.push(ChatMessage {
+                    is_user: false,
+                    text: std::mem::take(assistant),
+                });
+            }
+        }
+        assistant.clear();
+    }
+
+    /// The joined `text` of a content-part list. Parts that are not text carry no
+    /// words to show, so they contribute nothing.
+    fn text_parts(value: Option<&serde_json::Value>) -> Option<String> {
+        let parts = value?.as_array()?;
+        let joined: String = parts
+            .iter()
+            .filter(
+                |part| match part.get("type").and_then(|kind| kind.as_str()) {
+                    Some(kind) => kind == "text",
+                    None => true,
+                },
+            )
+            .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+            .collect();
+        Some(joined)
+    }
+}
+
+/// Kiro CLI sessions (#282): `~/.kiro/sessions/<workspace>/<session>/session.json`
+/// and the two older layouts beside it.
+pub mod kiro {
+    use super::ChatMessage;
+
+    /// What `session.json` says about a session.
+    #[derive(Debug, Clone, PartialEq)]
+    pub struct Metadata {
+        pub session_id: Option<String>,
+        /// `workspacePaths` first, then `rootPaths`: the workspace can list
+        /// several roots, and the first is the one the session was opened in.
+        pub cwd: Option<String>,
+        pub model: Option<String>,
+        pub activity_at_ms: Option<u64>,
+    }
+
+    pub fn session_metadata(session_json: &str) -> Option<Metadata> {
+        let json = serde_json::from_str::<serde_json::Value>(session_json).ok()?;
+        let first_string = |key: &str| {
+            json.get(key)?
+                .as_array()?
+                .iter()
+                .find_map(|value| value.as_str().filter(|value| !value.is_empty()))
+                .map(str::to_owned)
+        };
+        Some(Metadata {
+            session_id: json
+                .get("id")
+                .and_then(|id| id.as_str())
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            cwd: first_string("workspacePaths").or_else(|| first_string("rootPaths")),
+            model: json
+                .get("modelId")
+                .and_then(|model| model.as_str())
+                .filter(|model| !model.is_empty())
+                .map(str::to_owned),
+            activity_at_ms: json
+                .get("lastModifiedAt")
+                .and_then(|stamp| stamp.as_str())
+                .and_then(super::time::parse_iso8601_ms),
+        })
+    }
+
+    /// The last three turns of `messages.jsonl`, across the three layouts Kiro has
+    /// shipped.
+    ///
+    /// They are recognised by shape rather than by a version field, which is what
+    /// the Swift reader does too — the newest layout has no version marker:
+    ///
+    /// | shape | how it reads |
+    /// |---|---|
+    /// | `payload.type` | V3: `user`/`assistant` with a string `content` |
+    /// | `type` | direct: `message.content`, any shape `extractTextContent` knows |
+    /// | `kind == "Prompt"` | V2: `data.content[].data` |
+    ///
+    /// `payload.reasoningModelId` is the model when nothing else names one, with
+    /// Kiro's `qdev::` prefix removed.
+    pub fn recent_messages(tail: &str) -> (Option<String>, Vec<ChatMessage>) {
+        let mut users: Vec<(usize, String)> = Vec::new();
+        let mut assistants: Vec<(usize, String)> = Vec::new();
+        let mut detected_model: Option<String> = None;
+
+        for (index, line) in tail.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+
+            if let Some(payload) = json.get("payload").filter(|value| value.is_object()) {
+                let kind = payload.get("type").and_then(|kind| kind.as_str());
+                let content = payload
+                    .get("content")
+                    .and_then(|content| content.as_str())
+                    .filter(|content| !content.is_empty());
+                match (kind, content) {
+                    (Some("user"), Some(text)) => users.push((index, text.to_owned())),
+                    (Some("assistant"), Some(text)) => assistants.push((index, text.to_owned())),
+                    _ => {
+                        if let Some(model) = payload
+                            .get("reasoningModelId")
+                            .and_then(|model| model.as_str())
+                        {
+                            detected_model = Some(model.replace("qdev::", ""));
+                        }
+                    }
+                }
+                continue;
+            }
+
+            if let Some(kind) = json.get("type").and_then(|kind| kind.as_str()) {
+                // A direct row may still nest the turn under `message`.
+                let message = json.get("message").unwrap_or(&json);
+                let text = super::extract_text_content(message.get("content"));
+                match (kind, text) {
+                    ("user", Some(text)) => users.push((index, text)),
+                    ("assistant", Some(text)) => assistants.push((index, text)),
+                    _ => {}
+                }
+                continue;
+            }
+
+            if json.get("kind").and_then(|kind| kind.as_str()) == Some("Prompt") {
+                let prompt = json
+                    .get("data")
+                    .and_then(|data| data.get("content"))
+                    .and_then(|content| content.as_array());
+                if let Some(prompt) = prompt {
+                    for item in prompt {
+                        if let Some(text) = item
+                            .get("data")
+                            .and_then(|data| data.as_str())
+                            .filter(|text| !text.is_empty())
+                        {
+                            users.push((index, text.to_owned()));
+                        }
+                    }
+                }
+            }
+        }
+
+        let start = users.len().saturating_sub(3);
+        let mut combined: Vec<(usize, ChatMessage)> = users
+            .split_off(start)
+            .into_iter()
+            .map(|(index, text)| {
+                (
+                    index,
+                    ChatMessage {
+                        is_user: true,
+                        text,
+                    },
+                )
+            })
+            .collect();
+        let start = assistants.len().saturating_sub(3);
+        combined.extend(
+            assistants
+                .split_off(start)
+                .into_iter()
+                .map(|(index, text)| {
+                    (
+                        index,
+                        ChatMessage {
+                            is_user: false,
+                            text,
+                        },
+                    )
+                }),
+        );
+        combined.sort_by_key(|(index, _)| *index);
+        let start = combined.len().saturating_sub(3);
+        (
+            detected_model,
+            combined
+                .split_off(start)
+                .into_iter()
+                .map(|(_, t)| t)
+                .collect(),
+        )
+    }
+}
+
+#[cfg(test)]
+mod kimi_tests {
+    use super::kimi;
+
+    #[test]
+    fn the_legacy_directory_is_the_md5_of_the_cwd() {
+        // The one hash in this port, and it is here because the directory name
+        // cannot be derived any other way. Known vectors, so a wrong digest is not
+        // a directory that merely looks plausible.
+        assert_eq!(kimi::workdir_hash(""), "d41d8cd98f00b204e9800998ecf8427e");
+        assert_eq!(
+            kimi::workdir_hash("abc"),
+            "900150983cd24fb0d6963f7d28e17f72"
+        );
+        assert_eq!(kimi::workdir_hash("/a").len(), 32);
+        assert_ne!(kimi::workdir_hash("/a"), kimi::workdir_hash("/b"));
+    }
+
+    #[test]
+    fn an_index_row_missing_a_field_is_skipped_rather_than_half_used() {
+        let jsonl = concat!(
+            r#"{"sessionId":"s1","sessionDir":"/k/s1","workDir":"/home/dev/p"}"#,
+            "\n",
+            r#"{"sessionId":"s2","workDir":"/home/dev/p"}"#,
+            "\n",
+            "not json",
+            "\n",
+            r#"{"sessionId":"","sessionDir":"/k/s3","workDir":"/home/dev/p"}"#
+        );
+        let entries = kimi::index_entries(jsonl);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].session_id, "s1");
+        assert_eq!(entries[0].session_dir, "/k/s1");
+        assert_eq!(entries[0].work_dir, "/home/dev/p");
+    }
+
+    #[test]
+    fn the_kimi_code_dialect_becomes_turns() {
+        let tail = r#"{"type":"turn.prompt","input":[{"type":"text","text":"Why is it slow?"}]}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Because of the "}}}
+{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"N+1 query."}}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Why is it slow?");
+        assert!(messages[0].is_user);
+        // Two parts of one answer are one answer, not two.
+        assert_eq!(messages[1].text, "Because of the N+1 query.");
+    }
+
+    #[test]
+    fn the_legacy_dialect_becomes_the_same_turns() {
+        let tail = r#"{"message":{"type":"TurnBegin","payload":{"user_input":[{"type":"text","text":"Hello"}]}}}
+{"message":{"type":"ContentPart","payload":{"type":"text","text":"Hi there"}}}
+{"message":{"type":"TurnEnd"}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Hello");
+        assert_eq!(messages[1].text, "Hi there");
+        assert!(!messages[1].is_user);
+    }
+
+    #[test]
+    fn a_prompt_after_an_appended_message_replaces_it_instead_of_duplicating() {
+        // kimi-code writes `turn.prompt`, then `context.append_message` with the
+        // same text. Two user lines for one turn would be a visible duplicate.
+        let tail = r#"{"type":"turn.prompt","input":[{"type":"text","text":"One question"}]}
+{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"One question"}]}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 1, "one turn, one user line");
+        assert_eq!(messages[0].text, "One question");
+    }
+
+    #[test]
+    fn an_appended_message_opens_a_turn_when_no_prompt_came_first() {
+        let tail = r#"{"type":"context.append_message","message":{"role":"user","content":[{"type":"text","text":"From a hook"}]}}"#;
+        let messages = kimi::recent_messages(tail);
+        assert_eq!(messages.len(), 1);
+        assert!(messages[0].is_user);
+    }
+
+    #[test]
+    fn only_the_last_three_turns_are_kept() {
+        let mut lines = Vec::new();
+        for turn in 1..=5 {
+            lines.push(format!(
+                r#"{{"type":"turn.prompt","input":[{{"type":"text","text":"ask {turn}"}}]}}"#
+            ));
+            lines.push(format!(
+                r#"{{"type":"context.append_loop_event","event":{{"type":"content.part","part":{{"type":"text","text":"answer {turn}"}}}}}}"#
+            ));
+        }
+        let messages = kimi::recent_messages(&lines.join("\n"));
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "answer 4");
+    }
+}
+
+#[cfg(test)]
+mod kiro_tests {
+    use super::kiro;
+
+    #[test]
+    fn the_first_workspace_path_is_the_cwd() {
+        let json = r#"{"id":"s1","workspacePaths":["/home/dev/p","/home/dev/q"],
+                       "modelId":"claude-sonnet","lastModifiedAt":"2025-11-22T10:00:00Z"}"#;
+        let meta = kiro::session_metadata(json).expect("metadata");
+        assert_eq!(meta.session_id.as_deref(), Some("s1"));
+        assert_eq!(meta.cwd.as_deref(), Some("/home/dev/p"));
+        assert_eq!(meta.model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(meta.activity_at_ms, Some(1_763_805_600_000));
+    }
+
+    #[test]
+    fn root_paths_are_the_fallback_when_there_is_no_workspace_list() {
+        let json = r#"{"rootPaths":["/home/dev/root"]}"#;
+        assert_eq!(
+            kiro::session_metadata(json).unwrap().cwd.as_deref(),
+            Some("/home/dev/root")
+        );
+        assert_eq!(
+            kiro::session_metadata(r#"{"workspacePaths":[],"rootPaths":["/r"]}"#)
+                .unwrap()
+                .cwd
+                .as_deref(),
+            Some("/r")
+        );
+        assert_eq!(kiro::session_metadata("not json"), None);
+    }
+
+    #[test]
+    fn the_v3_payload_shape_becomes_turns_and_names_the_model() {
+        let tail = r#"{"payload":{"type":"user","content":"Refactor this"}}
+{"payload":{"type":"assistant","content":"Done"}}
+{"payload":{"reasoningModelId":"qdev::claude-opus"}}"#;
+        let (model, messages) = kiro::recent_messages(tail);
+        assert_eq!(
+            model.as_deref(),
+            Some("claude-opus"),
+            "the qdev:: prefix is Kiro's"
+        );
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Refactor this");
+        assert_eq!(messages[1].text, "Done");
+    }
+
+    #[test]
+    fn the_direct_shape_reads_nested_content() {
+        let tail = r#"{"type":"user","message":{"content":[{"type":"text","text":"Run the tests"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"All green"}]}}"#;
+        let (model, messages) = kiro::recent_messages(tail);
+        assert_eq!(model, None);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].text, "Run the tests");
+    }
+
+    #[test]
+    fn the_v2_prompt_shape_becomes_one_user_turn_per_part() {
+        let tail = r#"{"kind":"Prompt","data":{"content":[{"data":"first"},{"data":"second"}]}}"#;
+        let (_, messages) = kiro::recent_messages(tail);
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|message| message.is_user));
+        assert_eq!(messages[1].text, "second");
+    }
+
+    #[test]
+    fn the_last_three_turns_are_chosen_from_both_roles_in_order() {
+        let tail = r#"{"payload":{"type":"user","content":"one"}}
+{"payload":{"type":"assistant","content":"two"}}
+{"payload":{"type":"user","content":"three"}}
+{"payload":{"type":"assistant","content":"four"}}
+{"payload":{"type":"user","content":"five"}}"#;
+        let (_, messages) = kiro::recent_messages(tail);
+        // The last three per role are collected, then merged by line index and cut
+        // again — so the cut is chronological, not "three users then three replies".
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "three");
+        assert!(messages[0].is_user);
+        assert_eq!(messages[1].text, "four");
+        assert!(!messages[1].is_user);
+        assert_eq!(messages[2].text, "five");
+    }
+}
+
+#[cfg(test)]
+mod time_tests {
+    use super::time::parse_iso8601_ms;
+
+    #[test]
+    fn a_utc_timestamp_is_milliseconds_since_the_epoch() {
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:01Z"), Some(1_000));
+        // A known instant, so a wrong epoch or a wrong leap-day rule shows up.
+        assert_eq!(
+            parse_iso8601_ms("2024-02-29T12:00:00Z"),
+            Some(1_709_208_000_000)
+        );
+    }
+
+    #[test]
+    fn a_fraction_is_a_fraction_of_a_second() {
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00.5Z"), Some(500));
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00.123Z"), Some(123));
+        assert_eq!(parse_iso8601_ms("1970-01-01T00:00:00.123456Z"), Some(123));
+    }
+
+    #[test]
+    fn an_offset_is_applied_rather_than_ignored() {
+        assert_eq!(
+            parse_iso8601_ms("1970-01-01T07:00:00+07:00"),
+            Some(0),
+            "Jakarta is seven hours ahead"
+        );
+        assert_eq!(parse_iso8601_ms("1969-12-31T19:00:00-05:00"), Some(0));
+    }
+
+    #[test]
+    fn a_space_instead_of_a_t_is_accepted_and_anything_else_is_not() {
+        assert_eq!(parse_iso8601_ms("1970-01-01 00:00:00Z"), Some(0));
+        assert_eq!(parse_iso8601_ms(""), None);
+        assert_eq!(parse_iso8601_ms("1970-01-01"), None);
+        assert_eq!(parse_iso8601_ms("19700101T000000Z"), None);
+        assert_eq!(parse_iso8601_ms("not a timestamp"), None);
+        assert_eq!(parse_iso8601_ms("1970-13-01T00:00:00Z"), None, "month 13");
+    }
+}
+
+#[cfg(test)]
+mod grok_tests {
+    use super::grok;
+
+    #[test]
+    fn the_whole_cwd_becomes_one_encoded_component() {
+        assert_eq!(grok::encoded_cwd("/Users/me"), "%2FUsers%2Fme");
+        assert_eq!(
+            grok::encoded_cwd("/home/dev/project"),
+            "%2Fhome%2Fdev%2Fproject"
+        );
+        // Unreserved characters survive: a different allowed set reads a directory
+        // Grok never wrote.
+        assert_eq!(grok::encoded_cwd("/a/b-c.d_e~f"), "%2Fa%2Fb-c.d_e~f");
+        // A space is encoded, not turned into `-`: this is not Claude's encoding.
+        assert_eq!(grok::encoded_cwd("/a b"), "%2Fa%20b");
+    }
+
+    #[test]
+    fn the_summary_names_the_cwd_the_model_and_the_newest_activity() {
+        let json = r#"{
+            "info": {"id": "0192f0aa-7cbb-7000-8000-000000000000", "cwd": "/home/dev/p"},
+            "current_model_id": "grok-code-fast-1",
+            "created_at": "2025-11-22T10:00:00Z",
+            "updated_at": "2025-11-22T10:05:00Z",
+            "last_active_at": "2025-11-22T10:02:00Z"
+        }"#;
+        let summary = grok::summary_metadata(json).expect("a summary");
+        assert_eq!(summary.cwd.as_deref(), Some("/home/dev/p"));
+        assert_eq!(summary.model.as_deref(), Some("grok-code-fast-1"));
+        assert_eq!(
+            summary.activity_at_ms,
+            Some(1_763_805_900_000),
+            "updated_at is the newest of the three"
+        );
+    }
+
+    #[test]
+    fn an_empty_field_is_absent_rather_than_empty() {
+        let json = r#"{"info":{"id":"","cwd":""},"current_model_id":""}"#;
+        let summary = grok::summary_metadata(json).expect("a summary");
+        assert_eq!(summary.session_id, None);
+        assert_eq!(summary.cwd, None);
+        assert_eq!(summary.model, None);
+        assert_eq!(summary.activity_at_ms, None);
+        assert_eq!(grok::summary_metadata("not json"), None);
+    }
+
+    #[test]
+    fn a_uuidv7_carries_its_creation_time_in_the_first_48_bits() {
+        // 0x0192f0aa7cbb = 1_730_614_557_883 ms.
+        assert_eq!(
+            grok::creation_ms_from_session_id("0192f0aa-7cbb-7000-8000-000000000000"),
+            Some(1_730_614_557_883)
+        );
+    }
+
+    #[test]
+    fn an_id_that_is_not_a_uuidv7_has_no_creation_time() {
+        // A client may pass its own id with `-s`, and a UUIDv4 has no time in it.
+        assert_eq!(grok::creation_ms_from_session_id("my-own-id"), None);
+        assert_eq!(
+            grok::creation_ms_from_session_id("2f0aa7cb-b123-4000-8000-000000000000"),
+            None,
+            "version 4, not 7"
+        );
+        assert_eq!(grok::creation_ms_from_session_id(""), None);
+    }
+}
+
+#[cfg(test)]
+mod copilot_tests {
+    use super::copilot;
+
+    fn events(lines: &[&str]) -> String {
+        lines.join("\n")
+    }
+
+    #[test]
+    fn a_session_start_names_its_cwd() {
+        let head =
+            events(&[r#"{"type":"session.start","data":{"context":{"cwd":"/home/dev/p"}}}"#]);
+        assert!(copilot::matches_cwd(&head, "/home/dev/p"));
+        assert!(!copilot::matches_cwd(&head, "/home/dev/other"));
+    }
+
+    #[test]
+    fn a_hook_only_session_names_its_cwd_too() {
+        // A session recorded through the hook path has no `session.start`.
+        let head = events(&[r#"{"type":"hook.start","data":{"input":{"cwd":"/home/dev/p"}}}"#]);
+        assert!(copilot::matches_cwd(&head, "/home/dev/p"));
+    }
+
+    #[test]
+    fn an_unreadable_head_matches_nothing() {
+        let head = events(&["not json", r#"{"type":"user.message","data":{}}"#]);
+        assert!(!copilot::matches_cwd(&head, "/home/dev/p"));
+        assert!(!copilot::matches_cwd("", ""));
+    }
+
+    #[test]
+    fn the_last_three_turns_keep_their_order() {
+        let tail = events(&[
+            r#"{"type":"user.message","data":{"content":"one"}}"#,
+            r#"{"type":"assistant.message","data":{"content":"two"}}"#,
+            r#"{"type":"user.message","data":{"content":"three"}}"#,
+            r#"{"type":"assistant.message","data":{"content":"four"}}"#,
+            r#"{"type":"user.message","data":{"content":"five"}}"#,
+        ]);
+        let (_, messages) = copilot::recent_messages(&tail);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "three");
+        assert!(messages[2].is_user);
+    }
+
+    #[test]
+    fn the_model_is_spelled_three_ways_and_the_first_one_wins() {
+        let tail = events(&[r#"{"type":"session.info","data":{"currentModel":"gpt-5"}}"#]);
+        assert_eq!(copilot::recent_messages(&tail).0.as_deref(), Some("gpt-5"));
+        let tail = events(&[r#"{"type":"session.info","data":{"model":"claude-sonnet"}}"#]);
+        assert_eq!(
+            copilot::recent_messages(&tail).0.as_deref(),
+            Some("claude-sonnet")
+        );
+        // `modelMetrics` is keyed by model name; the last key wins.
+        let tail = events(&[
+            r#"{"type":"session.info","data":{"modelMetrics":{"a-model":1,"b-model":2}}}"#,
+        ]);
+        assert_eq!(
+            copilot::recent_messages(&tail).0.as_deref(),
+            Some("b-model")
+        );
+    }
+
+    #[test]
+    fn a_content_that_is_not_a_string_is_skipped() {
+        let tail = events(&[
+            r#"{"type":"user.message","data":{"content":[{"type":"text","text":"no"}]}}"#,
+            r#"{"type":"user.message","data":{"content":"yes"}}"#,
+        ]);
+        let (_, messages) = copilot::recent_messages(&tail);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "yes");
+    }
+}
+
+#[cfg(test)]
+mod cline_tests {
+    use super::cline;
+
+    fn history(entries: &str) -> String {
+        format!("[{entries}]")
+    }
+
+    #[test]
+    fn the_newest_task_is_chosen_by_timestamp_not_by_position() {
+        // Cline rewrites the list in whatever order the extension last saved, so
+        // the newest row is not reliably last.
+        let json = history(
+            r#"{"id":"new","ts":2000,"cwdOnTaskInitialization":"/a"},
+               {"id":"old","ts":1000,"cwdOnTaskInitialization":"/b"}"#,
+        );
+        let task = cline::latest_task(&json).expect("a task");
+        assert_eq!(task.id, "new");
+        assert_eq!(task.cwd.as_deref(), Some("/a"));
+    }
+
+    #[test]
+    fn a_row_without_an_id_is_not_a_task() {
+        let json = history(r#"{"ts":1,"cwdOnTaskInitialization":"/a"}"#);
+        assert_eq!(cline::latest_task(&json), None);
+        assert_eq!(cline::latest_task("not json"), None);
+        assert_eq!(cline::latest_task("{}"), None);
+    }
+
+    #[test]
+    fn an_empty_cwd_or_model_is_absent_rather_than_empty() {
+        let json = history(r#"{"id":"t","cwdOnTaskInitialization":"","modelId":""}"#);
+        let task = cline::latest_task(&json).expect("a task");
+        assert_eq!(task.cwd, None);
+        assert_eq!(task.model, None);
+    }
+
+    #[test]
+    fn the_last_three_turns_keep_their_order() {
+        let conversation = r#"[
+            {"role":"user","content":"one"},
+            {"role":"assistant","content":"two"},
+            {"role":"user","content":"three"},
+            {"role":"assistant","content":"four"},
+            {"role":"user","content":"five"}
+        ]"#;
+        let messages = cline::recent_messages(conversation);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0].text, "three");
+        assert_eq!(messages[1].text, "four");
+        assert_eq!(messages[2].text, "five");
+        assert!(messages[2].is_user);
+    }
+
+    #[test]
+    fn a_role_that_is_neither_user_nor_assistant_is_skipped() {
+        let conversation = r#"[
+            {"role":"system","content":"ignore me"},
+            {"role":"user","content":"hello"}
+        ]"#;
+        let messages = cline::recent_messages(conversation);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "hello");
+        assert!(cline::recent_messages("not json").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod flat_store_tests {
+    use super::flat_store;
+
+    #[test]
+    fn codebuddy_keeps_the_model_from_its_first_message() {
+        let tail = concat!(
+            r#"{"type":"message","role":"user","content":"add a test","providerData":{"model":"claude-sonnet"}}"#,
+            "\n",
+            r#"{"type":"message","role":"assistant","content":"added","providerData":{"model":"other"}}"#
+        );
+        let (model, messages) = flat_store::codebuddy_recent(tail);
+        assert_eq!(model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(messages.len(), 2);
+        assert!(messages[0].is_user);
+    }
+
+    #[test]
+    fn codebuddy_rows_that_are_not_messages_are_skipped() {
+        let tail = concat!(
+            r#"{"type":"summary","role":"user","content":"no"}"#,
+            "\n",
+            r#"{"type":"message","role":"user","content":"yes"}"#
+        );
+        let (model, messages) = flat_store::codebuddy_recent(tail);
+        assert_eq!(model, None);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].text, "yes");
+    }
+
+    #[test]
+    fn factory_keeps_its_model_beside_the_transcript() {
+        assert_eq!(
+            flat_store::factory_model_from_settings(r#"{"model":"gpt-5.1-codex"}"#).as_deref(),
+            Some("gpt-5.1-codex")
+        );
+        assert_eq!(
+            flat_store::factory_model_from_settings(r#"{"model":""}"#),
+            None
+        );
+        assert_eq!(flat_store::factory_model_from_settings("not json"), None);
+        assert_eq!(flat_store::factory_model_from_settings("{}"), None);
     }
 }
 
@@ -1728,7 +2990,7 @@ pub mod scan {
         /// Every session this root holds. A root the reader does not understand
         /// answers an empty list, not an error: one unknown store must not lose
         /// the others.
-        fn read(&self, root: &str) -> Vec<DiscoveryHit>;
+        fn read(&self, root: &str, cache: &crate::scan_policy::TextCache) -> Vec<DiscoveryHit>;
     }
 
     /// A decoder that needs a **process** before it can find anything (#276).
@@ -1745,7 +3007,11 @@ pub mod scan {
 
         /// The sessions this process is running. A process whose store is not
         /// there, or is stale, answers nothing.
-        fn read_process(&self, process: &crate::agent_process::ProcessInfo) -> Vec<DiscoveryHit>;
+        fn read_process(
+            &self,
+            process: &crate::agent_process::ProcessInfo,
+            cache: &crate::scan_policy::TextCache,
+        ) -> Vec<DiscoveryHit>;
     }
 
     /// What one scan produced.
@@ -1788,10 +3054,11 @@ pub mod scan {
     /// thinner projection must not replace a fuller one.
     pub fn run(
         readers: &[&dyn StoreReader],
+        cache: &crate::scan_policy::TextCache,
         budget_ms: u64,
         now_ms: impl Fn() -> u64,
     ) -> ScanResult {
-        run_all(readers, &[], &[], budget_ms, now_ms)
+        run_all(readers, &[], &[], cache, budget_ms, now_ms)
     }
 
     /// Every reader this port has: the store-first ones over their own roots, then
@@ -1805,6 +3072,7 @@ pub mod scan {
         readers: &[&dyn StoreReader],
         process_readers: &[&dyn ProcessReader],
         table: &[crate::agent_process::ProcessInfo],
+        cache: &crate::scan_policy::TextCache,
         budget_ms: u64,
         now_ms: impl Fn() -> u64,
     ) -> ScanResult {
@@ -1827,7 +3095,7 @@ pub mod scan {
                     result.unfinished.push((reader.source(), root.clone()));
                     continue;
                 }
-                for hit in reader.read(&root) {
+                for hit in reader.read(&root, cache) {
                     if claimed.insert(hit.session_id.clone()) {
                         result.hits.push(hit);
                     }
@@ -1854,7 +3122,7 @@ pub mod scan {
                 {
                     continue;
                 }
-                for hit in reader.read_process(process) {
+                for hit in reader.read_process(process, cache) {
                     if claimed.insert(hit.session_id.clone()) {
                         result.hits.push(hit);
                     }
@@ -1922,7 +3190,7 @@ mod scan_tests {
             })
         }
 
-        fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+        fn read(&self, root: &str, _cache: &crate::scan_policy::TextCache) -> Vec<DiscoveryHit> {
             self.calls.borrow_mut().push(root.to_owned());
             self.table
                 .iter()
@@ -1955,7 +3223,12 @@ mod scan_tests {
         let store = Fake::new("codex", vec![(r"/data", vec![hit("c", "codex", "/w")])]);
 
         let readers: Vec<&dyn StoreReader> = vec![&claude, &store];
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
 
         assert_eq!(ids(&result), vec!["a", "b", "c"]);
         assert_eq!(*claude.calls.borrow(), vec![r"/r1", r"/r2"]);
@@ -1976,7 +3249,12 @@ mod scan_tests {
         let index = Fake::new("codex", vec![(r"/r", vec![hit("same", "codex", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&authoritative, &index];
 
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
 
         assert_eq!(ids(&result), vec!["same"]);
         assert_eq!(result.hits[0].source, "claude");
@@ -1990,7 +3268,12 @@ mod scan_tests {
         let second = Fake::new("claude", vec![(r"/r", vec![hit("same", "claude", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&first, &second];
 
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
         assert_eq!(result.hits[0].source, "codex");
     }
 
@@ -2005,11 +3288,16 @@ mod scan_tests {
         let second = Fake::new("codex", vec![(r"/r2", vec![hit("b", "codex", "/w")])]);
         let readers: Vec<&dyn StoreReader> = vec![&first, &second];
 
-        let result = scan::run(&readers, 100, || {
-            let call = clock.get();
-            clock.set(call + 1);
-            if call < 2 { 0 } else { 10_000 }
-        });
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            100,
+            || {
+                let call = clock.get();
+                clock.set(call + 1);
+                if call < 2 { 0 } else { 10_000 }
+            },
+        );
 
         assert_eq!(ids(&result), vec!["a"]);
         // Readers are walked reader-major, so the second reader's one root is
@@ -2037,11 +3325,16 @@ mod scan_tests {
         );
         let readers: Vec<&dyn StoreReader> = vec![&slow];
 
-        let result = scan::run(&readers, 50, || {
-            let now = clock.get();
-            clock.set(now + 40);
-            now
-        });
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            50,
+            || {
+                let now = clock.get();
+                clock.set(now + 40);
+                now
+            },
+        );
 
         assert_eq!(ids(&result), vec!["a", "b"]);
         assert!(result.unfinished.is_empty());
@@ -2051,7 +3344,12 @@ mod scan_tests {
     fn a_reader_that_answers_nothing_is_not_an_error() {
         let empty = Fake::new("claude", vec![]);
         let readers: Vec<&dyn StoreReader> = vec![&empty];
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
         assert!(result.hits.is_empty());
         assert!(result.unfinished.is_empty());
     }
@@ -2061,7 +3359,12 @@ mod scan_tests {
         // A reader that looks nowhere reads nothing.
         let idle = Fake::looking_at("claude", &[]);
         let readers: Vec<&dyn StoreReader> = vec![&idle];
-        let result = scan::run(&readers, scan::DEFAULT_BUDGET_MS, || 0);
+        let result = scan::run(
+            &readers,
+            &crate::scan_policy::TextCache::default(),
+            scan::DEFAULT_BUDGET_MS,
+            || 0,
+        );
         assert!(result.hits.is_empty());
         assert!(idle.calls.borrow().is_empty());
     }
@@ -2085,3 +3388,4 @@ mod scan_tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
+
