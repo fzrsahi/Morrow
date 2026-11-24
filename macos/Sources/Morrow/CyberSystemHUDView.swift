@@ -9,10 +9,7 @@ public struct MagSafeChargingBanner: View {
     var displayMode: IslandDisplayMode = .notch
     var onDismiss: (() -> Void)? = nil
     @ObservedObject private var sys = SystemMonitorManager.shared
-    @ObservedObject private var nowPlaying = NowPlayingManager.shared
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
-    @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
-    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
     @State private var pulseRing = false
     @State private var animatedProgress: Double = 0
     @State private var rippleScale: CGFloat = 0.85
@@ -38,13 +35,12 @@ public struct MagSafeChargingBanner: View {
         self.onDismiss = onDismiss
     }
 
-    private var stateColor: Color {
-        if case .charging = effectiveState,
-           (syncThemeWithAlbumArt || musicHUDProgressColor == "album"),
-           nowPlaying.isPlaying, nowPlaying.artworkImage != nil {
-            return nowPlaying.albumPalette.primary
-        }
-        return effectiveState.accentColor
+    static func semanticColor(for state: PowerBannerState) -> Color {
+        state.accentColor
+    }
+
+    var stateColor: Color {
+        Self.semanticColor(for: effectiveState)
     }
 
     private var modernIconName: String {
@@ -347,10 +343,27 @@ public struct CyberSystemGaugeBar: View {
             }
 
             // Battery
+            let batteryColor: Color = {
+                if case .onHold = m.powerBannerState {
+                    return PowerBannerState.onHold(kind: .magSafe).accentColor
+                }
+                if !m.isCharging && m.batteryLevel <= 20 {
+                    return PowerBannerState.lowBattery(percent: m.batteryLevel).accentColor
+                }
+                if m.isCharging {
+                    return PowerBannerState.charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil).accentColor
+                }
+                return Color.white.opacity(0.8)
+            }()
+            let batteryIcon: String = {
+                if m.isCharging { return "battery.100.bolt" }
+                if m.batteryLevel <= 20 { return "battery.25" }
+                return "battery.75"
+            }()
             HStack(spacing: 2) {
-                Image(systemName: m.isCharging ? "battery.100.bolt" : "battery.75")
+                Image(systemName: batteryIcon)
                     .font(.system(size: 7.5, weight: .bold))
-                    .foregroundStyle(m.isCharging ? Color(red: 0.0, green: 0.90, blue: 0.46) : Color.white.opacity(0.8))
+                    .foregroundStyle(batteryColor)
                 Text("\(m.batteryLevel)%")
                     .font(.system(size: 7.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(Color.white.opacity(0.85))

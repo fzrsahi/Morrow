@@ -69,31 +69,39 @@ struct CompactGitStandbyWingView: View {
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
     @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
+    private let signals = IslandSignals.shared
 
     private var isPixel: Bool {
         islandUITheme == IslandUITheme.pixel.rawValue
     }
 
     private var primaryAutoColor: Color {
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
         let base = AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
         return AppColorTheme.readableOnDark(base)
     }
 
     private var secondaryAutoColor: Color {
-        AppColorTheme.secondaryAccent(for: musicHUDProgressColor)
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.secondaryAccent(for: musicHUDProgressColor)
     }
 
     private var isAlbumColorActive: Bool {
-        let pc = MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme
-        return (syncThemeWithAlbumArt || pc == .album)
-            && NowPlayingManager.shared.isPlaying
-            && NowPlayingManager.shared.artworkImage != nil
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor)
     }
 
     private var cleanColor: Color {
-        isAlbumColorActive
-            ? primaryAutoColor.opacity(0.85)
-            : Color(red: 0.20, green: 0.83, blue: 0.60)
+        if isAlbumColorActive || (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme) != .theme {
+            return primaryAutoColor
+        }
+        return isPixel ? Pixel16Palette.cyan : Color(red: 0.20, green: 0.83, blue: 0.60)
     }
 
     private var displayState: CompactGitDisplayState {
@@ -140,11 +148,11 @@ struct CompactGitStandbyWingView: View {
             case .ahead(let ahead):
                 HStack(spacing: 4) {
                     unpushedToken(ahead: ahead, fontSize: fontSize)
-                    branchGlyph(color: isPixel ? Pixel16Palette.cyan : primaryAutoColor)
+                    branchGlyph(color: primaryAutoColor)
                 }
             case .clean:
                 HStack(spacing: isPixel ? 4 : 3) {
-                    let color = isPixel ? Pixel16Palette.cyan : cleanColor
+                    let color = cleanColor
                     branchGlyph(color: color)
                     if isPixel {
                         WorkspacePixelIcon(glyph: .check, color: color, pixelSize: 1.2)
@@ -218,7 +226,7 @@ struct CompactGitStandbyWingView: View {
 
     @ViewBuilder
     private func wideBody(fontSize: CGFloat) -> some View {
-        let branchColor: Color = isPixel ? Pixel16Palette.cyan : primaryAutoColor
+        let branchColor: Color = primaryAutoColor
         let labelFont: Font = .system(size: 10, weight: .bold, design: .monospaced)
         let statFont: Font = .system(size: 10, weight: .bold, design: .monospaced)
         let branchLabel = Self.compactBranchLabel(workspaceManager.branch)
@@ -271,12 +279,12 @@ struct CompactGitStandbyWingView: View {
                 HStack(spacing: isPixel ? 4 : 3) {
                     if ins > 0 {
                         if isPixel {
-                            PixelText(text: "+\(ins)", color: Pixel16Palette.cyan, pixelSize: 1.0)
+                            PixelText(text: "+\(ins)", color: cleanColor, pixelSize: 1.0)
                         } else {
                             Text("+\(ins)")
                                 .font(statFont)
                                 .monospacedDigit()
-                                .foregroundStyle(Color(red: 0.20, green: 0.85, blue: 0.58))
+                                .foregroundStyle(cleanColor)
                         }
                     }
                     if del > 0 {
@@ -293,7 +301,7 @@ struct CompactGitStandbyWingView: View {
                 .fixedSize()
             } else {
                 if isPixel {
-                    PixelText(text: "\(modified)M", color: Pixel16Palette.amber, pixelSize: 1.0)
+                    PixelText(text: "\(modified)M", color: secondaryAutoColor, pixelSize: 1.0)
                         .fixedSize()
                 } else {
                     Text("\(modified)M")
@@ -306,8 +314,8 @@ struct CompactGitStandbyWingView: View {
         case .ahead(let ahead):
             HStack(spacing: isPixel ? 2 : 1) {
                 if isPixel {
-                    WorkspacePixelIcon(glyph: .push, color: Pixel16Palette.cyan, pixelSize: 1.05)
-                    PixelText(text: "\(ahead)", color: Pixel16Palette.cyan, pixelSize: 1.0)
+                    WorkspacePixelIcon(glyph: .push, color: primaryAutoColor, pixelSize: 1.05)
+                    PixelText(text: "\(ahead)", color: primaryAutoColor, pixelSize: 1.0)
                 } else {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 8, weight: .bold))
@@ -316,15 +324,15 @@ struct CompactGitStandbyWingView: View {
                         .monospacedDigit()
                 }
             }
-            .foregroundStyle(isPixel ? Pixel16Palette.cyan : primaryAutoColor)
+            .foregroundStyle(primaryAutoColor)
             .fixedSize()
         case .clean:
             let behind = max(0, workspaceManager.behindCount)
             if behind > 0 {
                 HStack(spacing: isPixel ? 2 : 1) {
                     if isPixel {
-                        WorkspacePixelIcon(glyph: .sync, color: Pixel16Palette.amber, pixelSize: 1.05)
-                        PixelText(text: "\(behind)", color: Pixel16Palette.amber, pixelSize: 1.0)
+                        WorkspacePixelIcon(glyph: .sync, color: secondaryAutoColor, pixelSize: 1.05)
+                        PixelText(text: "\(behind)", color: secondaryAutoColor, pixelSize: 1.0)
                     } else {
                         Image(systemName: "arrow.down")
                             .font(.system(size: 8, weight: .bold))
@@ -333,11 +341,11 @@ struct CompactGitStandbyWingView: View {
                             .monospacedDigit()
                     }
                 }
-                .foregroundStyle(isPixel ? Pixel16Palette.amber : secondaryAutoColor)
+                .foregroundStyle(secondaryAutoColor)
                 .fixedSize()
             } else {
                 if isPixel {
-                    PixelText(text: "SYNC", color: Pixel16Palette.cyan, pixelSize: 1.0)
+                    PixelText(text: "SYNC", color: cleanColor, pixelSize: 1.0)
                         .fixedSize()
                 } else {
                     Text("SYNC")
@@ -353,7 +361,7 @@ struct CompactGitStandbyWingView: View {
 
     @ViewBuilder
     private func unpushedToken(ahead: Int, fontSize: CGFloat) -> some View {
-        let color = isPixel ? Pixel16Palette.cyan : primaryAutoColor
+        let color = primaryAutoColor
         HStack(spacing: isPixel ? 2 : 1) {
             if isPixel {
                 WorkspacePixelIcon(glyph: .push, color: color, pixelSize: 1.2)
@@ -371,7 +379,7 @@ struct CompactGitStandbyWingView: View {
 
     @ViewBuilder
     private func modifiedToken(count: Int, fontSize: CGFloat) -> some View {
-        let color = isPixel ? Pixel16Palette.amber : secondaryAutoColor
+        let color = secondaryAutoColor
         HStack(spacing: isPixel ? 5 : 2.5) {
             branchGlyph(color: color)
             if isPixel {

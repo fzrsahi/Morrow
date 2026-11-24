@@ -753,7 +753,7 @@ struct CyberMusicMiniPeekBanner: View {
 
                         Image(systemName: "music.note")
                             .font(.system(size: 11, weight: .bold))
-                            .foregroundColor(isModernClean ? accentColor : Color(red: 0.0, green: 0.96, blue: 0.83))
+                            .foregroundColor(accentColor)
                     }
                 }
 
@@ -766,7 +766,7 @@ struct CyberMusicMiniPeekBanner: View {
 
                     Text(nowPlaying.artist.isEmpty ? "Now Playing" : nowPlaying.artist)
                         .font(.system(size: 8.5, design: isModernClean ? .default : .monospaced))
-                        .foregroundStyle(isModernClean ? Color(white: 0.65) : Color(red: 0.0, green: 0.96, blue: 0.83).opacity(0.75))
+                        .foregroundStyle(isModernClean ? Color(white: 0.65) : accentColor.opacity(0.75))
                         .lineLimit(1)
                 }
 
@@ -1201,11 +1201,27 @@ struct IntegratedNotchChinLyricView: View {
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @State private var isHovered = false
 
+    private var isPixel: Bool {
+        islandUITheme == IslandUITheme.pixel.rawValue
+    }
+
     private var activeTextColor: Color {
         if (syncThemeWithAlbumArt || floatingLyricTextColor == "album" || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
-            return nowPlaying.albumPalette.primary
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
         }
         return FloatingLyricTextColor(rawValue: floatingLyricTextColor)?.color ?? .white
+    }
+
+    private var themeAccentColor: Color {
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
+        )
+    }
+
+    private var themeSecondaryColor: Color {
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.secondaryAccent(for: musicHUDProgressColor)
     }
 
     private var activeFontDesign: Font.Design {
@@ -1299,9 +1315,15 @@ struct DynamicIslandInlineLyricPillView: View {
     @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
 
     private var accentColor: Color {
-        if (syncThemeWithAlbumArt || floatingLyricTextColor == "album" || musicHUDProgressColor == "album"),
-           nowPlaying.isPlaying, nowPlaying.artworkImage != nil {
-            return nowPlaying.albumPalette.primary
+        if AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor)
+            || (floatingLyricTextColor == "album" && nowPlaying.isPlaying && nowPlaying.artworkImage != nil) {
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
+        }
+        let pc = MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme
+        if pc != .theme && pc != .album {
+            return AppColorTheme.readableOnDark(
+                AppColorTheme.accent(for: musicHUDProgressColor, isModern: true)
+            )
         }
         return Color(red: 0.18, green: 0.83, blue: 0.75) // Native Dynamic Island Cyan (#2DD4BF)
     }
@@ -1426,9 +1448,21 @@ struct SubNotchFloatingLyricCapsuleView: View {
 
     private var activeTextColor: Color {
         if (syncThemeWithAlbumArt || floatingLyricTextColor == "album" || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
-            return nowPlaying.albumPalette.primary
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
         }
         return FloatingLyricTextColor(rawValue: floatingLyricTextColor)?.color ?? .white
+    }
+
+    private var themeAccentColor: Color {
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
+        )
+    }
+
+    private var themeSecondaryColor: Color {
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.secondaryAccent(for: musicHUDProgressColor)
     }
 
     private var activeFontDesign: Font.Design {
@@ -1682,12 +1716,12 @@ struct SubNotchFloatingLyricCapsuleView: View {
             HStack(spacing: 7) {
                 Text("[")
                     .font(.system(size: CGFloat(floatingLyricFontSize), weight: .black, design: .monospaced))
-                    .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83).opacity(0.9))
+                    .foregroundStyle(themeAccentColor.opacity(0.9))
 
                 InteractiveFloatingLyricIconView(
                     style: activeIconStyle,
                     nowPlaying: nowPlaying,
-                    accentColor: Color(red: 0.0, green: 0.96, blue: 0.83),
+                    accentColor: themeAccentColor,
                     onAction: { nowPlaying.togglePlayPause() }
                 )
 
@@ -1718,7 +1752,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
 
                 Text("]")
                     .font(.system(size: CGFloat(floatingLyricFontSize), weight: .black, design: .monospaced))
-                    .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83).opacity(0.9))
+                    .foregroundStyle(themeAccentColor.opacity(0.9))
             }
             .padding(.horizontal, 10)
             .padding(.vertical, 4.5)
@@ -1753,7 +1787,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
                 InteractiveFloatingLyricIconView(
                     style: activeIconStyle,
                     nowPlaying: nowPlaying,
-                    accentColor: (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).color,
+                    accentColor: themeAccentColor,
                     onAction: { nowPlaying.togglePlayPause() }
                 )
 
@@ -1792,7 +1826,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
                 InteractiveFloatingLyricIconView(
                     style: activeIconStyle,
                     nowPlaying: nowPlaying,
-                    accentColor: Color(red: 0.0, green: 0.96, blue: 0.83),
+                    accentColor: themeAccentColor,
                     onAction: { nowPlaying.togglePlayPause() }
                 )
 
@@ -1801,7 +1835,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
                         .font(.system(size: CGFloat(floatingLyricFontSize), weight: .bold, design: activeFontDesign))
                         .foregroundStyle(Color.white)
                         .shadow(color: Color.black.opacity(0.85), radius: 2.5, y: 1.2)
-                        .shadow(color: Color(red: 0.0, green: 0.96, blue: 0.83).opacity(0.4), radius: 5)
+                        .shadow(color: themeAccentColor.opacity(0.4), radius: 5)
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .id("\(activeDisplayText)-\(floatingLyricFontDesign)-\(floatingLyricFontSize)")
@@ -1817,7 +1851,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
                     isPlaying: nowPlaying.isPlaying,
                     barWidth: 1.8,
                     maxHeight: 9.0,
-                    color: Color(red: 0.0, green: 0.96, blue: 0.83)
+                    color: themeAccentColor
                 )
                 .frame(width: 14)
             }
@@ -1956,7 +1990,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
         case .fluidKaraoke:
             // Preset 11: Apple Music Spatial Fluid Wave
             // Liquid chromatic iridescent sweep across words, live silk sine wave spectrum
-            let waveColor = (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).color
+            let waveColor = themeAccentColor
             HStack(spacing: 7) {
                 InteractiveFloatingLyricIconView(
                     style: activeIconStyle,
@@ -2022,8 +2056,8 @@ struct SubNotchFloatingLyricCapsuleView: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color(red: 0.0, green: 0.96, blue: 0.83).opacity(isHovered ? 0.95 : 0.50),
-                                    Color(red: 1.0, green: 0.16, blue: 0.53).opacity(isHovered ? 0.90 : 0.35)
+                                    themeAccentColor.opacity(isHovered ? 0.95 : 0.50),
+                                    themeSecondaryColor.opacity(isHovered ? 0.90 : 0.35)
                                 ],
                                 startPoint: .leading,
                                 endPoint: .trailing
@@ -2032,7 +2066,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
                         )
                 )
                 .shadow(color: Color.black.opacity(0.92), radius: 8, x: 0, y: 4)
-                .shadow(color: Color(red: 0.0, green: 0.96, blue: 0.83).opacity(isHovered ? 0.35 : 0.12), radius: 6, x: 0, y: 1)
+                .shadow(color: themeAccentColor.opacity(isHovered ? 0.35 : 0.12), radius: 6, x: 0, y: 1)
 
         case .frostedGlass:
             // Apple-style translucent pill with hairline light border
@@ -2061,12 +2095,12 @@ struct SubNotchFloatingLyricCapsuleView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 4)
                         .stroke(
-                            Color(red: 0.0, green: 0.96, blue: 0.83).opacity(isHovered ? 0.85 : 0.45),
+                            themeAccentColor.opacity(isHovered ? 0.85 : 0.45),
                             lineWidth: 0.75
                         )
                 )
                 .shadow(color: Color.black.opacity(0.9), radius: 6, x: 0, y: 3)
-                .shadow(color: Color(red: 0.0, green: 0.96, blue: 0.83).opacity(isHovered ? 0.30 : 0.10), radius: 4, x: 0, y: 0)
+                .shadow(color: themeAccentColor.opacity(isHovered ? 0.30 : 0.10), radius: 4, x: 0, y: 0)
 
         case .seamlessGlass:
             // Borderless translucent frosted blur pill (no stroke, pure subtle opacity)
@@ -2081,7 +2115,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
                 .overlay(
                     Rectangle()
                         .stroke(
-                            (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).color.opacity(isHovered ? 0.95 : 0.60),
+                            themeAccentColor.opacity(isHovered ? 0.95 : 0.60),
                             lineWidth: 1.0
                         )
                 )
@@ -2099,9 +2133,9 @@ struct SubNotchFloatingLyricCapsuleView: View {
                             .fill(
                                 LinearGradient(
                                     colors: [
-                                        Color(red: 0.0, green: 0.96, blue: 0.83).opacity(0.20),
-                                        Color(red: 1.0, green: 0.16, blue: 0.53).opacity(0.18),
-                                        Color(red: 0.58, green: 0.20, blue: 1.0).opacity(0.22)
+                                        themeAccentColor.opacity(0.20),
+                                        themeSecondaryColor.opacity(0.18),
+                                        themeAccentColor.opacity(0.14)
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
@@ -2116,7 +2150,7 @@ struct SubNotchFloatingLyricCapsuleView: View {
                                 LinearGradient(
                                     colors: [
                                         Color.white.opacity(isHovered ? 0.50 : 0.30),
-                                        Color(red: 0.0, green: 0.96, blue: 0.83).opacity(isHovered ? 0.40 : 0.15)
+                                        themeAccentColor.opacity(isHovered ? 0.40 : 0.15)
                                     ],
                                     startPoint: .top,
                                     endPoint: .bottom
@@ -2192,8 +2226,8 @@ struct SubNotchFloatingLyricCapsuleView: View {
                             LinearGradient(
                                 colors: [
                                     Color.white.opacity(isHovered ? 0.55 : 0.32),
-                                    Color(red: 0.0, green: 0.96, blue: 0.83).opacity(isHovered ? 0.45 : 0.20),
-                                    Color(red: 1.0, green: 0.16, blue: 0.53).opacity(isHovered ? 0.35 : 0.15)
+                                    themeAccentColor.opacity(isHovered ? 0.45 : 0.20),
+                                    themeSecondaryColor.opacity(isHovered ? 0.35 : 0.15)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -2454,11 +2488,11 @@ struct CyberMusicHUDView: View {
 extension MusicProgressColor {
     @MainActor
     var color: Color {
+        if AppColorTheme.isAlbumSyncActive(for: rawValue) {
+            return NowPlayingManager.shared.albumPalette.primary
+        }
         switch self {
         case .album:
-            if NowPlayingManager.shared.isPlaying && NowPlayingManager.shared.artworkImage != nil {
-                return NowPlayingManager.shared.albumPalette.primary
-            }
             return Color(red: 0.0, green: 0.96, blue: 0.83)
         case .theme: return Color(red: 1.0, green: 0.65, blue: 0.45)
         case .white: return .white
@@ -2471,14 +2505,14 @@ extension MusicProgressColor {
 
     @MainActor
     var gradient: LinearGradient {
+        if AppColorTheme.isAlbumSyncActive(for: rawValue) {
+            return LinearGradient(
+                colors: [NowPlayingManager.shared.albumPalette.primary, NowPlayingManager.shared.albumPalette.secondary],
+                startPoint: .leading, endPoint: .trailing
+            )
+        }
         switch self {
         case .album:
-            if NowPlayingManager.shared.isPlaying && NowPlayingManager.shared.artworkImage != nil {
-                return LinearGradient(
-                    colors: [NowPlayingManager.shared.albumPalette.primary, NowPlayingManager.shared.albumPalette.secondary],
-                    startPoint: .leading, endPoint: .trailing
-                )
-            }
             return LinearGradient(
                 colors: [Color(red: 0.0, green: 0.96, blue: 0.83), Color(red: 0.0, green: 0.75, blue: 0.95)],
                 startPoint: .leading, endPoint: .trailing
@@ -2516,10 +2550,12 @@ struct ModernCleanMusicHUDContentView: View {
     @ObservedObject var nowPlaying: NowPlayingManager
     var appState: AppState
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
+    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
     @State private var dragPosition: Double?
 
     private var activeProgressGradient: LinearGradient {
-        (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).gradient
+        _ = syncThemeWithAlbumArt
+        return (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).gradient
     }
 
     private func formatTime(_ seconds: Double) -> String {
@@ -2702,7 +2738,10 @@ struct ModernCleanMusicHUDContentView: View {
                             isPlaying: nowPlaying.isPlaying,
                             barWidth: 2.2,
                             maxHeight: 12.0,
-                            color: (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).color
+                            color: {
+                                _ = syncThemeWithAlbumArt
+                                return (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).color
+                            }()
                         )
                     }
                     .frame(height: 26)

@@ -118,4 +118,48 @@ final class NotificationBannerTests: XCTestCase {
             XCTAssertGreaterThan(prayerHost.fittingSize.width, 0)
         }
     }
+
+    func testChargingBannerKeepsSemanticColorsWhenAutoAlbumThemeActive() {
+        let defaults = UserDefaults.standard
+        let prevSync = defaults.object(forKey: SettingsKey.syncThemeWithAlbumArt)
+        let prevColor = defaults.object(forKey: SettingsKey.musicHUDProgressColor)
+        let nowPlaying = NowPlayingManager.shared
+        let prevPlaying = nowPlaying.isPlaying
+        let prevArtwork = nowPlaying.artworkImage
+        let prevPalette = nowPlaying.albumPalette
+        defer {
+            if let prevSync { defaults.set(prevSync, forKey: SettingsKey.syncThemeWithAlbumArt) } else { defaults.removeObject(forKey: SettingsKey.syncThemeWithAlbumArt) }
+            if let prevColor { defaults.set(prevColor, forKey: SettingsKey.musicHUDProgressColor) } else { defaults.removeObject(forKey: SettingsKey.musicHUDProgressColor) }
+            nowPlaying.isPlaying = prevPlaying
+            nowPlaying.artworkImage = prevArtwork
+            nowPlaying.albumPalette = prevPalette
+        }
+
+        defaults.set(true, forKey: SettingsKey.syncThemeWithAlbumArt)
+        defaults.set(MusicProgressColor.album.rawValue, forKey: SettingsKey.musicHUDProgressColor)
+        nowPlaying.isPlaying = true
+        nowPlaying.artworkImage = NSImage(size: NSSize(width: 10, height: 10))
+        let pinkAlbum = AlbumArtPalette(
+            primary: Color(red: 1.0, green: 0.10, blue: 0.50),
+            secondary: Color(red: 0.50, green: 0.20, blue: 0.90),
+            spectrum: RetroSpectrumPalette(base: .pink, mid: .purple, peak: .white)
+        )
+        nowPlaying.albumPalette = pinkAlbum
+
+        // MusicProgressColor honors syncThemeWithAlbumArt / album
+        XCTAssertEqual(MusicProgressColor.cyan.color, pinkAlbum.primary)
+        XCTAssertEqual(MusicProgressColor.album.color, pinkAlbum.primary)
+
+        // Battery/charging states stay strictly semantic (green / amber / red), never album-colored
+        let charging = PowerBannerState.charging(kind: .magSafe, watts: 140, timeToFullMinutes: 20)
+        let full = PowerBannerState.fullyCharged(kind: .magSafe)
+        let onHold = PowerBannerState.onHold(kind: .magSafe)
+        let low = PowerBannerState.lowBattery(percent: 15)
+
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: charging), charging.accentColor)
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: full), full.accentColor)
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: onHold), onHold.accentColor)
+        XCTAssertEqual(MagSafeChargingBanner.semanticColor(for: low), low.accentColor)
+        XCTAssertNotEqual(MagSafeChargingBanner.semanticColor(for: charging), pinkAlbum.primary)
+    }
 }
