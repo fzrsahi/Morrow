@@ -17,6 +17,7 @@ regex = "1"
 # from source so the port does not depend on whatever libsqlite3 the host
 # happens to ship — and `cargo xwin` builds it for the MSVC target, which the
 # Windows lane checks (#105).
+md-5 = "0.10"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"

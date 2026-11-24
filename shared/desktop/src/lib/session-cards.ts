@@ -101,6 +101,10 @@ export function timeLabel(updatedAtMs: number, nowMs: number): string {
  * status, tool, prompt, tier — still comes from the hook fields alone.
  */
 export function liveReply(session: Session): string {
+  // The shell already folded it (#238 AC 4): a row cannot show a table or a
+  // fence, only their syntax, so `## ` and `| --- |` never reach the card.
+  const preview = session.reply_preview?.trim() ?? '';
+  if (preview) return preview;
   const live = session.live_reply?.trim() ?? '';
   return live || session.last_assistant_message;
 }

@@ -17,6 +17,7 @@ use morrow_core::agent_process::ProcessInfo;
 use morrow_core::discovery::scan::{self, ProcessReader, ScanResult, StoreReader};
 use morrow_core::discovery::{DiscoveryHit, read_transcript_tail, transcript_files};
 use morrow_core::reduce::ChatMessage;
+use morrow_core::scan_policy::TextCache;
 
 /// How much of a transcript the backfill reads. The same slice the live tailer
 /// reads on attach, so backfill costs one read of bytes that are already going to
@@ -32,7 +33,16 @@ pub struct ClaudeTranscripts {
     /// Claude Code's config directory, resolved by the installer's own ladder
     /// (#258) so discovery reads the folder the hooks were written into.
     pub config_dir: String,
+    pub now_ms: u64,
 }
+
+/// How old a transcript may be and still count as a session (#284).
+///
+/// A live session writes as it works, so a file left alone for a day belongs to a
+/// session that ended. The gate exists before the read rather than after, because a
+/// year of Claude Code is thousands of transcripts and reading them all took 1.5
+/// seconds — four times a second was never the problem, one scan was.
+pub const CLAUDE_FRESHNESS_MS: u64 = 24 * 60 * 60 * 1000;
 
 impl ClaudeTranscripts {
     fn config_dir(&self) -> &Path {
@@ -51,7 +61,7 @@ impl StoreReader for ClaudeTranscripts {
         claude_roots(self.config_dir())
     }
 
-    fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, root: &str, cache: &TextCache) -> Vec<DiscoveryHit> {
         let projects = Path::new(root).join("projects");
         let Ok(entries) = std::fs::read_dir(&projects) else {
             return Vec::new();
@@ -65,7 +75,14 @@ impl StoreReader for ClaudeTranscripts {
                 continue;
             };
             for file in files {
-                let Some(tail) = read_tail(Path::new(&file.path)) else {
+                // The freshness gate comes **before** the read, not after: a
+                // transcript nobody has written to in a day is history, and reading
+                // every one of them is what made a scan over a year of use take
+                // 1.5 seconds (#284).
+                if self.now_ms.saturating_sub(file.modified_ms) > CLAUDE_FRESHNESS_MS {
+                    continue;
+                }
+                let Some(tail) = read_tail(Path::new(&file.path), cache) else {
                     continue;
                 };
                 let Some(summary) = read_transcript_tail(&tail, &file.name) else {
@@ -90,23 +107,8 @@ impl StoreReader for ClaudeTranscripts {
 
 /// The last `TAIL_BYTES` of a file as text. A partial UTF-8 sequence at the cut
 /// is dropped rather than failing the whole read.
-fn read_tail(path: &Path) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut file = std::fs::File::open(path).ok()?;
-    let size = file.metadata().ok()?.len();
-    let start = size.saturating_sub(TAIL_BYTES);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
-    if start > 0 {
-        // Skip to the first newline: the row at the cut is half a line, and the
-        // reader tolerates it, but dropping it keeps a cut multi-byte char from
-        // making the whole tail lossy.
-        if let Some(index) = bytes.iter().position(|byte| *byte == b'\n') {
-            bytes.drain(..=index);
-        }
-    }
-    Some(String::from_utf8_lossy(&bytes).into_owned())
+fn read_tail(path: &Path, cache: &TextCache) -> Option<std::sync::Arc<str>> {
+    cache.text(path, Some(TAIL_BYTES), true)
 }
 
 /// OpenCode's (and MiMo Code's) session database (#270).
@@ -151,7 +153,7 @@ impl StoreReader for OpenCodeStore {
         vec![self.data_dir.clone()]
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         let mut hits = Vec::new();
         for database in self.databases() {
             let Ok(connection) = morrow_core::sqlite::open_read_only(&database) else {
@@ -188,60 +190,48 @@ impl StoreReader for OpenCodeStore {
 /// Swift reader uses. A `sessions/` tree grows forever, and a backfill that walked
 /// all of it would read years of rollouts on every attach; the panel shows current
 /// work, and anything older arrives through a hook or not at all.
-///
-/// The window is anchored to `now_ms`, not to however many day-directories the
-/// tree happens to hold: seven directories left over from January must not be
-/// read in November.
 pub struct CodexRollouts {
     /// The Codex config root: `$CODEX_HOME`, else `~/.codex`.
     pub root: String,
-    /// The clock for the seven-day window, in milliseconds since the Unix epoch.
-    pub now_ms: u64,
 }
 
 /// How many days back a backfill looks.
 pub const CODEX_DAYS: u64 = 7;
 
-/// The UTC civil date for a count of days since the Unix epoch.
-///
-/// Howard Hinnant's `civil_from_days`. The window is expressed in whole days, so
-/// a date crate would be a dependency for arithmetic this small.
-fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
-}
-
 impl CodexRollouts {
-    /// `<root>/sessions/<yyyy>/<mm>/<dd>` for the seven days ending at `now_ms`,
-    /// oldest first, for the directories that exist.
-    ///
-    /// This mirrors `findRecentCodexSessions` in Swift, which asks for the dates
-    /// `0..<7` days back from `Date()`. Walking the tree and taking its seven
-    /// newest names would instead read a stale tree forever, and never let a day
-    /// outside it expire. Building the paths directly also keeps the walk bounded
-    /// to seven fixed paths — a symlinked loop cannot be entered.
-    fn day_directories_at(&self, now_ms: u64) -> Vec<PathBuf> {
-        let today = (now_ms / 86_400_000) as i64;
-        (0..CODEX_DAYS)
-            .rev()
-            .filter_map(|back| {
-                let (year, month, day) = civil_from_days(today - back as i64);
-                let path = Path::new(&self.root)
-                    .join("sessions")
-                    .join(format!("{year:04}"))
-                    .join(format!("{month:02}"))
-                    .join(format!("{day:02}"));
-                path.is_dir().then_some(path)
-            })
-            .collect()
+    /// `<root>/sessions/<yyyy>/<mm>/<dd>`, newest first, for the days that exist.
+    fn day_directories(&self) -> Vec<PathBuf> {
+        let sessions = Path::new(&self.root).join("sessions");
+        let Ok(years) = std::fs::read_dir(&sessions) else {
+            return Vec::new();
+        };
+        let mut days: Vec<PathBuf> = Vec::new();
+        // Depth is bounded by construction — year, month, day, file — and nothing
+        // recurses, so a symlinked loop cannot be entered.
+        for year in years.flatten() {
+            let Ok(months) = std::fs::read_dir(year.path()) else {
+                continue;
+            };
+            for month in months.flatten() {
+                let Ok(entries) = std::fs::read_dir(month.path()) else {
+                    continue;
+                };
+                for day in entries.flatten() {
+                    if day.path().is_dir() {
+                        days.push(day.path());
+                    }
+                }
+            }
+        }
+        // Newest last, then keep the tail: the directories sort lexicographically
+        // because the names are zero-padded.
+        days.sort();
+        let keep = CODEX_DAYS as usize;
+        if days.len() > keep {
+            days.split_off(days.len() - keep)
+        } else {
+            days
+        }
     }
 }
 
@@ -259,14 +249,14 @@ impl StoreReader for CodexRollouts {
             .collect()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, cache: &TextCache) -> Vec<DiscoveryHit> {
         let mut hits = Vec::new();
-        for day in self.day_directories_at(self.now_ms) {
+        for day in self.day_directories() {
             let Some(files) = transcript_files::list(&day.to_string_lossy()) else {
                 continue;
             };
             for file in files {
-                let Some(tail) = read_tail(Path::new(&file.path)) else {
+                let Some(tail) = read_tail(Path::new(&file.path), cache) else {
                     continue;
                 };
                 let Some(summary) =
@@ -294,17 +284,6 @@ impl StoreReader for CodexRollouts {
 /// Where VS Code keeps extension storage, per OS.
 ///
 /// Cline is an extension inside VS Code, not a CLI, so its store lives under
-/// The Windows half of `vscode_user_dir`, with the variable injected so a
-/// redirected profile is covered by a unit test on macOS and Linux too.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn vscode_user_dir_from_appdata(appdata: Option<&std::ffi::OsStr>, home: &Path) -> PathBuf {
-    match appdata {
-        Some(raw) if !raw.is_empty() => Path::new(raw).join("Code/User"),
-        // The old default still works for a plain local profile.
-        _ => home.join("AppData/Roaming/Code/User"),
-    }
-}
-
 /// VS Code's own per-user directory: `~/Library/Application Support` on macOS,
 /// `~/.config` on Linux, `%APPDATA%` on Windows.
 fn vscode_user_dir(home: &Path) -> PathBuf {
@@ -314,10 +293,8 @@ fn vscode_user_dir(home: &Path) -> PathBuf {
     }
     #[cfg(target_os = "windows")]
     {
-        // Folder redirection and roaming profiles move AppDATA away from the
-        // home directory; VS Code follows the variable, so must we. Kept in a
-        // helper so the rule is testable on every host (#278).
-        vscode_user_dir_from_appdata(std::env::var_os("APPDATA").as_deref(), home)
+        // `home` is the roaming profile; VS Code writes to Roaming, not Local.
+        home.join("AppData/Roaming/Code/User")
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -348,7 +325,7 @@ impl StoreReader for ClineStore {
         vec![self.root.clone()]
     }
 
-    fn read(&self, root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(history) = std::fs::read_to_string(Path::new(root).join("state/taskHistory.json"))
             .ok()
             .and_then(|json| morrow_core::discovery::cline::latest_task(&json))
@@ -432,17 +409,15 @@ impl FlatStore {
     }
 
     /// `(model, messages)` from this agent's flavour of a `.jsonl` transcript.
-    fn recent(&self, path: &Path) -> (Option<String>, Vec<ChatMessage>) {
-        let Some(tail) = read_tail(path) else {
+    fn recent(&self, path: &Path, cache: &TextCache) -> (Option<String>, Vec<ChatMessage>) {
+        let Some(tail) = read_tail(path, cache) else {
             return (None, Vec::new());
         };
         match self.source {
             "codebuddy" => morrow_core::discovery::flat_store::codebuddy_recent(&tail),
             "droid" => {
                 // Factory keeps the model in a sidecar: `x.jsonl` → `x.settings.json`.
-                // Only the file name: a parent directory may itself end in
-                // `.jsonl`, and rewriting that path pointed at nothing (#278).
-                let settings = path.with_extension("settings.json");
+                let settings = path.to_string_lossy().replace(".jsonl", ".settings.json");
                 let model = std::fs::read_to_string(&settings).ok().and_then(|json| {
                     morrow_core::discovery::flat_store::factory_model_from_settings(&json)
                 });
@@ -479,7 +454,7 @@ impl StoreReader for FlatStore {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -489,7 +464,7 @@ impl ProcessReader for FlatStore {
         self.source
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -515,7 +490,7 @@ impl ProcessReader for FlatStore {
         let Some(file) = best else {
             return Vec::new();
         };
-        let (model, recent_messages) = self.recent(Path::new(&file.path));
+        let (model, recent_messages) = self.recent(Path::new(&file.path), cache);
         vec![DiscoveryHit {
             session_id: file.name.trim_end_matches(".jsonl").to_owned(),
             source: self.source,
@@ -528,6 +503,593 @@ impl ProcessReader for FlatStore {
             transcript_path: Some(file.path),
         }]
     }
+}
+
+/// GitHub Copilot CLI (#279), found from a process.
+///
+/// `~/.copilot/session-state/<id>/events.jsonl`. The store directory is named by
+/// the session, not by the cwd — so the cwd has to be read **out of the event
+/// stream**, and the candidate list is walked newest-first until one matches.
+pub struct CopilotSessions {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+/// How many of the newest event streams are tried before giving up. Copilot keeps
+/// one directory per session forever, and a machine with a year of them would
+/// otherwise walk thousands to find one.
+pub const COPILOT_CANDIDATE_LIMIT: usize = 50;
+
+/// Five minutes, as macOS uses.
+pub const COPILOT_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for CopilotSessions {
+    fn source(&self) -> &'static str {
+        "copilot"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl CopilotSessions {
+    fn base(&self) -> PathBuf {
+        Path::new(&self.home).join(".copilot/session-state")
+    }
+
+    /// The newest event stream that names `cwd`, and started no earlier than the
+    /// process did.
+    fn session_for(
+        &self,
+        cwd: &str,
+        started_ms: Option<u64>,
+        cache: &TextCache,
+    ) -> Option<(String, String, u64)> {
+        // One directory per session, each holding its own `events.jsonl` — the
+        // store is named by session, not by cwd.
+        let base = self.base();
+        let mut files: Vec<(String, u64)> = std::fs::read_dir(&base)
+            .ok()?
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path().join("events.jsonl");
+                let modified = transcript_files::mtime_ms(&path.to_string_lossy())?;
+                Some((path.to_string_lossy().into_owned(), modified))
+            })
+            .collect();
+        files.sort_by_key(|file| std::cmp::Reverse(file.1));
+        for (path, modified_ms) in files.into_iter().take(COPILOT_CANDIDATE_LIMIT) {
+            // Ten seconds of slack: a session writes its first event after the
+            // process has already been recorded as started.
+            if let Some(started_ms) = started_ms {
+                if modified_ms.saturating_add(10_000) < started_ms {
+                    continue;
+                }
+            }
+            let Some(head) = read_head(Path::new(&path), 32_768, cache) else {
+                continue;
+            };
+            if !morrow_core::discovery::copilot::matches_cwd(&head, cwd) {
+                continue;
+            }
+            let Some(session_id) = Path::new(&path)
+                .parent()
+                .and_then(|directory| directory.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+            else {
+                continue;
+            };
+            return Some((session_id, path, modified_ms));
+        }
+        None
+    }
+}
+
+impl ProcessReader for CopilotSessions {
+    fn source(&self) -> &'static str {
+        "copilot"
+    }
+
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        let Some((session_id, path, modified_ms)) =
+            self.session_for(cwd, process.start_time_ms, cache)
+        else {
+            return Vec::new();
+        };
+        if self.now_ms.saturating_sub(modified_ms) > COPILOT_FRESHNESS_MS {
+            return Vec::new();
+        }
+        let (model, recent_messages) = read_tail(Path::new(&path), cache)
+            .map(|tail| morrow_core::discovery::copilot::recent_messages(&tail))
+            .unwrap_or_default();
+        vec![DiscoveryHit {
+            session_id,
+            source: "copilot",
+            cwd: cwd.to_owned(),
+            tty: None,
+            model,
+            pid: Some(process.pid),
+            modified_at: Some(modified_ms),
+            recent_messages,
+            transcript_path: Some(path),
+        }]
+    }
+}
+
+/// Grok CLI (#279), found from a process.
+///
+/// `$GROK_HOME/sessions/<percent-encoded cwd>/<session dir>/`, where the summary
+/// names the cwd, the model and the last activity. Grok's
+/// `session_search.sqlite` is **not** read: it indexes sessions whose transcript
+/// is gone or absent, and a card with no transcript is a card that cannot be
+/// shown — every row it adds would be empty.
+pub struct GrokSessions {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+/// Five minutes, as macOS uses.
+pub const GROK_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for GrokSessions {
+    fn source(&self) -> &'static str {
+        "grok"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl GrokSessions {
+    /// `GROK_HOME` first: a second account keeps its own store, and reading only
+    /// `~/.grok` would show the wrong account's sessions.
+    fn homes(&self) -> Vec<PathBuf> {
+        match std::env::var("GROK_HOME") {
+            Ok(root) if !root.trim().is_empty() => vec![PathBuf::from(root.trim())],
+            _ => vec![Path::new(&self.home).join(".grok")],
+        }
+    }
+}
+
+impl ProcessReader for GrokSessions {
+    fn source(&self) -> &'static str {
+        "grok"
+    }
+
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        let encoded = morrow_core::discovery::grok::encoded_cwd(cwd);
+        let mut best: Option<(String, String, String, u64, Option<String>)> = None;
+        for home in self.homes() {
+            let cwd_directory = home.join("sessions").join(&encoded);
+            let Ok(entries) = std::fs::read_dir(&cwd_directory) else {
+                continue;
+            };
+            for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
+                let directory = entry.path();
+                let Ok(summary_json) = std::fs::read_to_string(directory.join("summary.json"))
+                else {
+                    continue;
+                };
+                let Some(summary) = morrow_core::discovery::grok::summary_metadata(&summary_json)
+                else {
+                    continue;
+                };
+                // The directory is keyed by cwd, but the summary says so itself:
+                // trusting the key alone would take a session whose cwd moved.
+                if summary.cwd.as_deref() != Some(cwd) {
+                    continue;
+                }
+                let session_id = summary
+                    .session_id
+                    .clone()
+                    .or_else(|| {
+                        entry
+                            .file_name()
+                            .to_str()
+                            .filter(|name| !name.is_empty())
+                            .map(str::to_owned)
+                    })
+                    .unwrap_or_default();
+                if session_id.is_empty() {
+                    continue;
+                }
+                let Some(activity_ms) = summary.activity_at_ms else {
+                    continue;
+                };
+                if let Some(started_ms) = process.start_time_ms {
+                    if activity_ms < started_ms.saturating_sub(10_000) {
+                        continue;
+                    }
+                }
+                let chat = directory.join("chat_history.jsonl");
+                let chat_path = chat.is_file().then(|| chat.to_string_lossy().into_owned());
+                match &best {
+                    Some((_, _, _, best_ms, _)) if *best_ms >= activity_ms => {}
+                    _ => {
+                        best = Some((
+                            session_id,
+                            cwd.to_owned(),
+                            chat_path.clone().unwrap_or_default(),
+                            activity_ms,
+                            summary.model,
+                        ))
+                    }
+                }
+            }
+        }
+        let Some((session_id, _, chat_path, activity_ms, model)) = best else {
+            return Vec::new();
+        };
+        if self.now_ms.saturating_sub(activity_ms) > GROK_FRESHNESS_MS {
+            return Vec::new();
+        }
+        // An index-only session has no transcript once chat_history is missing;
+        // there is nothing to tail and nothing to show.
+        let Some(chat_path) = Some(chat_path).filter(|path| !path.is_empty()) else {
+            return Vec::new();
+        };
+        let recent_messages = read_tail(Path::new(&chat_path), cache)
+            .and_then(|tail| {
+                let name = Path::new(&chat_path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                morrow_core::discovery::read_transcript_tail(&tail, &name)
+            })
+            .map(|summary| summary.recent_messages)
+            .unwrap_or_default();
+        vec![DiscoveryHit {
+            session_id,
+            source: "grok",
+            cwd: cwd.to_owned(),
+            tty: None,
+            model,
+            pid: Some(process.pid),
+            modified_at: Some(activity_ms),
+            recent_messages,
+            transcript_path: Some(chat_path),
+        }]
+    }
+}
+
+/// Kimi (#282), found from a process.
+///
+/// Two layouts, and the modern one is preferred because it is a **map**: kimi-code
+/// writes `~/.kimi-code/session_index.jsonl` with `{sessionId, sessionDir, workDir}`,
+/// so the session is looked up by cwd. Legacy kimi-cli instead names the directory
+/// `md5(cwd)`, which is the only reason this port carries a hash at all.
+pub struct KimiSessions {
+    pub home: String,
+    pub now_ms: u64,
+}
+
+/// Five minutes, as macOS uses.
+pub const KIMI_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for KimiSessions {
+    fn source(&self) -> &'static str {
+        "kimi"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl KimiSessions {
+    /// The indexed session for `cwd`, newest activity first.
+    fn indexed_session(&self, cwd: &str, cache: &TextCache) -> Option<DiscoveryHit> {
+        let index =
+            std::fs::read_to_string(Path::new(&self.home).join(".kimi-code/session_index.jsonl"))
+                .ok()?;
+        let mut best: Option<(u64, String, String)> = None;
+        for entry in morrow_core::discovery::kimi::index_entries(&index) {
+            if entry.work_dir != cwd {
+                continue;
+            }
+            // `state.json` moves whenever the session does; the directory's own
+            // mtime does not.
+            let state = Path::new(&entry.session_dir).join("state.json");
+            let stamp = transcript_files::mtime_ms(&state.to_string_lossy())
+                .or_else(|| transcript_files::mtime_ms(&entry.session_dir))?;
+            if best.as_ref().is_none_or(|(best, _, _)| stamp > *best) {
+                best = Some((stamp, entry.session_id, entry.session_dir));
+            }
+        }
+        let (modified_ms, session_id, session_dir) = best?;
+        let wire = Path::new(&session_dir).join("agents/main/wire.jsonl");
+        let recent_messages = read_tail(&wire, cache)
+            .map(|tail| morrow_core::discovery::kimi::recent_messages(&tail))
+            .unwrap_or_default();
+        Some(DiscoveryHit {
+            session_id,
+            source: "kimi",
+            cwd: cwd.to_owned(),
+            tty: None,
+            // kimi-code's index records no model.
+            model: None,
+            pid: None,
+            modified_at: Some(modified_ms),
+            recent_messages,
+            transcript_path: wire.is_file().then(|| wire.to_string_lossy().into_owned()),
+        })
+    }
+
+    /// Legacy kimi-cli: `~/.kimi-code/sessions/<md5(cwd)>/<id>/wire.jsonl`.
+    fn hashed_session(&self, cwd: &str, cache: &TextCache) -> Option<DiscoveryHit> {
+        let hash = morrow_core::discovery::kimi::workdir_hash(cwd);
+        let mut best: Option<(u64, String, String)> = None;
+        for base in [".kimi-code/sessions", ".kimi/sessions"] {
+            let workdir = Path::new(&self.home).join(base).join(&hash);
+            let Ok(entries) = std::fs::read_dir(&workdir) else {
+                continue;
+            };
+            for entry in entries.flatten().filter(|entry| entry.path().is_dir()) {
+                let wire = entry.path().join("wire.jsonl");
+                let Some(stamp) = transcript_files::mtime_ms(&wire.to_string_lossy()) else {
+                    continue;
+                };
+                let Some(session_id) = entry.file_name().to_str().map(str::to_owned) else {
+                    continue;
+                };
+                if best.as_ref().is_none_or(|(best, _, _)| stamp > *best) {
+                    best = Some((stamp, session_id, wire.to_string_lossy().into_owned()));
+                }
+            }
+        }
+        let (modified_ms, session_id, wire) = best?;
+        let recent_messages = read_tail(Path::new(&wire), cache)
+            .map(|tail| morrow_core::discovery::kimi::recent_messages(&tail))
+            .unwrap_or_default();
+        Some(DiscoveryHit {
+            session_id,
+            source: "kimi",
+            cwd: cwd.to_owned(),
+            tty: None,
+            model: None,
+            pid: None,
+            modified_at: Some(modified_ms),
+            recent_messages,
+            transcript_path: Some(wire),
+        })
+    }
+}
+
+impl ProcessReader for KimiSessions {
+    fn source(&self) -> &'static str {
+        "kimi"
+    }
+
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        // The index first; the hashed layout only when it has nothing.
+        let hit = self
+            .indexed_session(cwd, cache)
+            .or_else(|| self.hashed_session(cwd, cache));
+        let Some(mut hit) = hit else {
+            return Vec::new();
+        };
+        let Some(modified_ms) = hit.modified_at else {
+            return Vec::new();
+        };
+        if self.now_ms.saturating_sub(modified_ms) > KIMI_FRESHNESS_MS {
+            return Vec::new();
+        }
+        hit.pid = Some(process.pid);
+        vec![hit]
+    }
+}
+
+/// Kiro CLI (#282), found from a process.
+///
+/// Three layouts under `~/.kiro/sessions`: the V3 workspace directories, and the V2
+/// `cli/<id>.json`. `session-leases` is **not** read: a lease names a pid and its
+/// parent, and following it needs a liveness syscall this port does not have — the
+/// kiro process rule already covers `kiro-cli`, so a lease would only add sessions
+/// whose process this port cannot see anyway.
+pub struct KiroSessions {
+    pub home: String,
+}
+
+/// Five minutes, as macOS uses.
+pub const KIRO_FRESHNESS_MS: u64 = 300_000;
+
+impl StoreReader for KiroSessions {
+    fn source(&self) -> &'static str {
+        "kiro"
+    }
+
+    fn roots(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
+        Vec::new()
+    }
+}
+
+impl KiroSessions {
+    fn root(&self) -> PathBuf {
+        Path::new(&self.home).join(".kiro")
+    }
+}
+
+impl ProcessReader for KiroSessions {
+    fn source(&self) -> &'static str {
+        "kiro"
+    }
+
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
+        let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            return Vec::new();
+        };
+        if is_subagent_worktree(cwd) {
+            return Vec::new();
+        }
+        let sessions = self.root().join("sessions");
+        let mut best: Option<DiscoveryHit> = None;
+
+        // V3: sessions/<workspace>/<id>/session.json
+        if let Ok(workspaces) = std::fs::read_dir(&sessions) {
+            for workspace in workspaces.flatten().filter(|entry| entry.path().is_dir()) {
+                // `cli` is the V2 directory, not a workspace.
+                if workspace.file_name().to_str() == Some("cli") {
+                    continue;
+                }
+                let Ok(children) = std::fs::read_dir(workspace.path()) else {
+                    continue;
+                };
+                for child in children.flatten().filter(|entry| entry.path().is_dir()) {
+                    let session_json = child.path().join("session.json");
+                    let Ok(json) = std::fs::read_to_string(&session_json) else {
+                        continue;
+                    };
+                    let Some(metadata) = morrow_core::discovery::kiro::session_metadata(&json)
+                    else {
+                        continue;
+                    };
+                    if metadata.cwd.as_deref() != Some(cwd) {
+                        continue;
+                    }
+                    let modified_ms = metadata
+                        .activity_at_ms
+                        .or_else(|| transcript_files::mtime_ms(&session_json.to_string_lossy()));
+                    let Some(modified_ms) = modified_ms else {
+                        continue;
+                    };
+                    if let Some(started_ms) = process.start_time_ms {
+                        // A session that last moved long before the process began is
+                        // another session in the same workspace.
+                        if modified_ms.saturating_add(KIRO_FRESHNESS_MS) < started_ms {
+                            continue;
+                        }
+                    }
+                    let messages = child.path().join("messages.jsonl");
+                    let (model, recent_messages) = read_kiro_messages(&messages, cache);
+                    let session_id = metadata
+                        .session_id
+                        .or_else(|| child.file_name().to_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    if session_id.is_empty() {
+                        continue;
+                    }
+                    let hit = DiscoveryHit {
+                        session_id,
+                        source: "kiro",
+                        cwd: cwd.to_owned(),
+                        tty: None,
+                        model: metadata.model.or(model),
+                        pid: Some(process.pid),
+                        modified_at: Some(modified_ms),
+                        recent_messages,
+                        transcript_path: messages
+                            .is_file()
+                            .then(|| messages.to_string_lossy().into_owned()),
+                    };
+                    if best
+                        .as_ref()
+                        .is_none_or(|best| best.modified_at.unwrap_or(0) < modified_ms)
+                    {
+                        best = Some(hit);
+                    }
+                }
+            }
+        }
+        if best.is_some() {
+            return best.into_iter().collect();
+        }
+
+        // V2: sessions/cli/<id>.json, with the transcript beside it.
+        if let Ok(entries) = std::fs::read_dir(sessions.join("cli")) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(json) = std::fs::read_to_string(&path) else {
+                    continue;
+                };
+                let Ok(value) = serde_json::from_str::<serde_json::Value>(&json) else {
+                    continue;
+                };
+                if value.get("cwd").and_then(|cwd| cwd.as_str()) != Some(cwd) {
+                    continue;
+                }
+                let messages = path.with_extension("jsonl");
+                let (model, recent_messages) = read_kiro_messages(&messages, cache);
+                let Some(session_id) = path
+                    .file_stem()
+                    .map(|stem| stem.to_string_lossy().into_owned())
+                else {
+                    continue;
+                };
+                let modified_ms = value
+                    .get("updated_at")
+                    .and_then(|stamp| stamp.as_str())
+                    .and_then(morrow_core::discovery::time::parse_iso8601_ms)
+                    .or_else(|| transcript_files::mtime_ms(&path.to_string_lossy()))
+                    .unwrap_or(0);
+                return vec![DiscoveryHit {
+                    session_id,
+                    source: "kiro",
+                    cwd: cwd.to_owned(),
+                    tty: None,
+                    model,
+                    pid: Some(process.pid),
+                    modified_at: Some(modified_ms),
+                    recent_messages,
+                    transcript_path: messages
+                        .is_file()
+                        .then(|| messages.to_string_lossy().into_owned()),
+                }];
+            }
+        }
+        Vec::new()
+    }
+}
+
+/// `(model, messages)` from a Kiro transcript, whichever layout wrote it.
+fn read_kiro_messages(path: &Path, cache: &TextCache) -> (Option<String>, Vec<ChatMessage>) {
+    read_tail(path, cache)
+        .map(|tail| morrow_core::discovery::kiro::recent_messages(&tail))
+        .unwrap_or((None, Vec::new()))
+}
+
+/// The first `limit` bytes of a file, for a store that names the session rather
+/// than the cwd.
+fn read_head(path: &Path, limit: u64, cache: &TextCache) -> Option<std::sync::Arc<str>> {
+    cache.text(path, Some(limit), false)
 }
 
 /// A `.worktrees/` or `-worktree` checkout a subagent was given: it is not a
@@ -565,7 +1127,7 @@ impl StoreReader for CursorTranscripts {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -575,7 +1137,7 @@ impl ProcessReader for CursorTranscripts {
         "cursor"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -592,7 +1154,7 @@ impl ProcessReader for CursorTranscripts {
         ) else {
             return Vec::new();
         };
-        let Some(tail) = read_tail(Path::new(&file.path)) else {
+        let Some(tail) = read_tail(Path::new(&file.path), cache) else {
             return Vec::new();
         };
         let messages = morrow_core::discovery::cursor::recent_messages(&tail);
@@ -636,7 +1198,7 @@ impl StoreReader for GeminiChats {
         Vec::new()
     }
 
-    fn read(&self, _root: &str) -> Vec<DiscoveryHit> {
+    fn read(&self, _root: &str, _cache: &TextCache) -> Vec<DiscoveryHit> {
         Vec::new()
     }
 }
@@ -673,7 +1235,7 @@ impl ProcessReader for GeminiChats {
         "gemini"
     }
 
-    fn read_process(&self, process: &ProcessInfo) -> Vec<DiscoveryHit> {
+    fn read_process(&self, process: &ProcessInfo, cache: &TextCache) -> Vec<DiscoveryHit> {
         let Some(cwd) = process.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
             return Vec::new();
         };
@@ -693,12 +1255,12 @@ impl ProcessReader for GeminiChats {
         ) else {
             return Vec::new();
         };
-        let Some(tail) = read_tail(Path::new(&file.path)) else {
+        let Some(tail) = read_tail(Path::new(&file.path), cache) else {
             return Vec::new();
         };
         // A Gemini session file is one JSON document, not JSONL: the whole file is
         // what the reader wants, and the tail may have cut it in half.
-        let whole = std::fs::read_to_string(&file.path).unwrap_or(tail);
+        let whole = std::fs::read_to_string(&file.path).unwrap_or_else(|_| tail.to_string());
         let session_id = morrow_core::discovery::gemini::session_id(&whole)
             .unwrap_or_else(|| file.name.trim_end_matches(".json").to_owned());
         let messages = morrow_core::discovery::gemini::recent_messages(&whole);
@@ -778,9 +1340,14 @@ pub fn correlate_with(
 ///
 /// `home` is the user's, so each reader derives what it needs: Codex's root is
 /// `$CODEX_HOME` or `~/.codex`, OpenCode's database is under `~/.local/share`.
-pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
+pub fn scan_once(
+    config_dir: &Path,
+    home: &Path,
+    cache: &morrow_core::scan_policy::TextCache,
+) -> ScanResult {
     let transcripts = ClaudeTranscripts {
         config_dir: config_dir.to_string_lossy().into_owned(),
+        now_ms: now_ms(),
     };
     let opencode = OpenCodeStore {
         data_dir: home.join(".local/share").to_string_lossy().into_owned(),
@@ -790,7 +1357,6 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
             .ok()
             .filter(|root| !root.trim().is_empty())
             .unwrap_or_else(|| home.join(".codex").to_string_lossy().into_owned()),
-        now_ms: now_ms(),
     };
     // Cline is the one reader of this batch with no process: it runs inside VS
     // Code, so it is discovered from its own task history (#278).
@@ -804,13 +1370,11 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
     // Order is precedence: Claude first, then Codex, then OpenCode, then Cline. A
     // session id two readers both report keeps the earlier one's source.
     let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode, &cline];
-    // Order is precedence: Claude first, then Codex, then OpenCode. A session id
-    // two readers both report keeps the earlier one's source.
-    let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode];
     scan_with(
         &readers,
         home,
         &morrow_platform::agent_process::table(),
+        cache,
         now_ms(),
     )
 }
@@ -821,6 +1385,7 @@ pub fn scan_with(
     readers: &[&dyn StoreReader],
     home: &Path,
     table: &[ProcessInfo],
+    cache: &TextCache,
     now_ms: u64,
 ) -> ScanResult {
     // Process-first readers: their store directory is derived from a process's
@@ -850,13 +1415,29 @@ pub fn scan_with(
         source: "droid",
         now_ms,
     };
-    let process_readers: Vec<&dyn ProcessReader> =
-        vec![&cursor, &gemini, &qoder, &codebuddy, &droid];
-    let process_readers: Vec<&dyn ProcessReader> = vec![&cursor, &gemini];
+    let copilot = CopilotSessions {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let grok = GrokSessions {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let kimi = KimiSessions {
+        home: home.to_string_lossy().into_owned(),
+        now_ms,
+    };
+    let kiro = KiroSessions {
+        home: home.to_string_lossy().into_owned(),
+    };
+    let process_readers: Vec<&dyn ProcessReader> = vec![
+        &cursor, &gemini, &qoder, &codebuddy, &droid, &copilot, &grok, &kimi, &kiro,
+    ];
     scan::run_all(
         readers,
         &process_readers,
         table,
+        cache,
         scan::DEFAULT_BUDGET_MS,
         || now_ms,
     )
@@ -980,7 +1561,11 @@ mod tests {
             &transcript("/home/dev/project", "model-x"),
         );
 
-        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
+        let result = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1001,9 +1586,13 @@ mod tests {
     fn a_store_that_is_not_there_is_no_sessions() {
         let scratch = Scratch::new("missing");
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0)
-                .hits
-                .is_empty()
+            scan_once(
+                &scratch.0.join(".claude"),
+                &scratch.0,
+                &TextCache::default()
+            )
+            .hits
+            .is_empty()
         );
     }
 
@@ -1134,7 +1723,11 @@ mod tests {
                 .expect("a schema");
         }
 
-        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
+        let result = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1173,7 +1766,12 @@ mod tests {
                 .expect("a schema");
         }
 
-        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let mut hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         hits.sort_by(|a, b| a.session_id.cmp(&b.session_id));
 
         let ids: Vec<&str> = hits.iter().map(|hit| hit.session_id.as_str()).collect();
@@ -1188,9 +1786,13 @@ mod tests {
     fn a_missing_or_unreadable_database_is_not_an_error() {
         let scratch = Scratch::new("opencode-missing");
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0.join("nowhere"))
-                .hits
-                .is_empty()
+            scan_once(
+                &scratch.0.join(".claude"),
+                &scratch.0.join("nowhere"),
+                &TextCache::default()
+            )
+            .hits
+            .is_empty()
         );
 
         // A file where the database should be, holding junk.
@@ -1203,7 +1805,12 @@ mod tests {
             &transcript("/home/dev/p", "model-x"),
         );
 
-        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         assert_eq!(hits.len(), 1, "the transcripts still arrive");
         assert_eq!(hits[0].source, "claude");
     }
@@ -1221,7 +1828,11 @@ mod tests {
             &codex_rollout("thread-9", "/home/dev/project", "gpt-5-codex"),
         );
 
-        let result = scan_once(&scratch.0.join(".claude"), &scratch.0);
+        let result = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1232,76 +1843,39 @@ mod tests {
         assert_eq!(hit.recent_messages.len(), 2);
     }
 
-    /// 2026-11-22T12:00:00Z, pinned so the window tests do not depend on the
-    /// clock the CI runner happens to have.
-    const PINNED_NOW_MS: u64 = 1_795_348_800_000;
-
-    /// A rollout in the Codex day-directory `days_ago` before `now_ms`.
-    fn seed_rollout(root: &Path, now_ms: u64, days_ago: u64, id: &str) {
-        let (year, month, day) = civil_from_days((now_ms / 86_400_000) as i64 - days_ago as i64);
-        let directory = root
-            .join("sessions")
-            .join(format!("{year:04}"))
-            .join(format!("{month:02}"))
-            .join(format!("{day:02}"));
-        fs::create_dir_all(&directory).expect("a rollout directory");
-        write(
-            &directory.join(format!("rollout-{id}.jsonl")),
-            &codex_rollout(id, "/w", "model-x"),
-        );
-    }
-
-    fn codex_ids(root: &Path) -> Vec<String> {
-        let reader = CodexRollouts {
-            root: root.to_string_lossy().into_owned(),
-            now_ms: PINNED_NOW_MS,
-        };
-        let mut ids: Vec<String> = StoreReader::read(&reader, &reader.root)
-            .into_iter()
-            .map(|hit| hit.session_id)
-            .collect();
-        ids.sort();
-        ids
-    }
-
     /// The store grows forever; a backfill that read all of it would walk years of
-    /// rollouts on every attach. Only the seven days ending today count — not the
-    /// seven newest directory names a stale tree happens to hold.
+    /// rollouts on every attach. Only the newest seven day-directories count.
     #[test]
-    fn only_the_last_seven_rollout_days_are_read() {
+    fn only_the_newest_seven_rollout_days_are_read() {
         let scratch = Scratch::new("codex-days");
-        let root = scratch.0.join(".codex");
-        // Ten consecutive days ending today, plus a tree left over from a month ago.
-        for back in 0..10 {
-            seed_rollout(&root, PINNED_NOW_MS, back, &format!("s{back}"));
+        let sessions = scratch.0.join(".codex/sessions");
+        // Ten days, oldest to newest, each with one rollout.
+        for day in 1..=10 {
+            let directory = sessions.join(format!("2026/01/{day:02}"));
+            std::fs::create_dir_all(&directory).expect("a rollout directory");
+            write(
+                &directory.join(format!("rollout-2026-01-{day:02}-s{day}.jsonl")),
+                &codex_rollout(&format!("s{day}"), "/w", "model-x"),
+            );
         }
-        seed_rollout(&root, PINNED_NOW_MS, 40, "stale");
 
-        let ids = codex_ids(&root);
+        let mut ids: Vec<String> = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits
+        .into_iter()
+        .map(|hit| hit.session_id)
+        .collect();
+        ids.sort();
 
-        // `back` 7..9 and the 40-day-old rollout are outside the window.
+        // The oldest three fall outside the window.
         assert_eq!(
             ids,
-            vec!["s0", "s1", "s2", "s3", "s4", "s5", "s6"],
-            "seven days ending today, not seven directory names"
+            vec!["s10", "s4", "s5", "s6", "s7", "s8", "s9"],
+            "seven of the ten days, the newest"
         );
-    }
-
-    /// The regression this window exists for: a full set of seven old directories
-    /// used to be read forever, because the filter took the last seven names
-    /// instead of comparing them to today.
-    #[test]
-    fn a_stale_sessions_tree_is_never_backfilled() {
-        let scratch = Scratch::new("codex-stale");
-        let root = scratch.0.join(".codex");
-        // Seven consecutive days 34–40 days back: the old filter would take all
-        // seven of these and ignore how old they are.
-        for back in 34..=40 {
-            seed_rollout(&root, PINNED_NOW_MS, back, &format!("stale-{back}"));
-        }
-        seed_rollout(&root, PINNED_NOW_MS, 0, "today");
-
-        assert_eq!(codex_ids(&root), vec!["today"]);
     }
 
     /// A rollout that is not a rollout does not become a card, and does not lose
@@ -1319,7 +1893,12 @@ mod tests {
             &transcript("/home/dev/p", "model-x"),
         );
 
-        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].source, "claude");
     }
@@ -1338,9 +1917,21 @@ mod tests {
             .join(format!("{day:02}"))
     }
 
-    /// A UTC civil date from a Unix timestamp: enough for a test directory name.
+    /// A UTC civil date from a Unix timestamp: enough for a test directory name,
+    /// and no dependency for it.
     fn civil_date(seconds: u64) -> (i64, u32, u32) {
-        civil_from_days((seconds / 86_400) as i64)
+        let days = (seconds / 86_400) as i64;
+        // Howard Hinnant's `civil_from_days`.
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
     }
 
     fn codex_rollout(id: &str, cwd: &str, model: &str) -> String {
@@ -1382,7 +1973,7 @@ mod tests {
         )];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         let now = now_ms();
-        let result = scan_with(&readers, &scratch.0, &table, now);
+        let result = scan_with(&readers, &scratch.0, &table, &TextCache::default(), now);
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1421,7 +2012,13 @@ mod tests {
         )];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         // Ten minutes later: past the five-minute freshness window.
-        let result = scan_with(&readers, &scratch.0, &table, now_ms() + 600_000);
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms() + 600_000,
+        );
         assert!(result.hits.is_empty());
     }
 
@@ -1447,7 +2044,13 @@ mod tests {
 
         let table = vec![process_with_cwd(555, "/usr/bin/gemini", "gemini", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
 
         assert_eq!(result.hits.len(), 1);
         let hit = &result.hits[0];
@@ -1476,7 +2079,13 @@ mod tests {
 
         let table = vec![process_with_cwd(7, "/usr/bin/gemini", "gemini", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         assert_eq!(result.hits.len(), 1);
         assert_eq!(result.hits[0].session_id, "gem-2");
     }
@@ -1495,9 +2104,15 @@ mod tests {
         }];
         let readers: Vec<&dyn StoreReader> = Vec::new();
         assert!(
-            scan_with(&readers, &scratch.0, &table, now_ms())
-                .hits
-                .is_empty()
+            scan_with(
+                &readers,
+                &scratch.0,
+                &table,
+                &TextCache::default(),
+                now_ms()
+            )
+            .hits
+            .is_empty()
         );
     }
 
@@ -1529,7 +2144,7 @@ mod tests {
             now_ms: now,
         };
         let readers: Vec<&dyn StoreReader> = vec![&cline_store];
-        let result = scan_with(&readers, &scratch.0, &[], now);
+        let result = scan_with(&readers, &scratch.0, &[], &TextCache::default(), now);
         let cline: Vec<_> = result.hits.iter().filter(|h| h.source == "cline").collect();
         assert_eq!(cline.len(), 1);
         assert_eq!(cline[0].session_id, "task-1");
@@ -1568,7 +2183,7 @@ mod tests {
             now_ms: now,
         };
         let readers: Vec<&dyn StoreReader> = vec![&cline_store];
-        let result = scan_with(&readers, &scratch.0, &[], now);
+        let result = scan_with(&readers, &scratch.0, &[], &TextCache::default(), now);
         assert!(result.hits.iter().all(|h| h.source != "cline"));
     }
 
@@ -1595,7 +2210,13 @@ mod tests {
 
         let table = vec![process_with_cwd(88, "/usr/bin/codebuddy", "codebuddy", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result
             .hits
             .iter()
@@ -1605,48 +2226,6 @@ mod tests {
         assert_eq!(hits[0].session_id, "cb-1");
         assert_eq!(hits[0].model.as_deref(), Some("claude-sonnet"));
         assert_eq!(hits[0].pid, Some(88));
-    }
-
-    #[test]
-    fn a_redirected_appdata_is_used_and_the_plain_profile_still_works() {
-        use std::ffi::OsStr;
-        let home = Path::new("/home/dev");
-        assert_eq!(
-            vscode_user_dir_from_appdata(Some(OsStr::new("/mnt/roaming/AppData")), home),
-            Path::new("/mnt/roaming/AppData/Code/User")
-        );
-        assert_eq!(
-            vscode_user_dir_from_appdata(None, home),
-            home.join("AppData/Roaming/Code/User")
-        );
-    }
-
-    #[test]
-    fn a_factory_sidecar_is_found_even_when_a_parent_directory_ends_in_jsonl() {
-        let scratch = Scratch::new("factory.jsonl");
-        let cwd = "/home/dev/project";
-        let project = scratch
-            .0
-            .join(".factory/sessions")
-            .join(morrow_core::discovery::project_dir::encoded(cwd));
-        std::fs::create_dir_all(&project).expect("a store");
-        std::fs::write(
-            project.join("d-1.jsonl"),
-            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Deploy"}]}}"#,
-        )
-        .expect("a transcript");
-        std::fs::write(
-            project.join("d-1.settings.json"),
-            r#"{"model":"gpt-5.1-codex"}"#,
-        )
-        .expect("a sidecar");
-
-        let table = vec![process_with_cwd(33, "/usr/bin/droid", "droid", cwd)];
-        let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
-        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "droid").collect();
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].model.as_deref(), Some("gpt-5.1-codex"));
     }
 
     /// Factory's model lives in a sidecar file, not in the transcript.
@@ -1672,11 +2251,498 @@ mod tests {
 
         let table = vec![process_with_cwd(33, "/usr/bin/droid", "droid", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "droid").collect();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("gpt-5.1-codex"));
         assert_eq!(hits[0].pid, Some(33));
+    }
+
+    /// #279: Copilot names its store by session, so the cwd has to be read out of
+    /// the event stream — and a stream belonging to another cwd must be refused.
+    #[test]
+    fn a_copilot_process_finds_the_stream_that_names_its_cwd() {
+        let scratch = Scratch::new("copilot");
+        let base = scratch.0.join(".copilot/session-state");
+        for (id, cwd) in [("other", "/home/dev/other"), ("mine", "/home/dev/project")] {
+            std::fs::create_dir_all(base.join(id)).expect("a store");
+            std::fs::write(
+                base.join(id).join("events.jsonl"),
+                format!(
+                    concat!(
+                        r#"{{"type":"session.start","data":{{"context":{{"cwd":"{cwd}"}}}}}}"#,
+                        "\n",
+                        r#"{{"type":"user.message","data":{{"content":"Fix the flaky test"}}}}"#,
+                        "\n",
+                        r#"{{"type":"session.info","data":{{"model":"claude-sonnet"}}}}"#
+                    ),
+                    cwd = cwd
+                ),
+            )
+            .expect("a stream");
+        }
+
+        let table = vec![process_with_cwd(
+            71,
+            "/usr/bin/copilot",
+            "copilot",
+            "/home/dev/project",
+        )];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
+        let hits: Vec<_> = result
+            .hits
+            .iter()
+            .filter(|h| h.source == "copilot")
+            .collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "mine");
+        assert_eq!(hits[0].pid, Some(71));
+        assert_eq!(hits[0].model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(hits[0].recent_messages.len(), 1);
+    }
+
+    /// A newline cannot be read out of a store that names the cwd, so the head is
+    /// what decides: a stream whose cwd never appears is nothing.
+    #[test]
+    fn a_copilot_stream_for_another_cwd_is_not_this_session() {
+        let scratch = Scratch::new("copilot-other");
+        let base = scratch.0.join(".copilot/session-state/mine");
+        std::fs::create_dir_all(&base).expect("a store");
+        std::fs::write(
+            base.join("events.jsonl"),
+            r#"{"type":"session.start","data":{"context":{"cwd":"/home/dev/elsewhere"}}}"#,
+        )
+        .expect("a stream");
+
+        let table = vec![process_with_cwd(
+            72,
+            "/usr/bin/copilot",
+            "copilot",
+            "/home/dev/project",
+        )];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(
+                &readers,
+                &scratch.0,
+                &table,
+                &TextCache::default(),
+                now_ms()
+            )
+            .hits
+            .iter()
+            .all(|h| h.source != "copilot")
+        );
+    }
+
+    /// #279: Grok's directory is keyed by the percent-encoded cwd, and the summary
+    /// is what names the session and its activity.
+    #[test]
+    fn a_grok_process_finds_its_session_and_reads_its_transcript() {
+        let scratch = Scratch::new("grok");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".grok/sessions")
+            .join(morrow_core::discovery::grok::encoded_cwd(cwd))
+            .join("session-abc");
+        std::fs::create_dir_all(&directory).expect("a store");
+        let now = now_ms();
+        let stamp = iso8601(now - 60_000);
+        std::fs::write(
+            directory.join("summary.json"),
+            format!(
+                r#"{{"info":{{"id":"0192f0aa-7cbb-7000-8000-000000000000","cwd":"{cwd}"}},
+                    "current_model_id":"grok-code-fast-1",
+                    "updated_at":"{stamp}"}}"#
+            ),
+        )
+        .expect("a summary");
+        std::fs::write(
+            directory.join("chat_history.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Add a retry"}]}}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added it"}]}}"#
+            ),
+        )
+        .expect("a transcript");
+
+        let table = vec![process_with_cwd(81, "/usr/bin/grok", "grok", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(&readers, &scratch.0, &table, &TextCache::default(), now);
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "grok").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "0192f0aa-7cbb-7000-8000-000000000000");
+        assert_eq!(hits[0].model.as_deref(), Some("grok-code-fast-1"));
+        assert_eq!(hits[0].pid, Some(81));
+        assert_eq!(hits[0].recent_messages.len(), 2);
+    }
+
+    /// The directory is keyed by cwd, but the summary says so itself: a session
+    /// whose cwd moved is not this process's session.
+    #[test]
+    fn a_grok_session_whose_summary_names_another_cwd_is_skipped() {
+        let scratch = Scratch::new("grok-moved");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".grok/sessions")
+            .join(morrow_core::discovery::grok::encoded_cwd(cwd))
+            .join("session-abc");
+        std::fs::create_dir_all(&directory).expect("a store");
+        let now = now_ms();
+        std::fs::write(
+            directory.join("summary.json"),
+            format!(
+                r#"{{"info":{{"id":"s","cwd":"/home/dev/moved"}},"updated_at":"{}"}}"#,
+                iso8601(now)
+            ),
+        )
+        .expect("a summary");
+
+        let table = vec![process_with_cwd(82, "/usr/bin/grok", "grok", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &table, &TextCache::default(), now)
+                .hits
+                .iter()
+                .all(|h| h.source != "grok")
+        );
+    }
+
+    /// An index-only session has no transcript, so there is nothing to show.
+    #[test]
+    fn a_grok_session_without_a_transcript_is_skipped() {
+        let scratch = Scratch::new("grok-notranscript");
+        let cwd = "/home/dev/project";
+        let directory = scratch
+            .0
+            .join(".grok/sessions")
+            .join(morrow_core::discovery::grok::encoded_cwd(cwd))
+            .join("session-abc");
+        std::fs::create_dir_all(&directory).expect("a store");
+        let now = now_ms();
+        std::fs::write(
+            directory.join("summary.json"),
+            format!(
+                r#"{{"info":{{"id":"s","cwd":"{cwd}"}},"updated_at":"{}"}}"#,
+                iso8601(now)
+            ),
+        )
+        .expect("a summary");
+
+        let table = vec![process_with_cwd(83, "/usr/bin/grok", "grok", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(&readers, &scratch.0, &table, &TextCache::default(), now)
+                .hits
+                .iter()
+                .all(|h| h.source != "grok")
+        );
+    }
+
+    /// #284: a second scan reads nothing, and that is asserted as a **count**
+    /// rather than as a duration — "it was fast" is not a fact.
+    #[test]
+    fn a_second_scan_reads_no_transcript_twice() {
+        let scratch = Scratch::new("cache");
+        let directory = scratch.0.join(".claude/projects/-home-dev-project");
+        std::fs::create_dir_all(&directory).expect("a store");
+        write(
+            &directory.join("cache-session.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"One"}]},"cwd":"/home/dev/project"}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Two"}]},"cwd":"/home/dev/project"}"#
+            ),
+        );
+        let transcripts = ClaudeTranscripts {
+            config_dir: scratch.0.join(".claude").to_string_lossy().into_owned(),
+            now_ms: now_ms(),
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&transcripts];
+        // One cache across both scans, as the feed holds it.
+        let cache = TextCache::default();
+
+        let first = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert_eq!(first.hits.len(), 1, "the session is found at all");
+        assert_eq!(cache.reads(), 1, "the first scan reads the transcript");
+
+        let second = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert_eq!(
+            second.hits.len(),
+            1,
+            "an unchanged store still yields the hit"
+        );
+        assert_eq!(cache.reads(), 1, "and is not read a second time");
+
+        // A write with the same size in the same millisecond still counts: the
+        // fingerprint is nanoseconds, which is the bug #259 was written for.
+        write(
+            &directory.join("cache-session.jsonl"),
+            concat!(
+                r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"One"}]},"cwd":"/home/dev/project"}"#,
+                "\n",
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Two"}]},"cwd":"/home/dev/project"}"#,
+                "\n"
+            ),
+        );
+        let third = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert_eq!(third.hits.len(), 1);
+        assert_eq!(cache.reads(), 2, "a store that moved is read again");
+    }
+
+    /// #284: the freshness gate runs **before** the read, so a year of history is
+    /// never opened. Counted, not timed.
+    #[test]
+    fn a_transcript_nobody_touched_in_a_day_is_never_read() {
+        let scratch = Scratch::new("stale-transcript");
+        let directory = scratch.0.join(".claude/projects/-home-dev-project");
+        std::fs::create_dir_all(&directory).expect("a store");
+        write(
+            &directory.join("old-session.jsonl"),
+            r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Hi"}]},"cwd":"/home/dev/project"}"#,
+        );
+        let transcripts = ClaudeTranscripts {
+            config_dir: scratch.0.join(".claude").to_string_lossy().into_owned(),
+            // Two days later, with the same store untouched.
+            now_ms: now_ms() + 2 * CLAUDE_FRESHNESS_MS,
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&transcripts];
+        let cache = TextCache::default();
+        let result = scan_with(&readers, &scratch.0, &[], &cache, now_ms());
+        assert!(result.hits.is_empty(), "history is not a session");
+        assert_eq!(cache.reads(), 0, "and it was never even opened");
+    }
+
+    /// #282: kimi-code's index names the session directory, so no hash is needed.
+    #[test]
+    fn a_kimi_index_entry_becomes_a_session() {
+        let scratch = Scratch::new("kimi-index");
+        let cwd = "/home/dev/project";
+        let session = scratch.0.join(".kimi-code/sessions/s1");
+        std::fs::create_dir_all(session.join("agents/main")).expect("a store");
+        std::fs::write(session.join("state.json"), "{}").expect("a state file");
+        std::fs::write(
+            session.join("agents/main/wire.jsonl"),
+            concat!(
+                r#"{"type":"turn.prompt","input":[{"type":"text","text":"Read the logs"}]}"#,
+                "\n",
+                r#"{"type":"context.append_loop_event","event":{"type":"content.part","part":{"type":"text","text":"Found it"}}}"#
+            ),
+        )
+        .expect("a wire transcript");
+        std::fs::write(
+            scratch.0.join(".kimi-code/session_index.jsonl"),
+            format!(
+                r#"{{"sessionId":"s1","sessionDir":"{}","workDir":"{cwd}"}}"#,
+                session.to_string_lossy()
+            ),
+        )
+        .expect("an index");
+
+        let table = vec![process_with_cwd(91, "/usr/bin/kimi", "kimi", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kimi").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "s1");
+        assert_eq!(hits[0].pid, Some(91));
+        assert_eq!(hits[0].recent_messages.len(), 2);
+    }
+
+    /// The legacy layout is the fallback, and its directory is `md5(cwd)`.
+    #[test]
+    fn a_kimi_legacy_hashed_directory_is_the_fallback() {
+        let scratch = Scratch::new("kimi-hash");
+        let cwd = "/home/dev/project";
+        let session = scratch
+            .0
+            .join(".kimi/sessions")
+            .join(morrow_core::discovery::kimi::workdir_hash(cwd))
+            .join("legacy-1");
+        std::fs::create_dir_all(&session).expect("a store");
+        std::fs::write(
+            session.join("wire.jsonl"),
+            concat!(
+                r#"{"message":{"type":"TurnBegin","payload":{"user_input":[{"type":"text","text":"Why?"}]}}}"#,
+                "\n",
+                r#"{"message":{"type":"TurnEnd"}}"#
+            ),
+        )
+        .expect("a wire transcript");
+
+        let table = vec![process_with_cwd(92, "/usr/bin/kimi", "kimi", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kimi").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "legacy-1");
+        assert_eq!(hits[0].recent_messages.len(), 1);
+    }
+
+    /// #282: Kiro's V3 layout puts the session under a workspace directory, and the
+    /// workspace list is what says it belongs to this cwd.
+    #[test]
+    fn a_kiro_v3_session_becomes_a_session() {
+        let scratch = Scratch::new("kiro-v3");
+        let cwd = "/home/dev/project";
+        let session = scratch.0.join(".kiro/sessions/workspace-hash/kiro-1");
+        std::fs::create_dir_all(&session).expect("a store");
+        std::fs::write(
+            session.join("session.json"),
+            format!(r#"{{"id":"kiro-1","workspacePaths":["{cwd}"],"modelId":"claude-sonnet"}}"#),
+        )
+        .expect("a session file");
+        std::fs::write(
+            session.join("messages.jsonl"),
+            concat!(
+                r#"{"payload":{"type":"user","content":"Explain this repo"}}"#,
+                "\n",
+                r#"{"payload":{"type":"assistant","content":"It is a notch app"}}"#
+            ),
+        )
+        .expect("a transcript");
+
+        let table = vec![process_with_cwd(101, "/usr/bin/kiro-cli", "kiro-cli", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "kiro-1");
+        assert_eq!(hits[0].model.as_deref(), Some("claude-sonnet"));
+        assert_eq!(hits[0].recent_messages.len(), 2);
+    }
+
+    /// The V2 layout keeps one file per session under `sessions/cli`, and `cli` is
+    /// not a workspace.
+    #[test]
+    fn a_kiro_v2_session_becomes_a_session() {
+        let scratch = Scratch::new("kiro-v2");
+        let cwd = "/home/dev/project";
+        let cli = scratch.0.join(".kiro/sessions/cli");
+        std::fs::create_dir_all(&cli).expect("a store");
+        std::fs::write(
+            cli.join("kiro-legacy.json"),
+            format!(r#"{{"cwd":"{cwd}","updated_at":"{}"}}"#, iso8601(now_ms())),
+        )
+        .expect("a session file");
+        std::fs::write(
+            cli.join("kiro-legacy.jsonl"),
+            r#"{"type":"user","message":{"content":[{"type":"text","text":"Hello"}]}}"#,
+        )
+        .expect("a transcript");
+
+        let table = vec![process_with_cwd(102, "/usr/bin/kiro-cli", "kiro-cli", cwd)];
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
+        let hits: Vec<_> = result.hits.iter().filter(|h| h.source == "kiro").collect();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "kiro-legacy");
+        assert_eq!(hits[0].recent_messages.len(), 1);
+    }
+
+    /// A session in the same workspace that last moved long before the process
+    /// began is not what it is running.
+    #[test]
+    fn a_kiro_session_older_than_its_process_is_skipped() {
+        let scratch = Scratch::new("kiro-old");
+        let cwd = "/home/dev/project";
+        let session = scratch.0.join(".kiro/sessions/shared/kiro-old");
+        std::fs::create_dir_all(&session).expect("a store");
+        std::fs::write(
+            session.join("session.json"),
+            format!(
+                r#"{{"id":"kiro-old","workspacePaths":["{cwd}"],"lastModifiedAt":"{}"}}"#,
+                iso8601(now_ms() - 86_400_000)
+            ),
+        )
+        .expect("a session file");
+
+        let mut process = process_with_cwd(103, "/usr/bin/kiro-cli", "kiro-cli", cwd);
+        // Started long after that session last moved.
+        process.start_time_ms = Some(now_ms());
+        let readers: Vec<&dyn StoreReader> = Vec::new();
+        assert!(
+            scan_with(
+                &readers,
+                &scratch.0,
+                &[process],
+                &TextCache::default(),
+                now_ms()
+            )
+            .hits
+            .iter()
+            .all(|h| h.source != "kiro")
+        );
+    }
+
+    /// An ISO 8601 stamp for a millisecond instant, so a fresh store can be seeded
+    /// without a date crate.
+    fn iso8601(ms: u64) -> String {
+        let seconds = ms / 1000;
+        let days = seconds / 86_400;
+        let rest = seconds % 86_400;
+        let (year, month, day) = civil_from_days(days as i64);
+        format!(
+            "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.{:03}Z",
+            rest / 3_600,
+            (rest % 3_600) / 60,
+            rest % 60,
+            ms % 1000
+        )
+    }
+
+    /// Howard Hinnant's `civil_from_days`, the inverse of the core's parser.
+    fn civil_from_days(days: i64) -> (i64, u32, u32) {
+        let z = days + 719_468;
+        let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let d = doy - (153 * mp + 2) / 5 + 1;
+        let m = if mp < 10 { mp + 3 } else { mp - 9 };
+        (if m <= 2 { y + 1 } else { y }, m as u32, d as u32)
     }
 
     /// A subagent worktree is not a project the user opened.
@@ -1693,7 +2759,13 @@ mod tests {
 
         let table = vec![process_with_cwd(12, "/usr/bin/qoder", "qoder", cwd)];
         let readers: Vec<&dyn StoreReader> = Vec::new();
-        let result = scan_with(&readers, &scratch.0, &table, now_ms());
+        let result = scan_with(
+            &readers,
+            &scratch.0,
+            &table,
+            &TextCache::default(),
+            now_ms(),
+        );
         assert!(result.hits.iter().all(|h| h.source != "qoder"));
     }
 
@@ -1718,9 +2790,13 @@ mod tests {
         write(&projects.join("notes.txt"), "hello\n");
 
         assert!(
-            scan_once(&scratch.0.join(".claude"), &scratch.0)
-                .hits
-                .is_empty()
+            scan_once(
+                &scratch.0.join(".claude"),
+                &scratch.0,
+                &TextCache::default()
+            )
+            .hits
+            .is_empty()
         );
     }
 
@@ -1741,7 +2817,12 @@ mod tests {
             &transcript("/home/dev/project", "model-y"),
         );
 
-        let mut hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let mut hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         hits.sort_by_key(|hit| hit.modified_at);
         assert_eq!(
             hits.last().map(|hit| hit.session_id.as_str()),
@@ -1768,11 +2849,12 @@ mod tests {
         let roots = claude_roots(&scratch.0.join(".claude"));
         assert_eq!(roots.len(), 2, "roots: {roots:?}");
 
-        let mut ids: Vec<String> = scan_once(Path::new(&roots[0]), &scratch.0)
-            .hits
-            .into_iter()
-            .map(|hit| hit.session_id)
-            .collect();
+        let mut ids: Vec<String> =
+            scan_once(Path::new(&roots[0]), &scratch.0, &TextCache::default())
+                .hits
+                .into_iter()
+                .map(|hit| hit.session_id)
+                .collect();
         ids.sort();
         assert_eq!(ids, vec!["personal", "work"]);
     }
@@ -1796,9 +2878,93 @@ mod tests {
         }
         write(&path, &transcript("/home/dev/project", "model-x"));
 
-        let hits = scan_once(&scratch.0.join(".claude"), &scratch.0).hits;
+        let hits = scan_once(
+            &scratch.0.join(".claude"),
+            &scratch.0,
+            &TextCache::default(),
+        )
+        .hits;
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].model.as_deref(), Some("model-x"));
         assert_eq!(hits[0].cwd, "/home/dev/project");
+    }
+}
+
+#[cfg(test)]
+mod cost_probe {
+    use super::*;
+    use std::io::Write;
+
+    /// Not an assertion: a measurement. Run with
+    /// `cargo test -p morrow-app cost_probe -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn a_scan_over_a_realistic_store_costs_what() {
+        let root = std::env::temp_dir().join(format!("morrow-cost-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("a home");
+        let home = &root;
+        // 200 projects, 20 transcripts each: a heavy but ordinary year of use.
+        for project in 0..200 {
+            let directory = home
+                .join(".claude/projects")
+                .join(format!("-home-dev-project-{project}"));
+            std::fs::create_dir_all(&directory).expect("a project");
+            for turn in 0..20 {
+                let path = directory.join(format!("session-{project}-{turn}.jsonl"));
+                let mut file = std::fs::File::create(&path).expect("a transcript");
+                for line in 0..40 {
+                    writeln!(
+                        file,
+                        r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"text","text":"line {line}"}}]}},"cwd":"/home/dev/project-{project}"}}"#
+                    )
+                    .expect("a line");
+                }
+                // Only the newest is fresh; the rest are history, as on a real
+                // machine where one project holds a year of sessions.
+                file.set_modified(
+                    std::time::SystemTime::now()
+                        - std::time::Duration::from_secs(if turn == 0 {
+                            0
+                        } else {
+                            172_800 * turn
+                        }),
+                )
+                .expect("a modification time");
+            }
+        }
+        let transcripts = ClaudeTranscripts {
+            config_dir: home.join(".claude").to_string_lossy().into_owned(),
+            now_ms: now_ms(),
+        };
+        let readers: Vec<&dyn StoreReader> = vec![&transcripts];
+        let mut timings = Vec::new();
+        let mut hits = 0;
+        // One cache across the five scans, as the feed does: a cache rebuilt per
+        // scan reads everything and remembers nothing.
+        let cache = TextCache::default();
+        for _ in 0..5 {
+            let started = std::time::Instant::now();
+            let result = scan_with(&readers, home, &[], &cache, now_ms());
+            hits = result.hits.len();
+            timings.push(started.elapsed());
+        }
+        let projects = home.join(".claude/projects");
+        let started = std::time::Instant::now();
+        let mut files = 0;
+        for project in std::fs::read_dir(&projects).expect("projects").flatten() {
+            if let Some(list) = transcript_files::list(&project.path().to_string_lossy()) {
+                files += list.len();
+            }
+        }
+        println!("list-only: {:?} for {files} files", started.elapsed());
+        let started = std::time::Instant::now();
+        let direct = readers[0].read(&home.join(".claude").to_string_lossy(), &cache);
+        println!(
+            "read-only: {:?} for {} hits",
+            started.elapsed(),
+            direct.len()
+        );
+        println!("hits: {hits}, reads: {}", cache.reads());
+        println!("scan over 4000 transcripts: {timings:?}");
     }
 }

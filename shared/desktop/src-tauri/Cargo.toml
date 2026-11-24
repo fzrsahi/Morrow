@@ -25,6 +25,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [dependencies]
+morrow-watch = { path = "../../crates/morrow-watch" }
 morrow-core = { path = "../../crates/morrow-core" }
 morrow-ipc = { path = "../../crates/morrow-ipc" }
 morrow-platform = { path = "../../crates/morrow-platform" }

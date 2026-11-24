@@ -19,6 +19,7 @@
 # Exit: 0 when every automated installer check passed. This script does not
 #       decide whether the E2E-2 gate passed.
 
+
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSCommandPath)
 Set-Location $root
@@ -88,4 +89,5 @@ try {
 finally {
     Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }
+
 exit $failed

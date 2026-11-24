@@ -153,6 +153,23 @@ describe('live transcript reply row (#192)', () => {
     expect(liveReply(session({ live_reply: '   ' }))).toBe('');
   });
 
+  test('the reply row shows the folded preview the shell sends (#238)', () => {
+    // A row cannot show a table or a fence, only their syntax. The shell flattened
+    // it; the row must not paint the raw reply back over it.
+    expect(
+      liveReply(
+        session({
+          last_assistant_message: '## Summary\n| File | Lines |',
+          reply_preview: 'Summary · File, Lines',
+        }),
+      ),
+    ).toBe('Summary · File, Lines');
+    // An older shell sends none, and the raw text is all there is.
+    expect(
+      liveReply(session({ last_assistant_message: '## Summary', reply_preview: '' })),
+    ).toBe('## Summary');
+  });
+
   test('the transcript never changes the status or tool data beside the reply row', () => {
     const s = session({ live_reply: 'Still typing…', current_tool: 'Bash', status: 'working' });
     expect(liveReply(s)).toBe('Still typing…');
