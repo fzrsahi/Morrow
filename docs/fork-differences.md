@@ -1,73 +1,73 @@
-# Apa yang berubah dari CodeIsland
+# What changed from CodeIsland
 
-Morrow adalah fork dari [wxtsky/CodeIsland](https://github.com/wxtsky/CodeIsland). Upstream adalah aplikasi SwiftUI/AppKit untuk macOS. Fork ini menambah shell Rust/Tauri untuk Linux dan Windows, mengubah banyak jalur konfigurasi, dan menambah fitur yang tidak disebut upstream.
+Morrow is a fork of [wxtsky/CodeIsland](https://github.com/wxtsky/CodeIsland). Upstream is a SwiftUI and AppKit app for macOS. This fork adds a Rust and Tauri shell for Linux and Windows, renames many configuration paths, and adds features upstream does not document.
 
-Daftar ini membandingkan `wxtsky/CodeIsland` `main` (README upstream 396 baris) dengan repo ini. Bukti yang dipakai adalah kode, ADR, dan README, bukan perkiraan. Status "terpasang" berarti kodenya ada di shell atau UI. Status "pustaka saja" berarti modulnya ada tetapi belum dipanggil UI.
+This list compares `wxtsky/CodeIsland` `main` (upstream README, 396 lines) with this repository. The evidence is code, ADRs, and both READMEs, not guesswork. "Wired" means the code is called from the shell or UI. "Library only" means the module exists but the UI does not call it.
 
-## Identitas dan jalur
+## Identity and paths
 
-| Perubahan | Bukti |
+| Change | Evidence |
 |---|---|
-| Nama produk CodeIsland → Morrow, repo → `fzrsahi/morrow` | README kita `:8-23`; upstream `:1-15`. Folder fisik repo masih bernama `CodeIsland`, tapi path repo dan artifact sudah `morrow`. |
-| Socket IPC `/tmp/codeisland-<uid>.sock` → `/tmp/morrow-<uid>.sock` | README kita `:355` vs upstream `:322`. #78/PR #161 menambah resolusi ke socket legacy saat kirim agar hook lama tidak hilang. |
-| Bridge `codeisland-bridge` → `morrow-bridge` | README kita `:355` vs upstream `:322`; `build.sh` menyalin keduanya dengan alias. |
-| Delapan jalur hook/plugin diganti nama | README kita `:200-215` vs upstream `:166-181`: Grok, Copilot, Kiro, MiniMax, OpenCode, MiMo, Pi/Oh My Pi, OpenClaw. Kiro juga memakai `kiro --agent morrow`. |
-| Homebrew `codeisland` → `morrow`, DMG dan app → `Morrow.*` | README kita `:227-233` vs upstream `:193-199`. |
-| Companion path `ios/CodeIslandCompanion` → `ios/MorrowCompanion` | README kita `:257` vs upstream `:212`. |
+| Product name CodeIsland to Morrow, repo to `fzrsahi/morrow` | Our README `:8-25`; upstream `:1-15`. The local checkout folder is still named `CodeIsland`, but repo paths and artifacts use `morrow`. |
+| IPC socket `/tmp/codeisland-<uid>.sock` to `/tmp/morrow-<uid>.sock` | Our README `:355`; upstream `:322`. #78 / PR #161 added resolution to the legacy socket at send time so older hooks keep working. |
+| Bridge `codeisland-bridge` to `morrow-bridge` | Our README `:355`; upstream `:322`. `build.sh` copies both, with an alias for the old name. |
+| Eight hook and plugin paths renamed | Our README `:200-215`; upstream `:166-181`: Grok, Copilot, Kiro, MiniMax, OpenCode, MiMo, Pi / Oh My Pi, OpenClaw. Kiro also uses `kiro --agent morrow`. |
+| Homebrew `codeisland` to `morrow`, DMG and app to `Morrow.*` | Our README `:227-233`; upstream `:193-199`. |
+| Companion path `ios/CodeIslandCompanion` to `ios/MorrowCompanion` | Our README `:257`; upstream `:212`. |
 
-Daftar tool yang didukung **tidak berubah**. Grid 28 tool di README kita `:137-195` sama dengan upstream `:103-150`. Yang berubah hanya path ikon dan nama file. Tidak ada tool yang benar-benar ditambah atau dihapus dari daftar itu.
+The supported tool list did **not** change. The 28-tool grid in our README `:137-195` matches upstream `:103-150`. Only icon paths and file names differ. No tool was added to or removed from that list.
 
-## Arsitektur
+## Architecture
 
-| Perubahan | Bukti |
+| Change | Evidence |
 |---|---|
-| Dua core, bukan satu. macOS tetap Swift; Linux/Windows memakai core Rust. Keduanya hanya berbagi kontrak, bukan kode. | ADR-0001 `:5`, `:34`, `:38-39`; ADR-0003 `:3,10` menolak Opsi E. Biayanya: dua core dijaga bersamaan, port ≈37–40K LOC. |
-| Shell Tauri v2 + Svelte 5 menggantikan WPF di Windows dan jadi panel Linux. | ADR-0002 `:5,7,9,15-16`; `shared/desktop/src-tauri/tauri.conf.json`. Keputusan ini didasarkan pada satu shell untuk dua OS, bukan performa. |
-| `morrow-core` murni dan dijaga `rust-purity.sh`: tidak boleh bergantung pada `windows`, `libc`, `nix`, `zbus`, `tokio`. | `docs/plan-windows-linux.md:99-105,147,176`; `shared/ci/rust-purity.sh`. Efek samping lewat `Clock`, `CustomSources`, `FileSystem`. |
-| Satu tabel capability jadi sumber kebenaran. Baris `Supported` harus punya adapter di `ADAPTERS`, kalau tidak test gagal. | `docs/plan-windows-linux.md:218,226`; `capability.rs`; `tests/capability_and_settings.rs`. #235 menurunkan 11 baris Linux dan 8 Windows ke `Unsupported(reason)`. |
-| Kontrak hook dan endpoint dibekukan di `shared/contract/`, termasuk golden fixture dan aturan peer verification. | ADR-0001 `:5`; `docs/plan-windows-linux.md:56-64,118-130`; `shared/contract/hook-edge-protocol.md`. |
-| Monorepo: `macos/`, `shared/`, `linux/`, `windows/`. | #86, PR #171 (`9680d4a5`). 712 file dipindah tanpa perubahan perilaku. |
-| Panel Linux memakai tight-fit window dan nonactivating, bukan click-through GTK. | `docs/plan-windows-linux.md:268-303`; ADR-0002 `:20-25`. |
-| CI lokal wajib sebelum push; gate host tidak dijalankan per PR. | `AGENTS.md:54-68`; `docs/plan-windows-linux.md:349,363,463-465`. |
+| Two cores, not one. macOS keeps Swift; Linux and Windows use a Rust core. They share a contract, not code. | ADR-0001 `:5`, `:34`, `:38-39`; ADR-0003 `:3,10` rejects Option E. Cost: two cores kept in step and a port of roughly 37K to 40K lines. |
+| A Tauri v2 and Svelte 5 shell replaces WPF on Windows and serves as the Linux panel. | ADR-0002 `:5,7,9,15-16`; `shared/desktop/src-tauri/tauri.conf.json`. The decision was one shell for two OSes, not performance. |
+| `morrow-core` is pure and guarded by `rust-purity.sh`: no dependency on `windows`, `libc`, `nix`, `zbus`, or `tokio`. | `docs/plan-windows-linux.md:99-105,147,176`; `shared/ci/rust-purity.sh`. Side effects are injected through `Clock`, `CustomSources`, and `FileSystem`. |
+| One capability table is the source of truth. A `Supported` row needs an adapter in `ADAPTERS` or the guard test fails. | `docs/plan-windows-linux.md:218,226`; `capability.rs`; `tests/capability_and_settings.rs`. #235 demoted 11 Linux and 8 Windows rows to `Unsupported(reason)`. |
+| Hook and endpoint contracts are frozen in `shared/contract/`, including golden fixtures and peer verification rules. | ADR-0001 `:5`; `docs/plan-windows-linux.md:56-64,118-130`; `shared/contract/hook-edge-protocol.md`. |
+| Monorepo layout: `macos/`, `shared/`, `linux/`, `windows/`. | #86, PR #171 (`9680d4a5`). 712 files moved without behavior changes. |
+| The Linux panel uses a tight-fit, nonactivating window instead of GTK click-through. | `docs/plan-windows-linux.md:268-303`; ADR-0002 `:20-25`. |
+| Local verification is mandatory before push. Host gates do not run per PR. | `AGENTS.md:54-68`; `docs/plan-windows-linux.md:349,363,463-465`. |
 
-## Fitur yang ditambahkan di fork
+## Features added in this fork
 
-### Terpasang di UI atau shell
+### Wired into the UI or shell
 
-- **Pencarian sesi dari proses yang berjalan.** 13 reader: `ClaudeTranscripts`, `OpenCodeStore`, `CodexRollouts`, `ClineStore`, `CursorTranscripts`, `GeminiChats`, `KimiSessions`, `KiroSessions`, `CopilotSessions`, `GrokSessions`, dan tiga `FlatStore` (qoder/codebuddy/droid). Bukti: `morrow-core/src/discovery.rs`, `src-tauri/src/discovery.rs`, `src-tauri/src/feed.rs::scan_stores`. Upstream hanya melihat sesi lewat hook.
-- **Backfill saat attach.** Sesi yang sudah berjalan muncul sebelum hook pertama. Bukti: `feed.rs::backfill_with`, `morrow-core/src/session_store.rs`, #261/#339.
-- **Riwayat balasan Markdown yang dipangkas jadi satu baris kartu.** `morrow-core/src/markdown_preview.rs::{plain, preview_source, segments, code_summary}`, dipakai `MarkdownReply.svelte`.
-- **Pengingat lanjutan.** `morrow-core/src/follow_up.rs`, `src-tauri/src/reminders.rs::ReminderBook`, `lib/reminders.ts`.
-- **Doa dan kota offline.** `morrow-core/src/prayer.rs`, `prayer/cities.rs`, `src-tauri/src/prayer.rs`, `PrayerCard.svelte`, `PrayerPage.svelte`. #296/#305/#318.
-- **Warna badge dan tema yang mengikuti pengaturan.** `lib/tokens.ts`, `session-cards.ts`, `AppearancePage.svelte`. #391.
-- **Tiga tab muzik, visualizer spektrum, dan floating lirik sub-notch dengan empat preset.** README kita `:31-73`; tidak ada di upstream. Preset: `pureText`, `capsule`, `frostedGlass`, `neonHud`.
-- **Git graph interaktif dan workspace diff.** README kita `:67-70`; upstream hanya menyebut branch/worktree di kartu.
-- **Perbaikan privasi idle dot.** Ikon hijau diganti `chevron.down`/`terminal` agar tidak menyerupai indikator kamera macOS. README kita `:72-73`.
+- **Session discovery from running processes.** 13 readers: `ClaudeTranscripts`, `OpenCodeStore`, `CodexRollouts`, `ClineStore`, `CursorTranscripts`, `GeminiChats`, `KimiSessions`, `KiroSessions`, `CopilotSessions`, `GrokSessions`, and three `FlatStore` instances (qoder, codebuddy, droid). Evidence: `morrow-core/src/discovery.rs`, `src-tauri/src/discovery.rs`, `src-tauri/src/feed.rs::scan_stores`. Upstream only saw sessions through hooks.
+- **Backfill on attach.** Sessions already running appear before the first hook arrives. Evidence: `feed.rs::backfill_with`, `morrow-core/src/session_store.rs`, #261 and #339.
+- **Markdown replies folded into one card line.** `morrow-core/src/markdown_preview.rs::{plain, preview_source, segments, code_summary}`, used by `MarkdownReply.svelte`.
+- **Follow-up reminders.** `morrow-core/src/follow_up.rs`, `src-tauri/src/reminders.rs::ReminderBook`, `lib/reminders.ts`.
+- **Prayer times and offline city data.** `morrow-core/src/prayer.rs`, `prayer/cities.rs`, `src-tauri/src/prayer.rs`, `PrayerCard.svelte`, `PrayerPage.svelte`. #296, #305, #318.
+- **Badge colors and theme following settings.** `lib/tokens.ts`, `session-cards.ts`, `AppearancePage.svelte`. #391.
+- **Three music tabs, a spectrum visualizer, and sub-notch floating lyrics with four presets.** Our README `:31-73`; absent upstream. Presets: `pureText`, `capsule`, `frostedGlass`, `neonHud`.
+- **Interactive Git graph and workspace diff.** Our README `:67-70`; upstream only mentions branch and worktree on a card.
+- **Idle indicator privacy fix.** The green dot was replaced with `chevron.down` and a `terminal` badge so it cannot be mistaken for the macOS camera indicator. Our README `:72-73`.
 
-### Pustaka saja, belum dipakai UI
+### Library only, not used by the UI
 
-- Push: `morrow-core/src/push.rs`, `push_policy.rs`, `push_transport.rs`, `push_channel.rs`. Tidak ada command `push` di `src-tauri/src/main.rs`. #350/#358/#363.
-- Kuota Claude: `morrow-core/src/quota.rs`, `morrow-platform/src/quota.rs`. Kartu kuota yang terlihat masih di sisi Swift (`ClaudeQuotaMonitor.swift`). #297/#306.
+- Push: `morrow-core/src/push.rs`, `push_policy.rs`, `push_transport.rs`, `push_channel.rs`. There is no `push` command in `src-tauri/src/main.rs`. #350, #358, #363.
+- Claude quota: `morrow-core/src/quota.rs`, `morrow-platform/src/quota.rs`. The visible quota card is still Swift side (`ClaudeQuotaMonitor.swift`). #297, #306.
 
-Ini bukan fitur yang sudah bisa dipakai di Linux/Windows. Bedakan dari yang "terpasang" di atas.
+None of these are usable on Linux or Windows yet. Keep them separate from the wired features above.
 
-## Yang dihapus atau tidak lagi ditampilkan
+## Removed or no longer displayed
 
-| Item | Bukti |
+| Item | Evidence |
 |---|---|
-| Bagian Star history | Upstream `:384-392`. Grafiknya memakai `star-history.dera.page`, yang mengembalikan 404 untuk repo kita. Penghapusannya ada di PR #406. |
-| Switch bahasa `English | 简体中文` dan tautan `README.zh-CN.md` | Upstream `:27`; tidak ada di README kita. Catatan: teks Highlight kita masih menyebut 7 bahasa UI. |
-| Badge Downloads dan App Store Buddy di baris atas | Upstream `:13,15`; tidak di badge kita. Fitur Buddy sendiri masih didokumentasikan. |
-| Tautan "How it works" di nav | Upstream `:24`; bagiannya tetap ada di README kita `:351`. |
-| Bagian Contributing | Ditambahkan di fork, README kita `:433`; upstream tidak punya. |
+| Star history section | Upstream `:384-392`. Its chart uses `star-history.dera.page`, which returns 404 for this repo. Removal is in PR #406. |
+| Language switcher `English | 简体中文` and the `README.zh-CN.md` link | Upstream `:27`; absent from our README. Our Highlights text still claims 7 UI languages. |
+| Downloads badge and App Store Buddy badge | Upstream `:13,15`; absent from our badge row. Buddy itself is still documented. |
+| "How it works" navigation link | Upstream `:24`; the section still exists in our README `:351`. |
+| Contributing section | Added in this fork, our README `:433`; upstream has none. |
 
-## Kesiapan platform
+## Platform readiness
 
-Linux dan Windows masih **eksperimental**. Kode ter-compile dan test Rust lolos, tetapi gate host belum jalan: E2E-1/E2E-2, L-001…L-012, dan W-001…W-009. Rincian dan perintah build ada di `docs/build-windows-linux.md` (PR #406). Utangnya tercatat di #399, #400, #401, #402.
+Linux and Windows remain **experimental**. Code compiles and Rust tests pass, but host gates have not run: E2E-1, E2E-2, L-001 through L-012, and W-001 through W-009. Build commands and limits are in `docs/build-windows-linux.md` (PR #406). The debt is tracked in #399, #400, #401, and #402.
 
-Jangan membaca keberadaan modul Rust sebagai "sudah setara dengan macOS". `morrow-watch` misalnya baru ter-compile untuk Linux/Windows dan belum pernah memantau direktori nyata di OS itu.
+Do not read the presence of a Rust module as parity with macOS. `morrow-watch`, for example, compiles for Linux and Windows but has never watched a real directory on either OS.
 
-## Cara memverifikasi daftar ini
+## How to verify this list
 
 ```sh
 grep -n '^## ' README.md
