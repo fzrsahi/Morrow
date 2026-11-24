@@ -10,9 +10,9 @@
 //! Three behaviours worth stating, because each exists to fix something that looked
 //! wrong on a card:
 //!
-//! - **The status is whatever the caller says it is.** The daemon's event name does not
-//!   decide `waitingApproval` — the watch client does, from the socket's own state. This
-//!   fold only sets the fields beside it.
+//! - **The event name decides the status.** `AiWorkStatusMapper.status(forEventName:)`
+//!   maps the nine event families to the Swift `AgentStatus`; a caller-supplied status
+//!   is only a fallback for names the mapper does not recognise.
 //! - **Text deltas accumulate.** Putting each fragment into `toolDescription` looks like
 //!   noise and re-triggers the blur on every token, so fragments merge into
 //!   `lastAssistantMessage` (last 800 characters) and the row shows a 160-character
@@ -205,18 +205,49 @@ pub fn user_prompt(data: Option<&Value>) -> Option<String> {
     None
 }
 
+/// `AiWorkStatusMapper.status(forEventName:)` in `AiWorkWatchClient.swift`.
+/// `None` for an event that must not change status (a diagnostic, say).
+pub fn status_for_event_name(name: &str) -> Option<AgentStatus> {
+    match name {
+        "stream.approval_required" | "stream.plan_confirmation_required" => {
+            Some(AgentStatus::WaitingApproval)
+        }
+        "stream.question_required" => Some(AgentStatus::WaitingQuestion),
+        "stream.tool_call" => Some(AgentStatus::Running),
+        "stream.tool_result"
+        | "stream.approval_resolved"
+        | "stream.plan_confirmation_resolved"
+        | "stream.question_resolved"
+        | "stream.started"
+        | "stream.progress"
+        | "stream.thinking_delta"
+        | "stream.text_delta"
+        | "stream.ack"
+        | "stream.fallback_started" => Some(AgentStatus::Processing),
+        "stream.completed" | "stream.failed" | "stream.aborted" => Some(AgentStatus::Idle),
+        _ => None,
+    }
+}
+
+/// `AiWorkStatusMapper.isTerminalEvent(_:)`: which events enqueue a completion card.
+pub fn is_terminal_event(name: &str) -> bool {
+    matches!(
+        name,
+        "stream.completed" | "stream.failed" | "stream.aborted"
+    )
+}
+
 /// Fold one stream event into `snapshot`.
 ///
-/// `status` is the caller's: the watch client derives it from the socket's own state, and
-/// the event name never overrides it except for `stream.tool_result`, which marks
-/// completion by dropping back to `processing`.
+/// The event name wins through `status_for_event_name`; `status` is the caller's
+/// fallback for an event the mapper does not recognise.
 pub fn apply_stream_event(
     snapshot: &mut SessionSnapshot,
     event_name: &str,
     data: Option<&Value>,
     status: AgentStatus,
 ) {
-    snapshot.status = status;
+    snapshot.status = status_for_event_name(event_name).unwrap_or(status);
     match event_name {
         "stream.started" => {
             // Mirror Claude's UserPromptSubmit: keep the user turn in recentMessages so
@@ -448,6 +479,39 @@ mod tests {
     }
 
     #[test]
+    fn the_status_mapper_matches_swifts_nine_event_families() {
+        for (event, expected) in [
+            (
+                "stream.approval_required",
+                Some(AgentStatus::WaitingApproval),
+            ),
+            (
+                "stream.plan_confirmation_required",
+                Some(AgentStatus::WaitingApproval),
+            ),
+            (
+                "stream.question_required",
+                Some(AgentStatus::WaitingQuestion),
+            ),
+            ("stream.tool_call", Some(AgentStatus::Running)),
+            ("stream.tool_result", Some(AgentStatus::Processing)),
+            ("stream.approval_resolved", Some(AgentStatus::Processing)),
+            ("stream.text_delta", Some(AgentStatus::Processing)),
+            ("stream.fallback_started", Some(AgentStatus::Processing)),
+            ("stream.completed", Some(AgentStatus::Idle)),
+            ("stream.failed", Some(AgentStatus::Idle)),
+            ("stream.aborted", Some(AgentStatus::Idle)),
+            ("stream.diagnostic", None),
+        ] {
+            assert_eq!(status_for_event_name(event), expected, "{event}");
+        }
+        for event in ["stream.completed", "stream.failed", "stream.aborted"] {
+            assert!(is_terminal_event(event));
+        }
+        assert!(!is_terminal_event("stream.tool_result"));
+    }
+
+    #[test]
     fn a_started_stream_carries_the_prompt_and_clears_the_previous_turn() {
         let mut s = snapshot();
         s.last_assistant_message = Some("old answer".to_owned());
@@ -457,9 +521,11 @@ mod tests {
             &mut s,
             "stream.started",
             Some(&json!({"display_text": "  fix the flaky test  "})),
+            // Deliberately wrong: the Swift mapper says `stream.started` is
+            // `processing`, so the event name must win over the caller.
             AgentStatus::Running,
         );
-        assert_eq!(s.status, AgentStatus::Running);
+        assert_eq!(s.status, AgentStatus::Processing);
         assert_eq!(s.last_user_prompt.as_deref(), Some("fix the flaky test"));
         assert_eq!(s.last_assistant_message, None);
         assert_eq!(s.current_tool(), None);
