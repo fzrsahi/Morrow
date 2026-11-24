@@ -838,3 +838,52 @@ fn dsh_is_a_row_and_nothing_more() {
     let after: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
     assert_eq!(before.len(), after.len(), "nothing written");
 }
+
+/// #234 batch 4b: OpenClaw's plugin file alone is not an install — the gateway only
+/// loads what its config names, so the row must require both.
+#[test]
+fn openclaw_registers_the_plugin_and_reports_both_halves() {
+    let home = Home::new("openclaw");
+    let paths = home.paths();
+    cli_dir(&home, ".openclaw");
+    let config = home.root.join(".openclaw/openclaw.json");
+    home.write(&config, "{\n  \"gateway\": { \"port\": 18789 }\n}\n");
+
+    hooks::install_target(&paths, "openclaw", STAMP)
+        .expect("install")
+        .expect("a report");
+
+    let registered = home.read(&config);
+    assert!(registered.contains("codeisland-plugin"), "{registered}");
+    assert!(registered.contains("\"enabled\": true"), "{registered}");
+    // Their own settings are still there.
+    assert!(registered.contains("18789"), "{registered}");
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "openclaw")
+            .expect("an openclaw row")
+            .installed
+    );
+
+    // Uninstall takes the registration out and leaves the gateway settings.
+    hooks::uninstall_target(&paths, "openclaw").expect("uninstall");
+    let back = home.read(&config);
+    assert!(!back.contains("codeisland-plugin"), "{back}");
+    assert!(back.contains("18789"), "{back}");
+}
+
+/// `openclaw.json` is JSON5. A config we cannot parse is one we leave alone: the
+/// plugin files still land, and the row says "absent" rather than lying.
+#[test]
+fn openclaw_refuses_a_config_it_cannot_parse() {
+    let home = Home::new("openclaw-json5");
+    let paths = home.paths();
+    cli_dir(&home, ".openclaw");
+    let config = home.root.join(".openclaw/openclaw.json");
+    let json5 = "{ // my gateway\n  gateway: { port: 18789 },\n}\n";
+    home.write(&config, json5);
+
+    assert!(hooks::install_target(&paths, "openclaw", STAMP).is_err());
+    assert_eq!(home.read(&config), json5, "their bytes are untouched");
+}

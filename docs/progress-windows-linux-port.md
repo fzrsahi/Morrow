@@ -1,9 +1,6 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
-**Checkpoint terakhir:** 2026-11-22 (kedelapan) — empat belas slice remediasi (#249–#271). #246, #247, #248 selesai; dua reader terdaftar; sisa #232 adalah #244 dan jalur process-first untuk Cursor/Gemini. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
-**Checkpoint terakhir:** 2026-11-22 — audit #240 dan dua slice remediasi pertama. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan delapan sub-issue #240.
-**Checkpoint terakhir:** 2026-11-22 (kesepuluh) — delapan belas slice remediasi (#249–#277). #246, #247, #248 selesai penuh; **lima reader terdaftar** (Claude, Codex, OpenCode, Cursor, Gemini); sisa #232 adalah #244 batch 2. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 **Checkpoint terakhir:** 2026-11-22 (keduabelas) — dua puluh empat slice remediasi (#249–#287). #232 tertutup kecuali gate hardware: **tiga belas reader**, cache scan tersambung, dan observer peristiwa ada (kedua lengan platform belum pernah berjalan). Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
 
 **Checkpoint terakhir:** 2026-11-22 — audit #240 dan dua slice remediasi pertama. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan delapan sub-issue #240.
@@ -140,7 +137,6 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 
 ## Log Checkpoint
 
-
 ### 2026-11-22 (keduabelas) — #232 ditutup, kecuali yang tidak bisa dijalankan
 
 - **Sudah:** **#284 → PR #285** cache scan tersambung + gerbang kesegaran. **#286 → PR #287** crate `morrow-watch` (inotify, `ReadDirectoryChangesW`, fallback poll) dan penyambungannya ke tick.
@@ -160,6 +156,7 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 - **Bukti:** `cargo test --workspace` 843 lulus (792 sebelum batch 2); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
 - **Berikutnya:** menyambungkan `ScanCache` (#263) ke reader — satu-satunya AC yang masih saya tandai "sebagian", dan sekarang penghalang utama biaya scan.
 - **Blocker:** gate hardware tidak berubah.
+
 ### 2026-11-22 (kesepuluh) — Cursor dan Gemini, dari prosesnya
 
 - **Sudah:** **#276 → PR #277** `scan::ProcessReader` + `scan::run_all`, dan dua reader process-first. Direktori store Cursor **diturunkan** dari cwd (`appProjectDirEncoded`, sudah ada sejak #256); Gemini **dipetakan** lewat `~/.gemini/projects.json` (folder-nya hash yang tidak didokumentasikan), dengan `.project_root` sebagai cadangan. Keduanya memberi sesuatu yang store-first tidak punya: **pid datang bersama sesinya**, tanpa korelasi.
@@ -208,7 +205,6 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 
 ### 2026-11-22 (kelima) — store SQLite, dan guard yang ternyata mati
 
-
 - **Sudah:** **#247c → PR #257** `morrow-core::sqlite` (buka read-only, fallback `immutable`, `table_columns` dengan nama tabel yang ditolak kecuali identifier polos, `non_empty_text`) dan `discovery::opencode` (sesi terbaru untuk sebuah cwd lewat `directory` **atau** `path.cwd` di pesan setelah `/cd`, `root_sessions_only` untuk sesi subagent MiMo, model dari pesan terbaru, tiga turn teks terakhir). Dependensi baru: `rusqlite` dengan feature `bundled`.
 - **Bug yang ditemukan:** guard `SQLITE_CANTOPEN` yang saya tulis pertama **tidak pernah terpicu** — SQLite di mesin ini melaporkan `SQLITE_IOERR` untuk keadaan yang sama, dan untuk WAL yang ditutup bersih tanpa sidecar ia bahkan tidak gagal. Fallback sekarang dipicu kegagalan probe apa pun. Selain itu SQL saya sendiri menghasilkan `WHERE AND (…)` saat kedua filter opsional kosong; statement gagal prepare dan `None` dikembalikan — yang terlihat persis seperti "tidak ada agen berjalan".
 - **Tidak dikerjakan:** AC "walk direktori punya batas kedalaman" **tidak punya padanan di Swift** — `Discovery/` hanya me-list satu direktori, tidak pernah rekursif. Walk rekursif di sini akan jadi port dari tidak-apa-apa; AC-nya perlu ditulis ulang.
@@ -230,6 +226,7 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 - **Bukti:** `cargo test --workspace` 666 lulus (647 sebelum dua slice ini); `cargo test -p morrow-core --lib config_roots` 7 lulus; `swift test --filter DiscoveryFixtureExporter` lulus (fixture di disk memang keluaran Swift); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11 (installer tetap byte-for-byte).
 - **Berikutnya:** #247b (`ConfigPathIdentity`: `realpath`, symlink, `writeTarget`), #247c (walk + `SQLiteReader`), #247d (tangga `resolve` sebagai perubahan perilaku installer), lalu #246 (`AgentProcessFinder`), #248 (policy + backfill), #244.
 - **Blocker:** sama seperti sebelumnya — dan `CLAUDE_CONFIG_DIR` yang berupa symlink masih bisa membuat penulisan mengganti link itu dengan file biasa sampai #247b mendarat.
+
 ### 2026-11-23 (revisi review #253) — gate kini bisa gagal, dan jalan di checkout bersih
 
 - **Sudah:** menanggapi `CHANGES_REQUESTED` fzrsahi di #253. (1) Efek tool sekarang berupa **file marker per-run**: prompt memuat path (`__MARKER_FILE__`), approve memeriksa isi file itu, deny memeriksa ketiadaannya — bukan lagi `grep` pada pane yang menggemaikan prompt; `pipe-pane` dipasang sebelum `send-keys`, dan pengecekan efek dilakukan setelah kartu hilang. (2) `--self-check` tidak lagi memanggil `x11_binaries`/`x11_workdir`: tidak butuh frontend, display, socket, atau bridge. (3) `windows/ci/e2e2.ps1` jujur: "ditulis tetapi belum pernah dijalankan di host Windows", default biner rilis, `try/finally` membersihkan `%TEMP%\e2e2-*`, dan `PASS`-nya hanya untuk separuh installer. (4) Baris papan diperbaiki ke #253; AC jalan nyata di #98/#108 dinyatakan masih terbuka di Merge Danger.
