@@ -177,16 +177,13 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
-<<<<<<< HEAD
             prayer::prayer_settings_load,
             prayer::prayer_settings_set,
             prayer::prayer_cities,
             prayer::prayer_next,
             prayer::prayer_tick,
-=======
             sound::sound_cues,
             sound::sound_preview,
->>>>>>> origin/main
             settings_window::open_settings,
             peek_window::close_peek,
             music::music_track,

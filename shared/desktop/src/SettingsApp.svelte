@@ -8,11 +8,8 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
-<<<<<<< HEAD
   import PrayerPage from './lib/components/PrayerPage.svelte';
-=======
   import BehaviorPage from './lib/components/BehaviorPage.svelte';
->>>>>>> origin/main
   import AboutPage from './lib/components/AboutPage.svelte';
   import SoundPage from './lib/components/SoundPage.svelte';
   import {
@@ -57,13 +54,10 @@
   let capabilities = $state<CapabilityRow[]>([]);
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
-<<<<<<< HEAD
   let prayer = $state<PrayerSettings>({ ...DEFAULT_PRAYER_SETTINGS });
   let cities = $state<PrayerCity[]>([]);
-=======
   let cues = $state<SoundCue[]>([]);
   let followUpMinutes = $state(1);
->>>>>>> origin/main
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -75,34 +69,25 @@
 
   async function load() {
     try {
-<<<<<<< HEAD
       const [h, c, a, stored, availableCities] = await Promise.all([
-=======
       const [h, c, a, stored, sound] = await Promise.all([
->>>>>>> origin/main
         invoke<HooksSnapshot>('hooks_status'),
         invoke<CapabilityRow[]>('capabilities'),
         invoke<AutostartStatus>('autostart_status'),
         invoke<unknown>('settings_load'),
-<<<<<<< HEAD
         invoke<PrayerCity[]>('prayer_cities'),
-=======
         invoke<SoundCue[]>('sound_cues'),
->>>>>>> origin/main
       ]);
       hooks = h;
       capabilities = c;
       autostart = a;
       cues = sound;
       appearance = appearanceFromSettings(stored);
-<<<<<<< HEAD
       prayer = prayerSettingsFromSettings(stored);
       cities = availableCities;
-=======
       followUpMinutes = followUpMinutesFromSettings(
         (stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
       );
->>>>>>> origin/main
       applyAppearance();
       error = null;
     } catch (cause) {
@@ -199,17 +184,14 @@
         />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} />
-<<<<<<< HEAD
       {:else if page === 'prayer'}
         <PrayerPage
           settings={prayer}
           {cities}
           onChange={(key, value) => run(() => invoke('prayer_settings_set', { key, value }))}
         />
-=======
       {:else if page === 'behavior'}
         <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
->>>>>>> origin/main
       {:else if page === 'about'}
         <AboutPage />
       {/if}

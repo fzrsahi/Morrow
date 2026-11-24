@@ -954,17 +954,14 @@
       const appearance = appearanceFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
-<<<<<<< HEAD
       // City/method/correction changes invalidate the card's schedule.
       void readPrayer();
-=======
       reminders.configure(
         followUpMinutesFromSettings(
           (event.payload as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
         ),
         performance.now(),
       );
->>>>>>> origin/main
     })
       .then((off) => (unlisten = off))
       .catch(() => {});
