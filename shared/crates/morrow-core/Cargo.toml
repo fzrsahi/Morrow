@@ -10,7 +10,9 @@ publish.workspace = true
 
 # Core (GLOSSARY.md): no OS crate. scripts/ci/rust-purity.sh checks it.
 [dependencies]
+md-5.workspace = true
 regex.workspace = true
+rusqlite.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
 

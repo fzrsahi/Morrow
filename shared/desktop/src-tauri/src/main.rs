@@ -3,7 +3,9 @@
 //! tight-fit, nonactivating panel, which answers permission requests.
 
 mod adapters;
+mod cli;
 mod completion;
+mod discovery;
 mod feed;
 mod hooks;
 mod hotkey;
@@ -13,6 +15,7 @@ mod music;
 mod peek_window;
 mod permissions;
 mod position;
+mod prayer;
 mod prune;
 mod sessions;
 mod settings;
@@ -92,6 +95,12 @@ fn session_dismiss(feed: State<'_, Arc<Feed>>, session_id: String) {
 }
 
 fn main() -> ExitCode {
+    // #243: `--hooks …` is the installer without the GUI, for a gate script and
+    // for anyone who would rather not click. Anything else starts the island.
+    if let Some(code) = cli::run(&std::env::args().collect::<Vec<_>>()) {
+        return code;
+    }
+
     let smoke = std::env::var("MORROW_SMOKE").is_ok_and(|v| v == "1");
 
     let endpoint = current_endpoint();
@@ -115,6 +124,9 @@ fn main() -> ExitCode {
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
     Feed::spawn_pruner(Arc::clone(&feed));
+    // #248: the discovery tick — a visible, unlocked panel looks for sessions the
+    // hooks have not announced yet. A hidden or locked one does not.
+    Feed::spawn_discovery(Arc::clone(&feed));
     Feed::spawn_pusher(Arc::clone(&feed), move |sessions, cards| {
         if smoke {
             println!("morrow-smoke: pushed sessions={sessions} cards={cards}");
@@ -136,6 +148,7 @@ fn main() -> ExitCode {
         .manage(hooks_site)
         .manage(Smoke(smoke))
         .manage(position)
+        .manage(prayer::PrayerWakeState::new())
         .invoke_handler(tauri::generate_handler![
             subscribe,
             set_probes_active,
@@ -168,6 +181,11 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            prayer::prayer_settings_load,
+            prayer::prayer_settings_set,
+            prayer::prayer_cities,
+            prayer::prayer_next,
+            prayer::prayer_tick,
             sound::sound_cues,
             sound::sound_preview,
             settings_window::open_settings,

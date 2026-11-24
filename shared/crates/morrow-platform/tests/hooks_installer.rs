@@ -276,6 +276,114 @@ fn cli_dir(home: &Home, name: &str) {
     fs::create_dir_all(home.root.join(name)).expect("cli dir");
 }
 
+/// The second table: `CLI_DIRS` says which directory proves a CLI is present. A
+/// source missing from it is treated as **always present** (`is_none_or`), so
+/// Settings would claim a CLI the user has never installed is detected, and an
+/// install would create its config directory out of nothing.
+///
+/// This is the test that keeps the two tables in step, because they are two tables
+/// and nothing else does.
+#[test]
+fn no_target_claims_to_be_detected_on_a_home_with_no_clis() {
+    let home = Home::new("no-clis-at-all");
+    for row in hooks::targets_status(&home.paths()) {
+        assert!(
+            !row.detected,
+            "{} claims to be detected on an empty home, so its CLI_DIRS row is missing",
+            row.source
+        );
+    }
+}
+
+/// #234 batch 2: Grok's target is only "detected" when its root exists, because
+/// there is no fixed directory beside the home to look for. A machine with no
+/// Grok must not get a `~/.grok` created by an install.
+#[test]
+fn grok_is_detected_by_its_root_not_by_a_home_directory() {
+    let home = Home::new("grok-absent");
+    let status = hooks::targets_status(&home.paths());
+    let grok = status
+        .iter()
+        .find(|row| row.source == "grok")
+        .expect("grok");
+    assert!(!grok.detected, "no grok on this machine");
+    // Its path is shown as the default root rather than a home directory.
+    assert!(
+        grok.path.ends_with("hooks/codeisland.json"),
+        "{:?}",
+        grok.path
+    );
+    assert!(!grok.installed);
+}
+
+/// #292: one product, two config layouts. The old CLI writes
+/// `~/.trae/traecli.yaml`; Next writes `~/.trae/cli/hooks.json`. Detecting Next
+/// from `~/.trae` alone would claim it is installed on a machine that only has
+/// the old CLI, and an install would create a config file under a CLI that is
+/// not there.
+#[test]
+fn trae_cli_next_is_detected_by_its_own_cli_directory() {
+    let home = Home::new("trae-two-layouts");
+    let status = |source: &str| {
+        hooks::targets_status(&home.paths())
+            .into_iter()
+            .find(|row| row.source == source)
+            .expect(source)
+    };
+
+    // Only the old CLI is present: its marker is `~/.trae/traecli.yaml`.
+    cli_dir(&home, ".trae");
+    home.write(&home.root.join(".trae/traecli.yaml"), "hooks: {}\n");
+    assert!(
+        !status("traecli-next").detected,
+        "the old CLI's directory is not Next's"
+    );
+    assert_eq!(
+        hooks::install_target(&home.paths(), "traecli-next", STAMP).expect("install"),
+        None,
+        "install must skip a CLI that is not here"
+    );
+    assert!(!home.root.join(".trae/cli").exists());
+
+    // Both are present: Next gets its own directory and its own file.
+    cli_dir(&home, ".trae/cli");
+    assert!(status("traecli-next").detected, "both CLIs are installed");
+    let next = status("traecli-next");
+    assert_eq!(next.path, home.root.join(".trae/cli/hooks.json"));
+    assert!(!next.installed);
+}
+
+/// #234 batch 1, end to end through the file system: install, repair, uninstall,
+/// and the user's own keys untouched — for a fork added only as a table row.
+#[test]
+fn a_new_claude_fork_installs_uninstalls_and_leaves_the_user_alone() {
+    let home = Home::new("qwen-round-trip");
+    let paths = home.paths();
+    cli_dir(&home, ".qwen");
+    let settings = home.root.join(".qwen/settings.json");
+    let original = "{\n  \"theme\": \"dark\",\n  \"model\": \"qwen3-coder\"\n}\n";
+    home.write(&settings, original);
+
+    hooks::install_target(&paths, "qwen", STAMP)
+        .expect("install")
+        .expect("a report");
+    let text = home.read(&settings);
+    assert!(text.contains("\"theme\": \"dark\""), "{text}");
+    assert!(text.contains("--source qwen"), "{text}");
+    assert!(text.contains("\"timeout\": 5000"), "milliseconds: {text}");
+
+    // A second install changes nothing.
+    let again = hooks::install_target(&paths, "qwen", STAMP)
+        .expect("reinstall")
+        .expect("a report");
+    assert!(!again.settings_changed);
+    assert_eq!(home.read(&settings), text);
+
+    // Uninstall gives the original bytes back, not an empty object.
+    hooks::uninstall_target(&paths, "qwen").expect("uninstall");
+    assert_eq!(home.read(&settings), original);
+}
+
 #[test]
 fn a_target_without_its_cli_is_left_alone() {
     let home = Home::new("target-absent");
@@ -426,4 +534,307 @@ fn a_codex_config_the_editor_will_not_touch_is_an_error() {
     let error = hooks::install_target(&paths, "codex", STAMP).expect_err("refuses");
     assert!(matches!(error, Error::UnparseableSettings(_)), "{error}");
     assert_eq!(home.read(&config), unsafe_layout, "left as it was");
+}
+
+// MARK: - #234 batch 3b: the two whose file is not one key
+
+/// ZCode wraps its events one level deeper than every other target, beside a switch
+/// the user owns. Writing the events at the top level would be a file ZCode ignores.
+#[test]
+fn zcode_keeps_its_wrapper_and_the_users_switch() {
+    let home = Home::new("zcode");
+    let paths = home.paths();
+    cli_dir(&home, ".zcode");
+    let config = home.root.join(".zcode/cli/config.json");
+    let original = "{\n  \"theme\": \"dark\",\n  \"hooks\": {\n    \"enabled\": false\n  }\n}\n";
+    home.write(&config, original);
+
+    let report = hooks::install_target(&paths, "zcode", STAMP)
+        .expect("install")
+        .expect("a report");
+    assert!(report.settings_changed);
+
+    let text = home.read(&config);
+    // Nested, not top-level.
+    assert!(text.contains("\"events\""), "{text}");
+    assert!(text.contains("--source zcode"), "{text}");
+    // The long timeout exists only where it beats ZCode's own 60 s default.
+    assert!(text.contains("86400"), "{text}");
+    // And the user's explicit `false` was not flipped on behind their back.
+    assert!(text.contains("\"enabled\": false"), "{text}");
+    assert!(text.contains("\"theme\": \"dark\""));
+
+    // Installed, and a second run changes nothing.
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "zcode")
+            .expect("a zcode row")
+            .installed
+    );
+    let again = hooks::install_target(&paths, "zcode", STAMP)
+        .expect("reinstall")
+        .expect("a report");
+    assert!(!again.settings_changed);
+    assert_eq!(home.read(&config), text);
+
+    // Uninstall leaves no scaffolding, and their switch is still theirs.
+    hooks::uninstall_target(&paths, "zcode").expect("uninstall");
+    let back = home.read(&config);
+    assert!(!back.contains("codeisland"), "{back}");
+    assert!(back.contains("\"enabled\": false"), "{back}");
+}
+
+/// MiniMax loads hooks only from a plugin pack: two files, not one key.
+#[test]
+fn minimax_writes_a_plugin_pack_and_refuses_a_foreign_one() {
+    let home = Home::new("minimax");
+    let paths = home.paths();
+    cli_dir(&home, ".minimax");
+    let plugin = home.root.join(".minimax/plugins/morrow");
+
+    hooks::install_target(&paths, "minimax", STAMP)
+        .expect("install")
+        .expect("a report");
+    let manifest = home.read(&plugin.join(".claude-plugin/plugin.json"));
+    let hooks_json = home.read(&plugin.join("hooks/hooks.json"));
+    assert!(
+        manifest.contains("Morrow MiniMax Code plugin"),
+        "{manifest}"
+    );
+    assert!(manifest.contains("\"hooks\""), "{manifest}");
+    assert!(hooks_json.contains("--source minimax"), "{hooks_json}");
+    // mcode's ceiling is ten seconds; a day-long timeout voids the handler.
+    assert!(hooks_json.contains("\"timeout\": 10"), "{hooks_json}");
+    assert!(!hooks_json.contains("86400"), "{hooks_json}");
+
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "minimax")
+            .expect("a minimax row")
+            .installed
+    );
+
+    // The pack is entirely ours, so uninstall removes the directory.
+    hooks::uninstall_target(&paths, "minimax").expect("uninstall");
+    assert!(!plugin.exists(), "the pack should be gone");
+
+    // A plugin somebody else put at the same path is not ours to overwrite.
+    home.write(
+        &plugin.join(".claude-plugin/plugin.json"),
+        "{\"name\":\"morrow\",\"description\":\"someone else\"}",
+    );
+    let refused = hooks::install_target(&paths, "minimax", STAMP);
+    assert!(refused.is_err(), "a foreign manifest must be refused");
+    assert!(
+        home.read(&plugin.join(".claude-plugin/plugin.json"))
+            .contains("someone else")
+    );
+}
+
+/// #234 batch 4: Cline is a directory of scripts, not a file with a key. Uninstall
+/// must not touch a hook the user wrote for the same event.
+#[test]
+fn cline_writes_eight_scripts_and_only_removes_its_own() {
+    let home = Home::new("cline");
+    let paths = home.paths();
+    fs::create_dir_all(home.root.join("Documents/Cline")).expect("cline");
+
+    let report = hooks::install_target(&paths, "cline", STAMP)
+        .expect("install")
+        .expect("a report");
+    assert!(report.settings_changed);
+
+    let hooks = home.root.join("Documents/Cline/Hooks");
+    for event in ["UserPromptSubmit", "TaskStart", "TaskComplete"] {
+        let script = home.read(&hooks.join(event));
+        assert!(script.contains("--source cline"), "{event}: {script}");
+        assert!(script.contains(r#"printf '{"cancel":false}'"#), "{event}");
+        // Cline blocks on the hook, so the answer must not wait for the bridge.
+        assert!(
+            script.contains('&'),
+            "{event}: the bridge must be backgrounded"
+        );
+    }
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "cline")
+            .expect("a cline row")
+            .installed
+    );
+
+    // The user's own hook for one of the same events stays.
+    home.write(&hooks.join("PreToolUse"), "#!/bin/bash\nexit 0\n");
+    hooks::uninstall_target(&paths, "cline").expect("uninstall");
+    assert_eq!(
+        home.read(&hooks.join("PreToolUse")),
+        "#!/bin/bash\nexit 0\n",
+        "a hook we did not write is not ours to delete"
+    );
+    assert!(!hooks.join("TaskStart").exists());
+}
+
+/// Cline is not "detected" just because we could create its folder.
+#[test]
+fn cline_is_not_detected_on_a_machine_without_it() {
+    let home = Home::new("cline-absent");
+    let status = hooks::targets_status(&home.paths());
+    let cline = status
+        .iter()
+        .find(|row| row.source == "cline")
+        .expect("a row");
+    assert!(!cline.detected);
+    assert!(
+        !home.root.join("Documents/Cline").exists(),
+        "nothing created"
+    );
+}
+
+/// #234 batch 5: MiMo is OpenCode's plugin re-labelled. An artefact that lost its
+/// source line must be refused, not shipped as OpenCode's own file under MiMo's name.
+#[test]
+fn mimo_writes_the_relabelled_plugin_and_nothing_else() {
+    let home = Home::new("mimo");
+    let paths = home.paths();
+    fs::create_dir_all(home.root.join(".config/mimocode")).expect("mimo");
+    let plugin = home.root.join(".config/mimocode/plugins/morrow.js");
+
+    hooks::install_target(&paths, "mimo", STAMP).expect("install");
+    let text = home.read(&plugin);
+    assert!(text.contains(r#"const SOURCE = "mimo";"#), "re-labelled");
+    assert!(!text.contains(r#"const SOURCE = "opencode";"#));
+    // The rest of the plugin is OpenCode's, untouched: one line changes.
+    assert!(
+        text.len() > 1_000,
+        "the whole plugin is written, not a stub"
+    );
+
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "mimo")
+            .expect("a mimo row")
+            .installed
+    );
+
+    // Idempotent, then gone.
+    let again = hooks::install_target(&paths, "mimo", STAMP)
+        .expect("reinstall")
+        .expect("a report");
+    assert!(!again.settings_changed);
+    hooks::uninstall_target(&paths, "mimo").expect("uninstall");
+    assert!(!plugin.exists());
+}
+
+/// AiWork has no hooks at all: the row is the feature, and an install writes nothing.
+#[test]
+fn aiwork_installs_nothing_because_it_has_no_hooks() {
+    let home = Home::new("aiwork");
+    let paths = home.paths();
+    let status = hooks::targets_status(&paths);
+    let row = status
+        .iter()
+        .find(|row| row.source == "aiwork")
+        .expect("an aiwork row");
+    assert!(!row.detected);
+
+    // Installing on a machine without AiWork is a no-op, and it writes nothing.
+    let before: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    hooks::install_target(&paths, "aiwork", STAMP).expect("no-op");
+    let after: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    assert_eq!(before.len(), after.len(), "nothing created");
+    // And there is nothing to take back out.
+    assert!(
+        hooks::uninstall_target(&paths, "aiwork")
+            .expect("no-op")
+            .is_none()
+    );
+}
+
+/// #234 batch 4b: the three TypeScript extensions all hard-code the **macOS** bridge
+/// path. Shipping one unchanged is a plugin that loads, looks for a binary that is
+/// not there, and reports nothing — while the card says "installed".
+#[test]
+fn an_extension_is_rewritten_for_this_platforms_bridge() {
+    let home = Home::new("pi-extension");
+    let paths = home.paths();
+    cli_dir(&home, ".pi");
+    let extension = home.root.join(".pi/agent/extensions/codeisland.ts");
+
+    hooks::install_target(&paths, "pi", STAMP)
+        .expect("install")
+        .expect("a report");
+    let text = home.read(&extension);
+    assert!(text.len() > 10_000, "the whole extension lands, not a stub");
+    // The *line* is rewritten; the artefact's own prose still names the macOS
+    // binary, and that is fine — a comment cannot be executed.
+    assert!(
+        !text.contains("const BRIDGE_PATH = `${homedir()}/.codeisland/codeisland-bridge`;"),
+        "the bridge line must be gone"
+    );
+    assert!(
+        text.contains(&format!(
+            "const BRIDGE_PATH = \"{}\";",
+            paths.bridge.display()
+        )),
+        "the bridge path must name this platform's binary"
+    );
+    assert!(
+        hooks::targets_status(&paths)
+            .iter()
+            .find(|row| row.source == "pi")
+            .expect("a pi row")
+            .installed
+    );
+
+    // Idempotent, then gone.
+    let again = hooks::install_target(&paths, "pi", STAMP)
+        .expect("reinstall")
+        .expect("a report");
+    assert!(!again.settings_changed);
+    hooks::uninstall_target(&paths, "pi").expect("uninstall");
+    assert!(!extension.exists());
+}
+
+/// A user who put their own `codeisland.ts` there keeps it: neither install
+/// (replacing it) nor uninstall (deleting it) is ours to do (#311).
+#[test]
+fn a_users_own_extension_is_not_ours_to_replace_or_delete() {
+    let home = Home::new("pi-own");
+    let paths = home.paths();
+    cli_dir(&home, ".pi");
+    let extension = home.root.join(".pi/agent/extensions/codeisland.ts");
+    let mine = "// my own extension\nexport {};\n";
+    home.write(&extension, mine);
+
+    let refused = hooks::install_target(&paths, "pi", STAMP);
+    assert!(
+        refused.is_err(),
+        "install must refuse a file we did not write"
+    );
+    assert_eq!(home.read(&extension), mine, "install left it byte for byte");
+
+    hooks::uninstall_target(&paths, "pi").expect("uninstall");
+    assert_eq!(
+        home.read(&extension),
+        mine,
+        "uninstall left it byte for byte"
+    );
+}
+
+/// DSH is bridged by a third-party plugin, so there is nothing to install.
+#[test]
+fn dsh_is_a_row_and_nothing_more() {
+    let home = Home::new("dsh");
+    let paths = home.paths();
+    let before: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    assert!(
+        hooks::install_target(&paths, "dsh", STAMP)
+            .expect("no-op")
+            .is_none()
+    );
+    let after: Vec<_> = fs::read_dir(&home.root).expect("dir").flatten().collect();
+    assert_eq!(before.len(), after.len(), "nothing written");
 }

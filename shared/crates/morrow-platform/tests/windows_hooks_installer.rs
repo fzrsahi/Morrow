@@ -258,3 +258,75 @@ fn uninstalling_with_nothing_installed_is_not_an_error() {
 fn hooks_installed(status: &Status) -> bool {
     status.hooks_installed
 }
+
+// MARK: - #234: the other CLIs' hooks on Windows
+
+/// The `.cmd` is named by more than Claude's entries: every target a fork
+/// installs names the same script. A fork installed on a profile whose Claude
+/// hooks were never installed must still leave the script behind, or its entries
+/// point at a path `cmd.exe` cannot run.
+#[test]
+fn a_target_install_leaves_the_script_even_without_claude_hooks() {
+    let profile = Profile::new("target-script");
+    let paths = profile.paths();
+    profile.write(
+        &profile.0.join(".qwen/settings.json"),
+        "{\n  \"theme\": \"dark\"\n}\n",
+    );
+
+    // No `.claude` install has run.
+    assert!(!paths.script.exists());
+    assert!(hooks::ensure_script(&paths).expect("script"));
+    assert!(paths.script.exists());
+    // Idempotent: a second call writes nothing.
+    assert!(!hooks::ensure_script(&paths).expect("script again"));
+}
+
+/// The command a target's entries carry is Windows-shaped — an absolute path to
+/// the `.cmd`, quoted — not the Unix `.sh` the core table defaults to. Writing
+/// `~/.codeisland/codeisland-hook.sh` here would be a path `cmd.exe` cannot run,
+/// and the install would still report success.
+#[test]
+fn a_target_entry_names_the_cmd_not_the_unix_script() {
+    use morrow_core::installer::targets::target_for;
+    use morrow_platform::hooks::install_target_with;
+
+    let profile = Profile::new("target-command");
+    let paths = profile.paths();
+    let unix_paths = morrow_platform::hooks::Paths::new(&profile.0, None);
+    profile.write(
+        &profile.0.join(".qwen/settings.json"),
+        "{\n  \"theme\": \"dark\"\n}\n",
+    );
+
+    hooks::ensure_script(&paths).expect("script");
+    let report = install_target_with(
+        &unix_paths,
+        "qwen",
+        "2026-11-22T00:00:00Z",
+        &hooks::command(&paths),
+    )
+    .expect("install")
+    .expect("a report");
+    assert!(report.settings_changed);
+
+    let text = profile.read(&profile.0.join(".qwen/settings.json"));
+    assert!(text.contains("morrow-hook.cmd"), "{text}");
+    assert!(
+        !text.contains("codeisland-hook.sh"),
+        "the Unix script must not appear on Windows: {text}"
+    );
+    assert!(
+        text.contains(r#""theme": "dark""#),
+        "the user's key stays: {text}"
+    );
+    // Qwen counts milliseconds, on this platform too.
+    assert!(text.contains(r#""timeout": 5000"#), "{text}");
+
+    // And it is recognised as ours afterwards, by `is_installed`'s own test.
+    assert!(target_for("qwen").is_some());
+    assert!(morrow_core::installer::targets::is_installed(
+        target_for("qwen").expect("qwen"),
+        &text
+    ));
+}

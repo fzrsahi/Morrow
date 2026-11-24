@@ -270,9 +270,10 @@ impl Feature {
             Self::Secrets => Capability::Unsupported(
                 "no secret-store adapter yet: the session bus is not used for secrets".into(),
             ),
-            Self::ClaudeCredentials => Capability::Unsupported(
-                "no credential reader yet: ~/.claude/.credentials.json is not read".into(),
-            ),
+            // #306: "Supported" now means the real reader can parse the file.
+            Self::ClaudeCredentials => {
+                claude_credentials_capability(&environment.claude_credentials)
+            }
             Self::Ble => {
                 Capability::Unsupported("no Bluetooth adapter yet: BlueZ is not used".into())
             }
@@ -449,6 +450,18 @@ pub const ADAPTERS: &[Adapter] = &[
         feature: Feature::Audio,
         module: "src/windows/sound.rs",
     },
+    // #306: the credentials reader exists on both OSes — the same module parses
+    // the same file, so the row may say more than "Unsupported" now.
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::ClaudeCredentials,
+        module: "src/quota.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::ClaudeCredentials,
+        module: "src/quota.rs",
+    },
 ];
 
 /// The adapter behind a row, if one is registered for that OS.
@@ -475,6 +488,17 @@ pub struct Row {
 /// the Linux arms do not: WinRT for media and toasts, Core Audio for the volume,
 /// WTS for the lock, `SHQueryUserNotificationState` for fullscreen, the registry
 /// for autostart, the Credential Manager for secrets.
+/// #306: "Supported" means the reader in `crate::quota` can actually parse
+/// the file, not just that a file with that name exists. Shared by the macOS
+/// and Windows probes so the two rows can never drift apart.
+fn claude_credentials_capability(path: &Path) -> Capability {
+    match crate::quota::read_credentials_at(path) {
+        Ok(Some(_)) => Capability::Supported,
+        Ok(None) => Capability::Degraded("no usable ~/.claude/.credentials.json to read".into()),
+        Err(_) => Capability::Degraded("Claude credentials file could not be read".into()),
+    }
+}
+
 fn windows(feature: Feature, environment: &Environment) -> Capability {
     match feature {
         // SMTC through WinRT: no tool to find, no bus to have.
@@ -520,9 +544,10 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::Secrets => Capability::Unsupported(
             "no secret-store adapter yet: the Credential Manager is not used".into(),
         ),
-        Feature::ClaudeCredentials => Capability::Unsupported(
-            "no credential reader yet: .claude/.credentials.json is not read".into(),
-        ),
+        // #306: the reader exists, so the probe reads the file.
+        Feature::ClaudeCredentials => {
+            claude_credentials_capability(&environment.claude_credentials)
+        }
         Feature::Ble => Capability::Unsupported(
             "no Bluetooth adapter yet: WinRT Bluetooth LE is not called".into(),
         ),
@@ -571,6 +596,9 @@ pub struct Environment {
     pub has_session_bus: bool,
     pub path_tools: Vec<String>,
     pub config_home: std::path::PathBuf,
+    /// #306: the Claude credentials probe parses this file, so the field earns
+    /// its place here — unlike the fields #235 removed as unread.
+    pub claude_credentials: std::path::PathBuf,
     pub has_portal_shortcuts: bool,
 }
 
@@ -580,6 +608,8 @@ impl Environment {
         let home = std::env::var_os("HOME").map_or_else(|| "/".into(), std::path::PathBuf::from);
         let config_home = std::env::var_os("XDG_CONFIG_HOME")
             .map_or_else(|| home.join(".config"), std::path::PathBuf::from);
+        let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+            .map_or_else(|| home.join(".claude"), std::path::PathBuf::from);
         let session_type = std::env::var("XDG_SESSION_TYPE").ok().or_else(|| {
             std::env::var_os("WAYLAND_DISPLAY")
                 .is_some()
@@ -593,6 +623,7 @@ impl Environment {
                 .map(|path| path.split(':').map(str::to_owned).collect())
                 .unwrap_or_default(),
             config_home,
+            claude_credentials: claude_dir.join(".credentials.json"),
             has_portal_shortcuts: Path::new("/usr/share/xdg-desktop-portal/portals").is_dir(),
         }
     }

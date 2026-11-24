@@ -98,7 +98,12 @@ enum CursorDiscovery {
         handle.seek(toFileOffset: fileSize - readSize)
         let data = handle.readDataToEndOfFile()
         guard let text = String(data: data, encoding: .utf8) else { return (nil, []) }
+        return (nil, recentMessages(fromTranscript: text))
+    }
 
+    /// The last three turns from Cursor transcript text (#245). Split out so the
+    /// port can be given the same bytes the platform read.
+    static func recentMessages(fromTranscript text: String) -> [ChatMessage] {
         var userMessages: [(Int, String)] = []
         var assistantMessages: [(Int, String)] = []
         var index = 0
@@ -128,6 +133,6 @@ enum CursorDiscovery {
             combined.append((i, ChatMessage(isUser: false, text: text)))
         }
         combined.sort { $0.0 < $1.0 }
-        return (nil, Array(combined.suffix(3).map { $0.1 }))
+        return Array(combined.suffix(3).map { $0.1 })
     }
 }

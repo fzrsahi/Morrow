@@ -8,6 +8,8 @@
 
 use std::path::Path;
 use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 /// Whether `path` is a regular file the shell could actually spawn as a tool.
 ///
@@ -36,6 +38,14 @@ pub(crate) fn is_executable_tool(path: &Path) -> bool {
 /// shows, not a panic.
 pub trait Runner {
     fn run(&self, program: &str, args: &[&str]) -> Result<String, String>;
+
+    /// Like [`Runner::run`], but feeds `stdin` to the child. The default ignores
+    /// it so the existing adapters need no change; callers with a secret to keep
+    /// out of argv (the quota bearer header) override this.
+    fn run_with_stdin(&self, program: &str, args: &[&str], stdin: &str) -> Result<String, String> {
+        let _ = stdin;
+        self.run(program, args)
+    }
 }
 
 /// The real thing.
@@ -46,6 +56,32 @@ impl Runner for SystemRunner {
         let output = Command::new(program)
             .args(args)
             .output()
+            .map_err(|error| format!("{program}: {error}"))?;
+        if !output.status.success() {
+            return Err(format!(
+                "{program} exited {}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stderr).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    }
+
+    fn run_with_stdin(&self, program: &str, args: &[&str], stdin: &str) -> Result<String, String> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("{program}: {error}"))?;
+        if let Some(mut input) = child.stdin.take() {
+            input
+                .write_all(stdin.as_bytes())
+                .map_err(|error| format!("{program}: writing stdin: {error}"))?;
+        }
+        let output = child
+            .wait_with_output()
             .map_err(|error| format!("{program}: {error}"))?;
         if !output.status.success() {
             return Err(format!(

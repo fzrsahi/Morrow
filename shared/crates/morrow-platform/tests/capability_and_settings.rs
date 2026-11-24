@@ -27,6 +27,7 @@ fn x11(config_home: PathBuf) -> Environment {
         has_session_bus: true,
         path_tools: vec!["/usr/bin".into()],
         config_home,
+        claude_credentials: PathBuf::from("/nonexistent/.claude/.credentials.json"),
         has_portal_shortcuts: false,
     }
 }
@@ -46,6 +47,7 @@ fn windows(config_home: PathBuf) -> Environment {
         has_session_bus: false,
         path_tools: Vec::new(),
         config_home,
+        claude_credentials: PathBuf::from("/nonexistent/.claude/.credentials.json"),
         has_portal_shortcuts: false,
     }
 }
@@ -171,7 +173,6 @@ fn adapters_that_do_not_exist_yet_are_unsupported_everywhere() {
             Feature::SystemStats,
             Feature::Geolocation,
             Feature::Secrets,
-            Feature::ClaudeCredentials,
             Feature::Ble,
             Feature::Updater,
         ] {
@@ -262,17 +263,41 @@ fn sound_effects_are_supported_only_when_a_player_is_on_path() {
 
 #[test]
 fn missing_credentials_are_unsupported_rather_than_promised() {
-    // #235: nothing reads the credentials file yet, so a file that happens to
-    // exist is not a reason to say the feature works.
+    // #306 gave this row a reader, so the answer follows the file rather than a
+    // stand-in string: absent is not Supported, and it has to say why.
     let env = x11(temp("creds"));
     let capability = Feature::ClaudeCredentials.probe(&env);
     assert!(
-        matches!(capability, Capability::Unsupported(_)),
-        "{capability:?}"
+        !matches!(capability, Capability::Supported),
+        "no file cannot be Supported: {capability:?}"
     );
-    // The file's presence changes nothing: there is no reader to consult it.
+    assert!(
+        capability.reason().is_some_and(|reason| !reason.is_empty()),
+        "a row that cannot answer has to say why: {capability:?}"
+    );
+    // A file the parser cannot use changes nothing.
     fs::write(env.config_home.join(".credentials.json"), "{}").expect("write credentials");
     assert_eq!(Feature::ClaudeCredentials.probe(&env), capability);
+}
+
+#[test]
+fn a_present_credentials_file_makes_the_row_supported() {
+    // #306: the row is backed by `quota::read_credentials`. With the file it
+    // reads in place, the reader exists and the row honestly says Supported.
+    let root = temp("creds-supported");
+    let path = root.join(".credentials.json");
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        &path,
+        r#"{"claudeAiOauth":{"accessToken":"not-read-here"}}"#,
+    )
+    .unwrap();
+    let mut env = x11(root);
+    env.claude_credentials = path;
+    assert_eq!(
+        Feature::ClaudeCredentials.probe(&env),
+        Capability::Supported
+    );
 }
 
 #[test]

@@ -11,11 +11,15 @@
 //! tools a desktop already ships, injected so every adapter is testable without
 //! a desktop behind it.
 //!
+//! `quota` is #306's adapter: read the Claude Code login and fetch plan limits
+//! through that same runner, leaving the interpretation to `morrow_core::quota`.
+//!
 //! `capability` answers what each adapter can do on this machine — every
 //! feature reports `Supported`, `Degraded(reason)` or `Unsupported(reason)`, so
 //! Settings can say "no tray icon: no AppIndicator library" instead of the
 //! feature silently not working.
 
+pub mod agent_process;
 pub mod autostart;
 pub mod bridge;
 pub mod capability;
@@ -28,7 +32,12 @@ pub mod music;
 pub mod notify;
 pub mod opencode;
 pub mod panel;
+/// The TypeScript extensions that ship with the app (#234 batch 4b). `include_str!`
+/// rather than a path into `macos/`: the Linux and Windows packages must not depend
+/// on the macOS tree at run time, which is the rule OpenCode's plugin already set.
+pub mod plugins;
 pub mod process;
+pub mod quota;
 pub mod runner;
 pub mod settings;
 pub mod sound;

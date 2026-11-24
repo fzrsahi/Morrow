@@ -141,12 +141,13 @@ describe('appearance settings', () => {
       'shortcuts',
       'agents',
       'music',
+      'prayer',
       'behavior',
       'hooks',
       'capabilities',
       'about',
     ]);
-    for (const id of ['hooks', 'capabilities', 'appearance', 'about']) {
+    for (const id of ['hooks', 'capabilities', 'appearance', 'prayer', 'about']) {
       expect(SETTINGS_NAV.flatMap((group) => group.items).find((item) => item.id === id)?.available).toBe(
         true,
       );

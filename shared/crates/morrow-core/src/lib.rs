@@ -21,19 +21,31 @@
 //!   hook or transcript row carries (`parsing`), and the list that applies
 //!   them (`list`).
 //! - [`digest`]: SHA-256, for the delivery digest of a hook Cursor ran.
+//! - [`prayer`]: the pure astronomical core of the prayer times feature, from
+//!   the day, coordinates, offset and method handed in.
+//! - [`quota`]: the Claude plan-limit model, usage-response parser and pure
+//!   refresh policy, with the clock and credentials handed in.
 #![forbid(unsafe_code)]
 
+pub mod agent_process;
 pub mod agent_tasks;
 pub mod attention;
+pub mod config_roots;
 pub mod digest;
+pub mod discovery;
 pub mod git;
 pub mod installer;
 pub mod intake;
 pub mod markdown;
 pub mod model_label;
 pub mod music;
+pub mod prayer;
+pub mod quota;
+pub mod path_identity;
 pub mod reduce;
+pub mod scan_policy;
 pub mod session_recap;
+pub mod sqlite;
 pub mod time;
 pub mod transcript;
 
