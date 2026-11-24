@@ -13,16 +13,14 @@ use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{
-    ERROR_IO_PENDING, ERROR_OPERATION_ABORTED, HANDLE, WAIT_FAILED, WAIT_OBJECT_0,
-};
+use windows_sys::Win32::Foundation::{ERROR_IO_PENDING, HANDLE};
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_BACKUP_SEMANTICS, FILE_LIST_DIRECTORY, FILE_NOTIFY_CHANGE_DIR_NAME,
     FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE, FILE_NOTIFY_CHANGE_SIZE,
     FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, OPEN_EXISTING, ReadDirectoryChangesW,
 };
-use windows_sys::Win32::System::IO::{GetOverlappedResult, OVERLAPPED};
-use windows_sys::Win32::System::Threading::{CreateEventW, ResetEvent};
+use windows_sys::Win32::System::IO::OVERLAPPED;
+use windows_sys::Win32::System::Threading::CreateEventW;
 
 pub struct Platform {
     roots: Vec<PathBuf>,
@@ -32,10 +30,6 @@ pub struct Platform {
 struct Directory {
     handle: OwnedHandle,
     event: OwnedHandle,
-    // Boxed so their addresses stay put while the OS writes into them across
-    // ticks. Stack locals here were the bug: the pending read outlived begin().
-    buffer: Box<[u8; 4096]>,
-    overlapped: Box<OVERLAPPED>,
 }
 
 impl Platform {
@@ -81,18 +75,14 @@ impl Platform {
                 milliseconds,
             )
         };
-        if waited == windows_sys::Win32::Foundation::WAIT_TIMEOUT
-            || waited == WAIT_FAILED
-        {
+        if waited == windows_sys::Win32::Foundation::WAIT_TIMEOUT {
             return false;
         }
-        // WaitForMultipleObjects returns the index of the signalled event.
-        // Drain only that root: the others still have a read in flight, and
-        // re-arming them would leave two concurrent reads on the same handle.
-        if waited - WAIT_OBJECT_0 >= self.directories.len() as u32 {
-            return false;
+        // One root moved; draining every root keeps the next wait honest, because
+        // an undrained overlapped read never signals again.
+        for directory in &self.directories {
+            directory.drain();
         }
-        self.directories[(waited - WAIT_OBJECT_0) as usize].drain();
         true
     }
 
@@ -127,37 +117,28 @@ impl Directory {
             return Err(std::io::Error::last_os_error());
         }
         let event = unsafe { OwnedHandle::from_raw_handle(event) };
-        let mut directory = Self {
-            handle,
-            event,
-            buffer: Box::new([0u8; 4096]),
-            overlapped: Box::new(unsafe { std::mem::zeroed() }),
-        };
+        let directory = Self { handle, event };
         directory.begin()?;
         Ok(directory)
     }
 
-    /// Start an overlapped read into the buffers owned by `self`. A manual-reset
-    /// event must be cleared before each arm or `wait()` would return forever.
-    fn begin(&mut self) -> std::io::Result<()> {
-        unsafe { ResetEvent(self.event.as_raw_handle() as HANDLE) };
-        let event = self.event.as_raw_handle() as HANDLE;
-        *self.overlapped = unsafe { std::mem::zeroed() };
-        self.overlapped.hEvent = event;
-        let buffer = self.buffer.as_mut_ptr();
-        let overlapped = &mut *self.overlapped;
+    /// Start an overlapped read. The result is deliberately ignored: what matters
+    /// is that the event is armed, and `drain` is where the answer is read.
+    fn begin(&self) -> std::io::Result<()> {
+        let mut overlapped = self.overlapped();
+        let mut buffer = [0u8; 4096];
         let started = unsafe {
             ReadDirectoryChangesW(
                 self.handle.as_raw_handle() as HANDLE,
-                buffer.cast(),
-                self.buffer.len() as u32,
+                buffer.as_mut_ptr().cast(),
+                buffer.len() as u32,
                 1,
                 FILE_NOTIFY_CHANGE_FILE_NAME
                     | FILE_NOTIFY_CHANGE_DIR_NAME
                     | FILE_NOTIFY_CHANGE_LAST_WRITE
                     | FILE_NOTIFY_CHANGE_SIZE,
                 std::ptr::null_mut(),
-                overlapped,
+                &mut overlapped,
                 None,
             )
         };
@@ -171,28 +152,14 @@ impl Directory {
         Ok(())
     }
 
-    /// Consume the completion (the byte count is read by `GetOverlappedResult`,
-    /// which also clears the pending state) before arming the next read.
-    fn drain(&mut self) {
-        let mut transferred = 0u32;
-        let completed = unsafe {
-            GetOverlappedResult(
-                self.handle.as_raw_handle() as HANDLE,
-                &*self.overlapped,
-                &mut transferred,
-                1,
-            )
-        };
-        if completed == 0 {
-            let error = std::io::Error::last_os_error();
-            if error.raw_os_error() != Some(ERROR_OPERATION_ABORTED as i32) {
-                return;
-            }
-        }
-        // The notifications themselves are deliberately not parsed: like the
-        // Linux arm, a change only asks the policy to rescan. An empty buffer
-        // is not an error — Windows may report a change it will not name.
-        let _ = transferred;
+    /// Re-arm after the event fired.
+    fn drain(&self) {
         let _ = self.begin();
+    }
+
+    fn overlapped(&self) -> OVERLAPPED {
+        let mut overlapped: OVERLAPPED = unsafe { std::mem::zeroed() };
+        overlapped.hEvent = self.event.as_raw_handle() as HANDLE;
+        overlapped
     }
 }

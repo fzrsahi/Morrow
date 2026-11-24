@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use morrow_core::installer::json_editor::strip_json_comments;
 use morrow_core::installer::targets::{
-    Format, TARGETS, command_for, install, is_installed, target_for, uninstall,
+    Format, Root, TARGETS, command_for, install, is_installed, target_for, uninstall,
 };
 
 const BRIDGE: &str = "~/.codeisland/codeisland-hook.sh";
@@ -40,7 +40,19 @@ fn every_target_of_the_ticket_is_here() {
             "qoder",
             "droid",
             "codebuddy",
-            "copilot"
+            "copilot",
+            // #234 batch 1: the seven Claude-schema forks, which were a table entry
+            // each and nothing more.
+            "qoder-cn",
+            "qoderwork",
+            "codybuddycn",
+            "stepfun",
+            "antigravity",
+            "workbuddy",
+            "qwen",
+            // #234 batch 2: the two whose paths are not a plain home directory.
+            "grok",
+            "traecli-next"
         ]
     );
     // OpenCode is a plugin file, not a hooks key: its own slice.
@@ -56,9 +68,135 @@ fn the_paths_and_keys_are_the_ones_macos_writes() {
     assert_eq!(target("droid").path, ".factory/settings.json");
     assert_eq!(target("codebuddy").path, ".codebuddy/settings.json");
     assert_eq!(target("copilot").path, ".copilot/hooks/codeisland.json");
+    // #234 batch 1. A wrong path here writes a file the CLI never reads, and the
+    // install still reports success.
+    assert_eq!(target("qoder-cn").path, ".qoder-cn/settings.json");
+    assert_eq!(target("qoderwork").path, ".qoderwork/settings.json");
+    assert_eq!(target("codybuddycn").path, ".codybuddycn/settings.json");
+    assert_eq!(target("stepfun").path, ".stepfun/settings.json");
+    assert_eq!(target("antigravity").path, ".antigravity/settings.json");
+    assert_eq!(target("workbuddy").path, ".workbuddy/settings.json");
+    assert_eq!(target("qwen").path, ".qwen/settings.json");
     for target in TARGETS {
         assert_eq!(target.key, "hooks");
     }
+}
+
+/// #234 batch 2: Grok's file is not in the user's home. `$GROK_HOME` decides, the
+/// `~` forms expand, and a blank variable is the default rather than an empty
+/// path — the same rule #258 had to fix for Claude's config dir.
+#[test]
+fn groks_file_hangs_from_grok_home_not_from_home() {
+    let grok = target("grok");
+    assert_eq!(grok.root, Root::GrokHome);
+    assert_eq!(grok.path, "hooks/codeisland.json");
+    assert_eq!(grok.format, Format::Nested);
+
+    let home = std::path::Path::new("/home/dev");
+    let file = |value: Option<&str>| {
+        let value = value.map(str::to_owned);
+        grok.file(home, move |name| {
+            (name == "GROK_HOME").then(|| value.clone()).flatten()
+        })
+    };
+    // Unset, blank and whitespace all mean the default.
+    assert_eq!(file(None), home.join(".grok/hooks/codeisland.json"));
+    assert_eq!(file(Some("")), home.join(".grok/hooks/codeisland.json"));
+    assert_eq!(file(Some("   ")), home.join(".grok/hooks/codeisland.json"));
+    // A second account points somewhere else, and that is where hooks go.
+    assert_eq!(
+        file(Some("/work/grok")),
+        std::path::Path::new("/work/grok/hooks/codeisland.json")
+    );
+    // The documented `~` forms reach the process unexpanded.
+    assert_eq!(file(Some("~")), home.join("hooks/codeisland.json"));
+    assert_eq!(file(Some("~/alt")), home.join("alt/hooks/codeisland.json"));
+
+    // Every other target is untouched by this.
+    assert_eq!(target("codex").root, Root::Home);
+    assert_eq!(
+        target("codex").file(home, |_| Some("/ignored".to_owned())),
+        home.join(".codex/hooks.json")
+    );
+}
+
+/// Trae CLI Next is a second config layout for one product, so it reports under
+/// the older CLI's source: two cards for one session would be two cards.
+#[test]
+fn trae_cli_next_reports_under_traecli() {
+    let next = target("traecli-next");
+    assert_eq!(next.path, ".trae/cli/hooks.json");
+    assert_eq!(next.format, Format::Nested);
+    assert_eq!(next.bridge_source(), "traecli");
+    let text = install(next, None, BRIDGE).expect("an install").text;
+    assert!(text.contains("--source traecli"), "{text}");
+    assert!(!text.contains("--source traecli-next"), "{text}");
+    // Grok's events are its own, five events wider than a Claude fork's.
+    let grok = target("grok");
+    let names: Vec<&str> = grok.events.iter().map(|event| event.name).collect();
+    assert!(names.contains(&"PermissionDenied"));
+    assert!(names.contains(&"StopFailure"));
+    assert!(names.contains(&"PostCompact"));
+    assert!(
+        !target("codex")
+            .events
+            .iter()
+            .any(|event| event.name == "StopFailure")
+    );
+}
+
+/// Qwen Code counts milliseconds where every other Claude fork counts seconds.
+/// Copying the shared table would give it a timeout that expires a thousand times
+/// too early, and nothing would look wrong in the file.
+#[test]
+fn qwen_counts_milliseconds_where_the_others_count_seconds() {
+    let qwen = target("qwen");
+    assert_eq!(qwen.format, Format::Claude);
+    let timeout = |source: &str, event: &str| {
+        let text = install(target(source), None, BRIDGE)
+            .expect("an install")
+            .text;
+        parsed(&text)["hooks"][event][0]["hooks"][0]["timeout"]
+            .as_i64()
+            .unwrap_or_else(|| panic!("{source} {event} has no timeout"))
+    };
+    assert_eq!(timeout("qwen", "PreToolUse"), 5_000);
+    assert_eq!(timeout("qwen", "Notification"), 86_400_000);
+    // The same event on a seconds-counting fork.
+    assert_eq!(timeout("qoderwork", "PreToolUse"), 5);
+    assert_eq!(timeout("qoderwork", "Notification"), 86_400);
+}
+
+/// Qoder CN is the same hook contract under a different CLI name, and macOS
+/// reports its events under the **shared** `qoder-cli` source. A card keyed
+/// `qoder-cn` would be a second card for one session.
+#[test]
+fn qoder_cn_reports_its_events_under_the_shared_source() {
+    let cn = target("qoder-cn");
+    assert_eq!(cn.source, "qoder-cn");
+    assert_eq!(cn.bridge_source(), "qoder-cli");
+    let text = install(cn, None, BRIDGE).expect("an install").text;
+    assert!(
+        text.contains("--source qoder-cli"),
+        "the bridge is told the shared source: {text}"
+    );
+    assert!(!text.contains("--source qoder-cn"));
+    // The international build is unchanged: it is its own source.
+    assert_eq!(target("qoder").bridge_source(), "qoder");
+}
+
+/// `antigravity` is a Claude Code fork; `google-antigravity` is a different
+/// product with a named-config schema and its own file. One written into the
+/// other's path is hooks nothing reads.
+#[test]
+fn antigravity_is_not_google_antigravity() {
+    let fork = target("antigravity");
+    assert_eq!(fork.format, Format::Claude);
+    assert_eq!(fork.key, "hooks");
+    assert_eq!(fork.path, ".antigravity/settings.json");
+    // Not yet installed at all: it is #234 batch 4, and an absent target is the
+    // honest answer until then.
+    assert!(target_for("google-antigravity").is_none());
 }
 
 #[test]
