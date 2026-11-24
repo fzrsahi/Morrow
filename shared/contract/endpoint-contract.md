@@ -2,7 +2,7 @@
 
 > Interim location. This document moves to `shared/contract/` with the
 > monorepo layout PR (#86). Issue #84; spec #82; plan
-> `docs/plan-windows-linux.md` §3.1.
+> `.agents/memory/` and `shared/contract/hook-edge-protocol.md`.
 
 The **endpoint** is the address a bridge or plugin sends envelopes to: a Unix
 socket path on macOS and Linux, a named pipe on Windows. It is part of the

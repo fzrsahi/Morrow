@@ -2,7 +2,7 @@
 
 Status: **rejected (2026-11-19)** by maintainer decision in PR #117 — option B, Rust core. The experiment result below stands as evidence; the decision and its reasons are recorded in [ADR-0001](0001-two-cores-one-contract.md#decision-after-the-experiment-2026-11-19).
 
-ADR-0001's decision rule picks Option E when `MorrowCore` builds in a Linux container within 2 days and at least 80% of the pure-logic core tests pass. The #85 experiment ([`docs/experiments/option-e-linux.md`](../experiments/option-e-linux.md)) met both conditions:
+ADR-0001's decision rule picks Option E when `MorrowCore` builds in a Linux container within 2 days and at least 80% of the pure-logic core tests pass. The #85 experiment ([`.agents/memory/2026-11-21.md`](../../.agents/memory/2026-11-21.md)) met both conditions:
 
 - **Green.** `MorrowCore` builds with Swift 6.2.4 on Ubuntu 22.04 (aarch64) after shims in 16 of 73 files (+146/−7 LOC), a 2-file `CSQLite` system-library target, and `swift-crypto` in place of CryptoKit. It took about 30 minutes of the 2-day timebox.
 - **96.8% pass.** 973 of 1,005 pure-logic tests pass. None fail at runtime. The 30 that don't pass are three markdown-rendering suites that can't compile on Linux, and 2 are skipped by the container environment. The contract suites spec #82 names (`AttentionPolicyTests`, `SubsessionReducerTests`, `CursorSessionFoldingTests`, `HookIntakeGoldenTests`) all pass.
