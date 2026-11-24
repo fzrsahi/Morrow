@@ -173,7 +173,6 @@ fn adapters_that_do_not_exist_yet_are_unsupported_everywhere() {
             Feature::Secrets,
             Feature::ClaudeCredentials,
             Feature::Ble,
-            Feature::Audio,
             Feature::Updater,
         ] {
             let capability = feature.probe(&environment);
@@ -226,6 +225,26 @@ fn no_session_bus_marks_the_bus_bound_features() {
         Feature::SystemVolume.probe(&env),
         Capability::Unsupported(_) | Capability::Supported
     ));
+}
+
+#[test]
+fn sound_effects_are_supported_only_when_a_player_is_on_path() {
+    // #241: the row follows the same `PATH` lookup the feed uses, so Settings
+    // cannot promise a sound the shell has no way to play.
+    let root = temp("sound");
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+
+    let mut env = x11(temp("sound-env"));
+    env.path_tools = vec![bin.to_string_lossy().into_owned()];
+    assert!(
+        matches!(Feature::Audio.probe(&env), Capability::Unsupported(_)),
+        "no player, no sound"
+    );
+
+    // A file named like a player is what the probe looks for.
+    fs::write(bin.join("pw-play"), "#!/bin/sh\n").expect("player");
+    assert_eq!(Feature::Audio.probe(&env), Capability::Supported);
 }
 
 #[test]

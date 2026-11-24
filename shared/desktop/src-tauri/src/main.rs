@@ -17,6 +17,7 @@ mod prune;
 mod sessions;
 mod settings;
 mod settings_window;
+mod sound;
 mod transcripts;
 mod tray;
 #[cfg(windows)]
@@ -120,6 +121,15 @@ fn main() -> ExitCode {
         }
     });
 
+    // #241: AppLaunch is the one cue with no hook to carry it — the app's own
+    // start is the event. A locked screen stays silent, as it does for hook
+    // cues in `Feed::record`.
+    if adapters::screen_locked() != Some(true) {
+        if let Some(player) = morrow_platform::sound::player_on_path() {
+            let _ = morrow_platform::sound::play(player, morrow_core::attention::sound_cue::LAUNCH);
+        }
+    }
+
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(feed)
@@ -158,6 +168,8 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            sound::sound_cues,
+            sound::sound_preview,
             settings_window::open_settings,
             peek_window::close_peek,
             music::music_track,

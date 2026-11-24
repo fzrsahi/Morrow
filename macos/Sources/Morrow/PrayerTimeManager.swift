@@ -471,26 +471,33 @@ public final class PrayerTimeManager: ObservableObject {
     // MARK: - Mini Peek Toast Banner & Agent Suppression
     private var bannerDismissWorkItem: DispatchWorkItem?
 
+    @Published public var previewPrayerType: PrayerType? = nil
+    private let bannerTimer = BannerHoverHoldTimer(defaultDuration: 3.0)
+
     public func dismissMiniPeekBanner() {
         bannerDismissWorkItem?.cancel()
         bannerDismissWorkItem = nil
         bannerDismissTask?.cancel()
         bannerDismissTask = nil
+        bannerTimer.cancel()
+        previewPrayerType = nil
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             self.showMiniPeekBanner = false
+        }
+    }
+
+    public func setMiniPeekBannerHovered(_ hovering: Bool) {
+        bannerTimer.setHovered(hovering, isVisible: showMiniPeekBanner) { [weak self] in
+            self?.dismissMiniPeekBanner()
         }
     }
 
     private func scheduleBannerAutoDismiss() {
         bannerDismissWorkItem?.cancel()
         bannerDismissTask?.cancel()
-        let item = DispatchWorkItem { [weak self] in
-            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                self?.showMiniPeekBanner = false
-            }
+        bannerTimer.start { [weak self] in
+            self?.dismissMiniPeekBanner()
         }
-        bannerDismissWorkItem = item
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: item)
     }
 
     /// Evaluates if banner should pop up, deferring if an agent approval or question dialog is currently visible.
@@ -549,10 +556,12 @@ public final class PrayerTimeManager: ObservableObject {
         enqueueOrPresentBanner(title: title, subtitle: subtitle, appState: appState)
     }
 
-    public func triggerTestBanner() {
+    public func triggerTestBanner(prayer: PrayerType? = nil) {
+        let target = prayer ?? .maghrib
         presentBanner(
-            title: "WAKTU MAGHRIB TIBA",
-            subtitle: "Saatnya Menunaikan Ibadah Salat Maghrib"
+            title: "WAKTU \(target.displayName.uppercased()) TIBA",
+            subtitle: "Saatnya Menunaikan Ibadah Salat \(target.displayName)",
+            previewPrayer: prayer
         )
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
     }
@@ -587,7 +596,12 @@ public final class PrayerTimeManager: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 10.0, execute: item)
     }
 
-    private func presentBanner(title: String, subtitle: String) {
+    private func presentBanner(title: String, subtitle: String, previewPrayer: PrayerType? = nil) {
+        SystemMonitorManager.shared.dismissChargingBanner()
+        previewPrayerType = previewPrayer
+        if let appState, appState.surface.isExpanded {
+            appState.surface = .collapsed
+        }
         miniPeekBannerTitle = title
         miniPeekBannerSubtitle = subtitle
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
