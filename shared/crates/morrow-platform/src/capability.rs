@@ -249,8 +249,8 @@ impl Feature {
                     .into(),
             ),
             Self::Tray => {
-                if environment.has("libayatana-appindicator3.so.1")
-                    || environment.has("libappindicator3.so.1")
+                if environment.has_file("libayatana-appindicator3.so.1")
+                    || environment.has_file("libappindicator3.so.1")
                 {
                     Capability::Supported
                 } else {
@@ -648,9 +648,21 @@ impl Environment {
     pub fn has(&self, tool: &str) -> bool {
         // Only PATH entries: a stray file in the working directory is not a
         // tool the shell can spawn, so it may not make a row say "Supported".
+        // Being a file is not enough — it must be executable too, or a row
+        // would promise a tool the feed cannot run. This is the same lookup
+        // the sound player uses (`runner::is_executable_tool`).
         self.path_tools
             .iter()
-            .any(|entry| Path::new(entry).join(tool).is_file())
+            .any(|entry| crate::runner::is_executable_tool(&Path::new(entry).join(tool)))
+    }
+
+    /// A file that only has to exist, not be spawnable. The Tray row looks for
+    /// shared libraries (`*.so.1`), which are not executables, so it keeps its
+    /// file-only meaning on every OS.
+    fn has_file(&self, name: &str) -> bool {
+        self.path_tools
+            .iter()
+            .any(|entry| Path::new(entry).join(name).is_file())
     }
 
     fn has_any(&self, tools: &[&str]) -> bool {

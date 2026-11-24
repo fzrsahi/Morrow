@@ -153,7 +153,7 @@ public struct Pixel16Badge: View {
         HStack(spacing: 3) {
             PixelText(
                 text: text.uppercased(),
-                color: isFilled ? Color.black : color,
+                color: isFilled ? AppColorTheme.contrastingForeground(on: color) : color,
                 pixelSize: 1.05
             )
         }

@@ -200,6 +200,7 @@ struct ModernGitGraphItemView: View {
     let commit: GitCommitItem
     let isLatest: Bool
     let isLast: Bool
+    var accentColor: Color = ModernPalette.sage
     @State private var isHovered = false
 
     var body: some View {
@@ -212,7 +213,7 @@ struct ModernGitGraphItemView: View {
                             .stroke(Color.white.opacity(0.75), lineWidth: 1.5)
                             .frame(width: 9, height: 9)
                         Circle()
-                            .fill(ModernPalette.sage)
+                            .fill(accentColor)
                             .frame(width: 4, height: 4)
                     } else {
                         Circle()
@@ -346,21 +347,29 @@ struct ModernWorkspaceView: View {
     @ObservedObject private var nowPlaying = NowPlayingManager.shared
 
     private var accentColor: Color {
-        if (syncThemeWithAlbumArt || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
-            return nowPlaying.albumPalette.primary
+        if AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor) {
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
+        }
+        let pc = MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme
+        if pc != .theme && pc != .album {
+            return AppColorTheme.readableOnDark(
+                AppColorTheme.accent(for: musicHUDProgressColor, isModern: true)
+            )
         }
         return ModernPalette.sage
+    }
+
+    private var modifiedColor: Color {
+        if AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor) {
+            return AppColorTheme.secondaryAccent(for: musicHUDProgressColor)
+        }
+        return ModernPalette.amber
     }
 
     private var railColor: Color {
         if !manager.isGitRepo                 { return Color.white.opacity(0.18) }
         else if manager.isCommitting          { return Color.white.opacity(0.60) }
-        else if !manager.changedFiles.isEmpty {
-            if (syncThemeWithAlbumArt || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
-                return nowPlaying.albumPalette.secondary
-            }
-            return ModernPalette.amber
-        }
+        else if !manager.changedFiles.isEmpty { return modifiedColor }
         else                                  { return accentColor }
     }
 
@@ -472,7 +481,7 @@ struct ModernWorkspaceView: View {
                         if manager.changedFiles.isEmpty {
                             HStack(spacing: 4) {
                                 Circle()
-                                    .fill(ModernPalette.sage)
+                                    .fill(accentColor)
                                     .frame(width: 4.5, height: 4.5)
                                 Text("clean")
                                     .font(.system(size: 10, weight: .regular, design: .monospaced))
@@ -481,11 +490,11 @@ struct ModernWorkspaceView: View {
                         } else {
                             HStack(spacing: 4) {
                                 Circle()
-                                    .fill(ModernPalette.amber)
+                                    .fill(modifiedColor)
                                     .frame(width: 4.5, height: 4.5)
                                 Text("\(manager.changedFiles.count) modified")
                                     .font(.system(size: 10, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(ModernPalette.amber)
+                                    .foregroundStyle(modifiedColor)
                             }
                         }
 
@@ -539,7 +548,8 @@ struct ModernWorkspaceView: View {
                                 ModernGitGraphItemView(
                                     commit: commit,
                                     isLatest: index == 0,
-                                    isLast: index == min(2, manager.recentCommits.count - 1)
+                                    isLast: index == min(2, manager.recentCommits.count - 1),
+                                    accentColor: accentColor
                                 )
                             }
                         }
@@ -559,7 +569,7 @@ struct ModernWorkspaceView: View {
                             if let status = manager.commitStatusMessage {
                                 Text(status)
                                     .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(ModernPalette.sage)
+                                    .foregroundStyle(accentColor)
                                     .transition(.opacity)
                             }
 
@@ -670,7 +680,7 @@ struct ModernWorkspaceView: View {
                             if let status = manager.commitStatusMessage {
                                 Text(status)
                                     .font(.system(size: 9.5, weight: .medium, design: .monospaced))
-                                    .foregroundStyle(ModernPalette.sage)
+                                    .foregroundStyle(accentColor)
                                     .padding(.horizontal, 6)
                                     .transition(.opacity)
                             }
@@ -1064,16 +1074,17 @@ struct PixelRetroWorkspaceView: View {
                                 manager.executeCommit(message: manager.proposedCommitMessage, push: false)
                             }) {
                                 HStack(spacing: 3) {
+                                    let commitFg = AppColorTheme.contrastingForeground(on: accentColor)
                                     WorkspacePixelIcon(
                                         glyph: .disk,
-                                        color: manager.proposedCommitMessage.isEmpty ? MinimalPixelPalette.textDim : Color.black,
+                                        color: manager.proposedCommitMessage.isEmpty ? MinimalPixelPalette.textDim : commitFg,
                                         pixelSize: 1.0
                                     )
                                     PixelText(
                                         text: "COMMIT",
                                         color: manager.proposedCommitMessage.isEmpty
                                             ? MinimalPixelPalette.textDim
-                                            : (commitHovered ? Color.white : Color.black),
+                                            : commitFg,
                                         pixelSize: 1.0
                                     )
                                 }

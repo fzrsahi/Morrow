@@ -8,6 +8,20 @@ struct CyberQuickPromptView: View {
     @State private var isSubmitting: Bool = false
     @State private var statusFeedback: String? = nil
     @FocusState private var isFieldFocused: Bool
+    @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
+    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
+    @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
+    private let signals = IslandSignals.shared
+
+    private var accentColor: Color {
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        let isModern = islandUITheme != IslandUITheme.pixel.rawValue
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: isModern)
+        )
+    }
 
     init(appState: AppState) {
         self.appState = appState
@@ -33,15 +47,15 @@ struct CyberQuickPromptView: View {
             HStack(spacing: 6) {
                 HStack(spacing: 3) {
                     Circle()
-                        .fill(Color(red: 0.0, green: 0.90, blue: 0.46))
+                        .fill(accentColor)
                         .frame(width: 4.5, height: 4.5)
                     Text("DISPATCH TO: \(targetAgentName)")
                         .font(.system(size: 7.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(red: 0.0, green: 0.90, blue: 0.46))
+                        .foregroundStyle(accentColor)
                 }
                 .padding(.horizontal, 5)
                 .padding(.vertical, 1.5)
-                .background(RoundedRectangle(cornerRadius: 3).fill(Color(red: 0.0, green: 0.90, blue: 0.46).opacity(0.12)))
+                .background(RoundedRectangle(cornerRadius: 3).fill(accentColor.opacity(0.12)))
 
                 Spacer()
 
@@ -63,7 +77,7 @@ struct CyberQuickPromptView: View {
             HStack(spacing: 6) {
                 Image(systemName: "terminal.fill")
                     .font(.system(size: 9))
-                    .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83))
+                    .foregroundStyle(accentColor)
 
                 TextField("Type instruction or prompt for active agent...", text: $promptText)
                     .textFieldStyle(.plain)
@@ -81,10 +95,10 @@ struct CyberQuickPromptView: View {
                         Text("RUN")
                             .font(.system(size: 7.5, weight: .bold, design: .monospaced))
                     }
-                    .foregroundStyle(Color.black)
+                    .foregroundStyle(AppColorTheme.contrastingForeground(on: accentColor))
                     .padding(.horizontal, 7)
                     .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 3.5).fill(Color(red: 0.0, green: 0.96, blue: 0.83)))
+                    .background(RoundedRectangle(cornerRadius: 3.5).fill(accentColor))
                 }
                 .buttonStyle(.plain)
                 .disabled(promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
@@ -102,7 +116,7 @@ struct CyberQuickPromptView: View {
                 if let feedback = statusFeedback {
                     Text(feedback)
                         .font(.system(size: 7.5, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Color(red: 0.0, green: 0.90, blue: 0.46))
+                        .foregroundStyle(accentColor)
                 } else {
                     Text("Press Enter to send · Esc to cancel")
                         .font(.system(size: 7, design: .monospaced))

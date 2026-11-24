@@ -7,8 +7,12 @@
   type Props = {
     appearance: AppearanceSettings;
     onChange: (key: string, value: string | number | boolean) => void;
+    // #239 AC 1: the shell's `reset_island_position` forgets the offset stored
+    // for *this* monitor and re-fits. Resetting the `position` key alone left the
+    // island where it was, which is what the old button actually did.
+    onResetPosition: () => void;
   };
-  let { appearance, onChange }: Props = $props();
+  let { appearance, onChange, onResetPosition }: Props = $props();
 
   const sizes = [11, 12, 14, 16] as const;
 </script>
@@ -54,7 +58,7 @@
   <div>
     <span class="n">Position</span>
     <span class="s">{appearance.position}</span>
-    <button class="b" onclick={() => onChange(SETTINGS_KEYS.position, DEFAULT_APPEARANCE.position)}>Reset</button>
+    <button class="b" onclick={onResetPosition}>Reset</button>
   </div>
   <div>
     <span class="n">Expand on hover</span>

@@ -4,7 +4,9 @@
 
 mod adapters;
 mod cli;
+mod commands;
 mod completion;
+mod discovery;
 mod feed;
 mod hooks;
 mod hotkey;
@@ -14,7 +16,9 @@ mod music;
 mod peek_window;
 mod permissions;
 mod position;
+mod prayer;
 mod prune;
+mod reminders;
 mod sessions;
 mod settings;
 mod settings_window;
@@ -122,6 +126,9 @@ fn main() -> ExitCode {
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
     Feed::spawn_pruner(Arc::clone(&feed));
+    // #248: the discovery tick — a visible, unlocked panel looks for sessions the
+    // hooks have not announced yet. A hidden or locked one does not.
+    Feed::spawn_discovery(Arc::clone(&feed));
     Feed::spawn_pusher(Arc::clone(&feed), move |sessions, cards| {
         if smoke {
             println!("morrow-smoke: pushed sessions={sessions} cards={cards}");
@@ -143,6 +150,7 @@ fn main() -> ExitCode {
         .manage(hooks_site)
         .manage(Smoke(smoke))
         .manage(position)
+        .manage(prayer::PrayerWakeState::new())
         .invoke_handler(tauri::generate_handler![
             subscribe,
             set_probes_active,
@@ -175,12 +183,16 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            prayer::prayer_settings_load,
+            prayer::prayer_settings_set,
+            prayer::prayer_cities,
+            prayer::prayer_next,
+            prayer::prayer_tick,
             sound::sound_cues,
             sound::sound_preview,
             settings_window::open_settings,
             peek_window::close_peek,
             music::music_track,
-            music::music_position,
             music::music_play_pause,
             music::music_next,
             music::music_previous,
@@ -190,13 +202,9 @@ fn main() -> ExitCode {
             music::music_volume_mute,
             music::music_lyrics,
             adapters::terminal_activate,
-            adapters::process_watch,
-            adapters::process_alive,
             adapters::screen_locked,
             adapters::fullscreen,
             adapters::quiet_hours,
-            adapters::pointer_position,
-            adapters::notify_send,
             island::island_question_focus,
             island::anchoring
         ])

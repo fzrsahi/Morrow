@@ -49,6 +49,21 @@ final class IslandSignalsSync {
                 .store(in: &cancellables)
         }
 
+        for publisher in [
+            nowPlaying.$albumPalette.map { _ in () }.eraseToAnyPublisher(),
+            nowPlaying.$artworkImage.map { _ in () }.eraseToAnyPublisher(),
+        ] {
+            publisher
+                .receive(on: RunLoop.main)
+                .sink { [weak self] in
+                    self?.signals.setAlbumPalette(
+                        nowPlaying.albumPalette,
+                        hasArtwork: nowPlaying.artworkImage != nil
+                    )
+                }
+                .store(in: &cancellables)
+        }
+
         workspace.$isExpandedDetail
             .receive(on: RunLoop.main)
             .sink { [weak self] expanded in self?.signals.setDetailExpanded(expanded) }
@@ -65,9 +80,15 @@ final class IslandSignalsSync {
                         visible: system.showChargingBanner,
                         batteryLevel: system.metrics.batteryLevel
                     )
+                    self?.signals.setChargingBannerState(system.activeBannerState)
                 }
                 .store(in: &cancellables)
         }
+
+        system.$activeBannerState
+            .receive(on: RunLoop.main)
+            .sink { [weak self] state in self?.signals.setChargingBannerState(state) }
+            .store(in: &cancellables)
 
         prayer.$showMiniPeekBanner
             .receive(on: RunLoop.main)
@@ -96,6 +117,7 @@ final class IslandSignalsSync {
             .store(in: &cancellables)
 
         publishMusic()
+        signals.setChargingBannerState(system.activeBannerState)
 
         refreshQuietHours()
         NotificationCenter.default.addObserver(
@@ -114,6 +136,10 @@ final class IslandSignalsSync {
             hasLyrics: !nowPlaying.lyrics.isEmpty || nowPlaying.lyricsLoading,
             title: nowPlaying.title,
             artist: nowPlaying.artist
+        )
+        signals.setAlbumPalette(
+            nowPlaying.albumPalette,
+            hasArtwork: nowPlaying.artworkImage != nil
         )
     }
 

@@ -19,6 +19,7 @@
   import CompletionCard from './lib/components/CompletionCard.svelte';
   import Header from './lib/components/Header.svelte';
   import MusicDeck from './lib/components/MusicDeck.svelte';
+  import PrayerCard from './lib/components/PrayerCard.svelte';
   import SessionList from './lib/components/SessionList.svelte';
   import PermissionCard from './lib/components/PermissionCard.svelte';
   import QuestionCard from './lib/components/QuestionCard.svelte';
@@ -39,6 +40,7 @@
     wizardFor,
     type WizardState,
   } from './lib/question';
+
   import {
     followUpMinutesFromSettings,
     FollowUpReminders,
@@ -71,6 +73,7 @@
     type SessionFilter,
     type Size,
   } from './lib/panel';
+  import { prayerCardModel } from './lib/prayer';
   import {
     SETTINGS_CHANGED_EVENT,
     SETTINGS_KEYS,
@@ -92,8 +95,16 @@
     type Track,
   } from './lib/music';
   import { MOTION, PALETTE, cssVariables, type Theme } from './lib/tokens';
-  import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
-  import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
+  import { VOLUME_HUD_MS, VolumeHudGate, setVolumePlan, volumeSupported, type Volume } from './lib/volume';
+  import type {
+    CapabilityRow,
+    Card,
+    Completion,
+    Decision,
+    PrayerSnapshot,
+    Session,
+    Snapshot,
+  } from './lib/types';
 
   // The display mode mirrors Swift's IslandDisplayMode: `.dynamicIsland` is
   // canvas B (floating pill, default — no hardware notch on Windows/Linux),
@@ -134,6 +145,11 @@
   // #191: the last finished turn. The shell has already decided (via the
   // attention policy) whether it is a card, a glance or nothing at all.
   let completion = $state<Completion | null>(null);
+  // #307: `null` until the shell has a real schedule for a saved city. Never
+  // seeded with a made-up time.
+  let prayer = $state<PrayerSnapshot | null>(null);
+  let prayerLayout = $state(0);
+  let prayerReady = $derived(prayer !== null);
   let seenCompletion = $state<string | null>(null);
   let expanded = $state(false);
   let closing = $state(false);
@@ -158,7 +174,6 @@
   const drag = new DragGate();
   // #201: pure timing/decision state; this component only arms the timer and
   // calls the shell.
-  const reminders = new FollowUpReminders();
   let dragging = $state(false);
   let suppressClick = false;
   let hoverTimer: ReturnType<typeof setTimeout>;
@@ -176,6 +191,7 @@
   // went out keep the collapsed bar's bell until the request leaves the feed.
   let notificationsCapable = $state(false);
   let reminderIds = $state<number[]>([]);
+  const reminders = new FollowUpReminders();
 
   // #193: the shell reads MPRIS/SMTC; the deck ticks from an anchor on this
   // webview's clock. No player probe is scheduled while the Music tab is shut.
@@ -321,8 +337,9 @@
   // or wizard card shows the picks collected for its own request id.
   function questionPicks(id: number, view: NonNullable<ReturnType<typeof questionView>>) {
     if (!view.prompt.multi_select && view.prompts.length === 1) {
-      if (selected?.id !== id) return [];
-      const index = view.prompt.options.findIndex((o) => o.label === selected.label);
+      const inFlight = selected;
+      if (inFlight?.id !== id) return [];
+      const index = view.prompt.options.findIndex((o) => o.label === inFlight.label);
       return index < 0 ? [] : [index];
     }
     return view.wizard.picks[view.wizard.step] ?? [];
@@ -419,6 +436,17 @@
   // the same call: SettingsApp opens on the Hooks page by default.
   function openSettings() {
     invoke('open_settings');
+  }
+
+  // #307: the shell computes the schedule; this webview only adopts it. A
+  // failed read clears the card, so a stale countdown can never outlive the
+  // settings it came from.
+  async function readPrayer() {
+    try {
+      prayer = await invoke<PrayerSnapshot | null>('prayer_next');
+    } catch {
+      prayer = null;
+    }
   }
 
   // #185 — the shell owns the session store, so removing one is an input, not
@@ -646,6 +674,26 @@
     }
   }
 
+  // #239 AC 2: the meter sets a level. The HUD draws the level optimistically —
+  // a slow or failing read must not leave the meter where it was after a click —
+  // and the shell's answer corrects it a moment later.
+  async function onSetVolume(percent: number) {
+    if (!volumeCapable) return;
+    const plan = setVolumePlan(muted, percent);
+    const now = performance.now();
+    volumeGate.show(now);
+    hudUntil = now + VOLUME_HUD_MS;
+    volume = { percent: plan.percent, muted: plan.unmuteFirst ? false : muted };
+    muted = volume.muted;
+    try {
+      if (plan.unmuteFirst) await invoke('music_volume_mute');
+      await invoke('music_volume_set', { percent: plan.percent });
+      await readVolume();
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
   async function onMute() {
     if (!volumeCapable) return;
     // Show immediately: the follow-up read may be slow, or fail on a device
@@ -817,6 +865,11 @@
   function acceptSnapshot(snapshot: Snapshot) {
     sessions = snapshot.sessions;
     cards = snapshot.permissions;
+    // #238 AC 9: the shell owns the reminder schedule, so it hands over the bells.
+    reminderIds = snapshot.reminder_ids ?? [];
+    // #307: the shell carries the card in the snapshot; the `prayer_next`
+    // command is only the explicit refresh on mount and after a settings write.
+    prayer = snapshot.prayer ?? null;
     // #189: a field whose card was answered or dropped elsewhere must not
     // leave the island holding keys meant for the app underneath.
     if (questionFocus.ownerId !== null && !cards.some((c) => c.id === questionFocus.ownerId)) {
@@ -886,6 +939,19 @@
     return () => clearTimeout(timer);
   });
 
+  // #307: one shell tick a minute sends at most one reminder per fardh
+  // milestone (the shell's policy owns de-duplication). #307 review: this
+  // tick must NOT share #197's lock gate — a screen locked longer than the
+  // 15-minute reminder window would silently drop that milestone. Quiet hours
+  // still suppress the reminder, as on macOS.
+  $effect(() => {
+    if (!prayerReady || view.quiet) return;
+    const timer = setInterval(() => {
+      void invoke<number>('prayer_tick').then(() => readPrayer());
+    }, 60_000);
+    return () => clearInterval(timer);
+  });
+
   onMount(() => {
     const channel = new Channel<Snapshot>();
     channel.onmessage = acceptSnapshot;
@@ -903,6 +969,7 @@
         );
       })
       .catch(() => {});
+    void readPrayer();
     // #202: Settings lives in another webview. The shell emits one event after
     // every settings write; adopting the theme here needs no restart and does
     // not touch the fit/reportCards chain.
@@ -911,6 +978,8 @@
       const appearance = appearanceFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
+      // City/method/correction changes invalidate the card's schedule.
+      void readPrayer();
       reminders.configure(
         followUpMinutesFromSettings(
           (event.payload as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
@@ -989,7 +1058,7 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}|${completion ? completionKey(completion) : ''}`;
+    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}|${completion ? completionKey(completion) : ''}|${prayer?.next?.epoch_seconds ?? ''}|${prayer?.in_minutes ?? ''}|${prayerLayout}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -1024,11 +1093,12 @@
 >
   {#if !expanded && !closing}
     {#if hudVisible && volumeCapable}
-      <!-- #195: for ~1.5 s after a change the meter takes the bar's place;
-           clicking it toggles mute through the shell's existing command. -->
+      <!-- #195/#239: for ~1.5 s after a change the meter takes the bar's place;
+           it reads, and now also writes, through the shell's existing commands. -->
       <VolumeHud
         {volume}
         onToggle={onMute}
+        onSet={onSetVolume}
         onpointerdown={onBarPointerDown}
         onpointermove={onBarPointerMove}
         onpointerup={onBarPointerUp}
@@ -1076,6 +1146,9 @@
     />
     {#if tab === 'agents'}
       <div class="padded">
+        {#if prayerCardModel(prayer)}
+          <PrayerCard {prayer} onToggle={() => (prayerLayout += 1)} />
+        {/if}
         {#if completion && completionSession && completion.presentation !== 'status_only'}
           <CompletionCard
             {completion}

@@ -24,6 +24,8 @@ export type Session = {
   last_assistant_message: string;
   /** Newest text from the transcript tail; only the card's reply row shows it. */
   live_reply: string;
+  /** `live_reply` folded into one line of running text (#238 AC 4). */
+  reply_preview?: string;
   model: string;
   /** Full cwd; `cwd_name` is only its last component. */
   cwd: string;
@@ -121,10 +123,36 @@ export type Completion = {
   blocks: MarkdownBlock[];
 };
 
+/** One row of the prayer card's expanded day list. */
+export type PrayerTime = {
+  key: string;
+  name: string;
+  /** Local `HH:MM` at the selected city's offset. */
+  time: string;
+  epoch_seconds: number;
+};
+
+/** #307 — mirrors `PrayerSnapshot` in src-tauri/src/prayer.rs. */
+export type PrayerSnapshot = {
+  city_id: string;
+  city_name: string;
+  method: string;
+  correction_minutes: number;
+  hijri: string;
+  times: PrayerTime[];
+  next: PrayerTime | null;
+  in_minutes: number;
+  urgent: boolean;
+};
+
 export type Snapshot = {
   sessions: Session[];
   permissions: Card[];
   completion: Completion | null;
+  /** Cards whose follow-up reminder already went out (#238 AC 9). */
+  reminder_ids?: number[];
+  /** #307 — absent until a prayer setting is saved; never fabricated. */
+  prayer?: PrayerSnapshot | null;
 };
 export type Decision = 'allow' | 'deny';
 

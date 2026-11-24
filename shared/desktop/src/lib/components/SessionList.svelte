@@ -63,7 +63,7 @@
   // scroll to — this is a viewport, not a truncation.
   const overflow = $derived(splitOverflow(groups.flatMap((group) => group.sessions), limit));
 
-  let scroller: HTMLDivElement;
+  let scroller = $state<HTMLDivElement>();
 
   function more() {
     scroller?.scrollBy({ top: scroller.clientHeight, behavior: 'smooth' });

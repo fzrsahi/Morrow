@@ -78,7 +78,8 @@ public struct PrayerExpandedCardView: View {
                 return nowPlaying.albumPalette.primary
             }
             return solarPhase.accent
-        case .theme, .cyan: return solarPhase.accent
+        case .theme: return solarPhase.accent
+        case .cyan: return Color(red: 0.0, green: 0.96, blue: 0.83)
         case .white: return .white
         case .pink: return Color(red: 1.0, green: 0.16, blue: 0.53)
         case .green: return Color(red: 0.12, green: 0.84, blue: 0.38)
@@ -539,7 +540,7 @@ public struct PrayerExpandedCardView: View {
 
                         // 2. Status Tag (Unified accent role for NEXT; subtle translucent pill for CURRENT)
                         if isNext {
-                            statusTag(text: "NEXT", foreground: .black, background: accentColor)
+                            statusTag(text: "NEXT", foreground: AppColorTheme.contrastingForeground(on: accentColor), background: accentColor)
                         } else if isCurrent {
                             statusTag(text: "CURRENT", foreground: Color.white.opacity(0.92), background: Color.white.opacity(0.13))
                         } else {

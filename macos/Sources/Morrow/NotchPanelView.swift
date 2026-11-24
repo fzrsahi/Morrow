@@ -347,7 +347,10 @@ struct NotchPanelView: View {
         }
     }
     private var mailAccentColor: Color {
-        AppColorTheme.accent(for: musicHUDProgressColor, isModern: islandUITheme != IslandUITheme.pixel.rawValue)
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.accent(for: musicHUDProgressColor, isModern: islandUITheme != IslandUITheme.pixel.rawValue)
     }
 
     @AppStorage(SettingsKey.floatingLyricVerticalGap) private var floatingLyricVerticalGap = SettingsDefaults.floatingLyricVerticalGap
@@ -1338,21 +1341,18 @@ struct NotchPanelView: View {
         if displayMode == .dynamicIsland {
             let isFlushMagSafeToast = isToastOnly && signals.showChargingBanner && !shouldShowExpanded
             if isFlushMagSafeToast {
+                let accent = chargingAmbientColor
                 dynamicIslandShape
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.black,
-                                Color(red: 0.02, green: 0.086, blue: 0.047),
-                                Color(red: 0.039, green: 0.145, blue: 0.082)
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        )
-                    )
+                    .fill(Color.black)
                     .overlay(
                         dynamicIslandShape
-                            .stroke(Color(red: 0.19, green: 0.82, blue: 0.35).opacity(0.38), lineWidth: 1.2)
+                            .fill(
+                                LinearGradient(
+                                    colors: [.clear, accent.opacity(0.11), accent.opacity(0.20)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
                     )
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
@@ -1361,7 +1361,7 @@ struct NotchPanelView: View {
                     .fill(Color.black)
                     .overlay(
                         dynamicIslandShape
-                            .stroke(Color.white.opacity(0.24), lineWidth: 1.2)
+                            .stroke(isToastOnly ? Color.clear : Color.white.opacity(0.24), lineWidth: isToastOnly ? 0 : 1.2)
                     )
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
@@ -1371,7 +1371,7 @@ struct NotchPanelView: View {
                 .fill(Color.black)
                 .overlay(
                     RoundedRectangle(cornerRadius: 7)
-                        .stroke(Color(red: 0.16, green: 0.19, blue: 0.24), lineWidth: 1)
+                        .stroke(isToastOnly ? Color.clear : Color(red: 0.16, green: 0.19, blue: 0.24), lineWidth: isToastOnly ? 0 : 1)
                 )
                 .shadow(color: Color.black.opacity(0.8), radius: 8, y: 4)
         } else {
@@ -1385,24 +1385,17 @@ struct NotchPanelView: View {
                 .overlay(chargingAmbientLayer(for: shape))
                 .overlay(prayerAmbientLayer(for: shape))
                 .overlay(
-                    shape.stroke(
-                        signals.showChargingBanner && !appState.surface.isExpanded
-                            ? chargingAmbientColor.opacity(chargingAmbientStrokeOpacity)
-                            : (signals.showMiniPeekBanner && !appState.surface.isExpanded
-                                ? prayerAmbientAccentColor.opacity(0.22)
-                                : currentStrokeColor),
-                        lineWidth: currentStrokeWidth
-                    )
+                    shape.stroke(currentStrokeColor, lineWidth: currentStrokeWidth)
                 )
         }
     }
 
     private var chargingAmbientColor: Color {
-        sys.activeBannerState.accentColor
+        signals.chargingBannerState.accentColor
     }
 
     private var chargingAmbientBaseOpacity: Double {
-        switch sys.activeBannerState {
+        switch signals.chargingBannerState {
         case .charging:
             return 0.18
         case .onHold:
@@ -1411,19 +1404,6 @@ struct NotchPanelView: View {
             return 0.20
         case .lowBattery:
             return chargingAmbientPulse ? 0.26 : 0.04
-        }
-    }
-
-    private var chargingAmbientStrokeOpacity: Double {
-        switch sys.activeBannerState {
-        case .charging:
-            return chargingAmbientPulse ? 0.34 : 0.20
-        case .onHold:
-            return chargingAmbientPulse ? 0.28 : 0.18
-        case .fullyCharged:
-            return 0.26
-        case .lowBattery:
-            return chargingAmbientPulse ? 0.38 : 0.08
         }
     }
 
@@ -1437,7 +1417,7 @@ struct NotchPanelView: View {
     @ViewBuilder
     private func chargingBayerDitherLayer<S: Shape>(for shape: S) -> some View {
         let isStaticFull: Bool = {
-            if case .fullyCharged = sys.activeBannerState { return true }
+            if case .fullyCharged = signals.chargingBannerState { return true }
             return false
         }()
 
@@ -1500,7 +1480,7 @@ struct NotchPanelView: View {
     }
 
     private func chargingBayerDitherCanvas(time t: TimeInterval) -> some View {
-        let state = sys.activeBannerState
+        let state = signals.chargingBannerState
         let sweep = ((t.truncatingRemainder(dividingBy: 1.8)) / 1.8) * 1.4 - 0.2
         let freq: Double = {
             if case .lowBattery = state { return 6.5 }
@@ -1530,10 +1510,10 @@ struct NotchPanelView: View {
     }
 
     private var prayerAmbientAccentColor: Color {
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
         let isModern = islandUITheme != IslandUITheme.pixel.rawValue
-        if (syncThemeWithAlbumArt || musicHUDProgressColor == "album") && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
-            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
-        }
         return AppColorTheme.readableOnDark(
             AppColorTheme.accent(for: musicHUDProgressColor, isModern: isModern)
         )
@@ -1649,7 +1629,7 @@ struct NotchPanelView: View {
                     )
                 )
 
-                if case .charging = sys.activeBannerState {
+                if case .charging = signals.chargingBannerState {
                     TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
                         let cycle = 1.8
                         let progress = context.date.timeIntervalSinceReferenceDate
@@ -1679,7 +1659,7 @@ struct NotchPanelView: View {
         chargingAmbientPulse = false
         guard visible else { return }
 
-        switch sys.activeBannerState {
+        switch signals.chargingBannerState {
         case .charging:
             withAnimation(.easeInOut(duration: 1.35).repeatForever(autoreverses: true)) {
                 chargingAmbientPulse = true
@@ -2045,7 +2025,7 @@ struct NotchPanelView: View {
             .onChange(of: signals.showChargingBanner) { _, isVisible in
                 updateChargingAmbientAnimation(visible: isVisible)
             }
-            .onChange(of: sys.activeBannerState) { _, _ in
+            .onChange(of: signals.chargingBannerState) { _, _ in
                 if signals.showChargingBanner {
                     updateChargingAmbientAnimation(visible: true)
                 }
@@ -2288,37 +2268,25 @@ private struct CompactLeftWing: View {
         }
     }
 
-    private var musicPaletteAccent: Color? {
-        guard signals.isPlaying else { return nil }
-        if (syncThemeWithAlbumArt || musicHUDProgressColor == "album"),
-           nowPlaying.artworkImage != nil {
-            return nowPlaying.albumPalette.primary
-        }
-        let pc = MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme
-        switch pc {
-        case .album:
-            return nowPlaying.artworkImage != nil ? nowPlaying.albumPalette.primary : Color(red: 0.0, green: 0.96, blue: 0.83)
-        case .theme: return Color(red: 0.0, green: 0.96, blue: 0.83)
-        case .white: return .white
-        case .cyan: return Color(red: 0.0, green: 0.96, blue: 0.83)
-        case .pink: return Color(red: 1.0, green: 0.16, blue: 0.53)
-        case .green: return Color(red: 0.12, green: 0.84, blue: 0.38)
-        case .amber: return Color(red: 1.0, green: 0.72, blue: 0.20)
-        }
+    private var themedAccent: Color {
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
+        )
     }
 
     private func effectiveToolColor(_ tool: String) -> Color {
-        if let musicAccent = musicPaletteAccent {
-            return musicAccent
+        if AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor)
+            || (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme) != .theme {
+            return themedAccent
         }
         return toolStatusColor(tool)
     }
 
     private var effectiveThinkingColor: Color {
-        if let musicAccent = musicPaletteAccent {
-            return musicAccent
-        }
-        return isPixel ? Color(red: 0.0, green: 0.96, blue: 0.83) : Color(red: 0.0, green: 0.96, blue: 0.83)
+        themedAccent
     }
 
     private var displaySession: SessionSnapshot? {
@@ -2405,8 +2373,8 @@ private struct CompactLeftWing: View {
 
                     Image(systemName: "music.note")
                         .font(.system(size: 8.5, weight: .bold))
-                        .foregroundStyle(musicPaletteAccent ?? (isPixel ? Color(red: 0.0, green: 0.96, blue: 0.83) : Color(red: 1.0, green: 0.65, blue: 0.45)))
-                        .shadow(color: (musicPaletteAccent ?? Color(red: 0.0, green: 0.96, blue: 0.83)).opacity(0.5), radius: 3)
+                        .foregroundStyle(themedAccent)
+                        .shadow(color: themedAccent.opacity(0.5), radius: 3)
                         .fixedSize()
 
                     ModernMarqueeText(
@@ -2674,7 +2642,10 @@ private struct CompactRightWing: View {
     @State private var hoveredAction: String? = nil
 
     private var mailAccentColor: Color {
-        AppColorTheme.accent(for: musicHUDProgressColor, isModern: islandUITheme != IslandUITheme.pixel.rawValue)
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.accent(for: musicHUDProgressColor, isModern: islandUITheme != IslandUITheme.pixel.rawValue)
     }
 
     private var isPixel: Bool {
@@ -3206,6 +3177,15 @@ private struct CompactRightWing: View {
         }
     }
 
+    private var glanceCompletionColor: Color {
+        _ = signals.albumPaletteRevision
+        _ = signals.isPlaying
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
+        )
+    }
+
     @ViewBuilder
     private func compactOverlayStatusBadge(for badge: NotchWidthMetrics.NotchStatusBadge) -> some View {
         let dotColor: Color = {
@@ -3213,7 +3193,7 @@ private struct CompactRightWing: View {
             case .pendingQuestion, .followUpReminder, .waitingAttention:
                 return Color(red: 1.0, green: 0.7, blue: 0.28)
             case .completionGlance:
-                return Color(red: 0.0, green: 0.96, blue: 0.83)
+                return glanceCompletionColor
             case .quietHours:
                 return Color.white.opacity(0.6)
             }
@@ -3251,10 +3231,11 @@ private struct CompactRightWing: View {
                     .frame(width: 10, height: 10)
                     .help(statusBadgeTooltip(for: .waitingAttention))
             case .completionGlance:
+                let glanceColor = glanceCompletionColor
                 Image(systemName: "checkmark.circle.fill")
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83))
-                    .shadow(color: Color(red: 0.0, green: 0.96, blue: 0.83).opacity(0.7), radius: 2)
+                    .foregroundStyle(glanceColor)
+                    .shadow(color: glanceColor.opacity(0.7), radius: 2)
                     .help(statusBadgeTooltip(for: .completionGlance))
             case .quietHours:
                 Image(systemName: "moon.fill")
@@ -4346,10 +4327,15 @@ private struct IdleIndicatorBar: View {
     @AppStorage(SettingsKey.defaultSource) private var defaultSource = SettingsDefaults.defaultSource
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
+    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
     @ObservedObject private var mailManager = MailManager.shared
+    private let signals = IslandSignals.shared
 
     private var mailAccentColor: Color {
-        AppColorTheme.accent(for: musicHUDProgressColor, isModern: islandUITheme != IslandUITheme.pixel.rawValue)
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.accent(for: musicHUDProgressColor, isModern: islandUITheme != IslandUITheme.pixel.rawValue)
     }
 
     static let idlePrayerWingMinWidth: CGFloat = 56
@@ -6114,7 +6100,11 @@ private struct SessionListView: View {
     private var accentColor: Color {
         _ = signals.isPlaying
         _ = signals.musicTitle
-        return AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixelRetro)
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixelRetro)
+        )
     }
 
     private var isPixelRetro: Bool {
@@ -6342,7 +6332,7 @@ private struct SessionListView: View {
                 } else {
                     Image(systemName: "cpu")
                         .font(.system(size: 16))
-                        .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83).opacity(0.7))
+                        .foregroundStyle(accentColor.opacity(0.75))
                     Text("NO ACTIVE AGENT SESSIONS")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.85))
@@ -7527,7 +7517,28 @@ private struct SessionCard: View {
     @AppStorage(SettingsKey.showProjectName) private var showProjectName = SettingsDefaults.showProjectName
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @AppStorage(SettingsKey.agentsHUDTheme) private var agentsHUDTheme = SettingsDefaults.agentsHUDTheme
+    @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
+    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
+    private let signals = IslandSignals.shared
     private var fontSize: CGFloat { CGFloat(contentFontSize) }
+
+    private var effectiveStatusColor: Color {
+        switch cardStatus {
+        case .working, .thinking:
+            _ = signals.isPlaying
+            _ = signals.albumPaletteRevision
+            _ = syncThemeWithAlbumArt
+            if AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor)
+                || (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme) != .theme {
+                return AppColorTheme.readableOnDark(
+                    AppColorTheme.accent(for: musicHUDProgressColor, isModern: true)
+                )
+            }
+            return cardStatus.color
+        case .needsYou, .done, .idle, .stopped, .error:
+            return cardStatus.color
+        }
+    }
     private var aiLineLimit: Int? { aiMessageLines > 0 ? aiMessageLines : nil }
     private var isActiveApproval: Bool { approvalQueueIndex == 0 }
     private var cardMascotAnimating: Bool { mascotAnimationsActive && session.status != .idle }
@@ -7747,7 +7758,7 @@ private struct SessionCard: View {
     /// Status word, project name + optional session label + short ID, tags.
     private var comfortableHeader: some View {
         HStack(alignment: .center, spacing: 6) {
-            SessionStatusChip(status: cardStatus, fontSize: chipFontSize)
+            SessionStatusChip(status: cardStatus, fontSize: chipFontSize, colorOverride: effectiveStatusColor)
                 .layoutPriority(3)
             SessionIdentityLine(
                 session: session,
@@ -7843,7 +7854,7 @@ private struct SessionCard: View {
         switch row {
         case .tool(let tool):
             HStack(alignment: .center, spacing: 6) {
-                SessionToolChip(tool: tool, color: cardStatus.color, fontSize: fontSize)
+                SessionToolChip(tool: tool, color: effectiveStatusColor, fontSize: fontSize)
                 if let detail = session.toolDescription, !detail.isEmpty {
                     MorphText(
                         text: detail,
@@ -7856,7 +7867,7 @@ private struct SessionCard: View {
                 }
             }
         case .thinking:
-            TypingIndicator(fontSize: fontSize, label: L10n.shared["typing_thinking"])
+            TypingIndicator(fontSize: fontSize, label: L10n.shared["typing_thinking"], color: effectiveStatusColor)
         }
     }
 
@@ -8040,7 +8051,7 @@ private struct SessionCard: View {
                     .frame(width: compactProjectWidth, alignment: .leading)
                 Text(status.label)
                     .font(.system(size: CompactSessionRowMetrics.statusFontSize(fontSize), weight: .bold, design: .monospaced))
-                    .foregroundStyle(status.color)
+                    .foregroundStyle(effectiveStatusColor)
                     .lineLimit(1)
                     .frame(width: compactStatusWidth, alignment: .leading)
                 compactActivity
@@ -8097,7 +8108,7 @@ private struct SessionCard: View {
             }
         } else if case .tool(let tool)? = liveRow {
             HStack(spacing: 6) {
-                SessionToolChip(tool: tool, color: cardStatus.color, fontSize: fontSize)
+                SessionToolChip(tool: tool, color: effectiveStatusColor, fontSize: fontSize)
                 if let detail = session.toolDescription, !detail.isEmpty {
                     Text(detail)
                         .font(.system(size: max(10, fontSize - 1), design: .monospaced))
@@ -8110,7 +8121,7 @@ private struct SessionCard: View {
             if let prompt = session.lastUserPrompt {
                 SessionGlyphLine(kind: .prompt, text: prompt, fontSize: max(10, fontSize - 1))
             } else if liveRow == .thinking {
-                TypingIndicator(fontSize: max(10, fontSize - 1), label: L10n.shared["typing_thinking"])
+                TypingIndicator(fontSize: max(10, fontSize - 1), label: L10n.shared["typing_thinking"], color: effectiveStatusColor)
             }
         } else if showSessionRecap, let recap = session.visibleRecap {
             // Written after the reply, as a summary of where things stand.
@@ -8165,8 +8176,9 @@ private struct SessionCard: View {
                 shape.fill(tint)
             }
             if !isCompactRow {
+                let railFill = (cardStatus == .working || cardStatus == .thinking) ? effectiveStatusColor.opacity(0.85) : cardStatus.railColor
                 Rectangle()
-                    .fill(cardStatus.railColor)
+                    .fill(railFill)
                     .frame(width: 3)
             }
         }
@@ -8242,6 +8254,7 @@ private struct SessionCard: View {
 struct SessionStatusChip: View {
     let status: SessionCardStatus
     let fontSize: CGFloat
+    var colorOverride: Color? = nil
 
     /// The word stays small at large text sizes — the header row has the
     /// project, branch and tags to fit too.
@@ -8250,16 +8263,17 @@ struct SessionStatusChip: View {
     }
 
     var body: some View {
+        let resolvedColor = colorOverride ?? status.color
         Text(status.label)
             .font(.system(size: fontSize, weight: .bold, design: .monospaced))
-            .foregroundStyle(status.color)
+            .foregroundStyle(resolvedColor)
             .lineLimit(1)
             .fixedSize()
             .padding(.horizontal, 5)
             .padding(.vertical, 2)
             .background(
                 RoundedRectangle(cornerRadius: 4)
-                    .fill(status.color.opacity(0.15))
+                    .fill(resolvedColor.opacity(0.15))
             )
     }
 }
@@ -8943,14 +8957,14 @@ private struct TypingIndicator: View {
                     ForEach(0..<3, id: \.self) { index in
                         let offsetFactor = Double(index) * 1.05
                         let dotColor = color ?? (isPixel ? Color(red: 0.0, green: 0.96, blue: 0.83) : Color(red: 0.25, green: 0.9, blue: 0.8))
+                        let gradientColors: [Color] = color != nil
+                            ? [dotColor, dotColor.opacity(0.65)]
+                            : [dotColor, Color(red: 0.4, green: 0.75, blue: 1.0)]
 
                         Circle()
                             .fill(
                                 LinearGradient(
-                                    colors: [
-                                        dotColor,
-                                        Color(red: 0.4, green: 0.75, blue: 1.0)
-                                    ],
+                                    colors: gradientColors,
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 )

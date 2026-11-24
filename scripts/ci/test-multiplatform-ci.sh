@@ -64,17 +64,35 @@ if [ -f "$SETUP_SCRIPT" ]; then
     assert_contains "dry-run binds to host.docker.internal:9090" "host.docker.internal:9090" "$DRY_RUN_OUT"
     assert_contains "dry-run restricts concurrency to 1" "WOODPECKER_MAX_WORKFLOWS=1" "$DRY_RUN_OUT"
     assert_contains "dry-run configures linux/amd64 platform label" "platform=linux/amd64" "$DRY_RUN_OUT"
+    assert_contains "dry-run references check-heal capability" "--check-heal" "$DRY_RUN_OUT"
+    
+    SETUP_CONTENT=$(cat "$SETUP_SCRIPT")
+    assert_contains "check-heal uses time-windowed logs" "--since" "$SETUP_CONTENT"
+
+    WATCHDOG_SVC="$ROOT/scripts/systemd/morrow-runner-watchdog.service"
+    WATCHDOG_TMR="$ROOT/scripts/systemd/morrow-runner-watchdog.timer"
+    assert_eq "watchdog service file exists" "true" "$([ -f "$WATCHDOG_SVC" ] && echo true || echo false)"
+    assert_eq "watchdog timer file exists" "true" "$([ -f "$WATCHDOG_TMR" ] && echo true || echo false)"
 else
     echo "  [FAIL] setup-linux-runner.sh does not exist"
     FAILED=$((FAILED + 1))
 fi
 
 # ------------------------------------------------------------------------------
-# Test Suite 2: Windows Check Script
+# Test Suite 2: Linux & Windows Test Scripts
 # ------------------------------------------------------------------------------
-echo "--- Suite 2: windows/ci/check.sh ---"
-WIN_CHECK_SCRIPT="$ROOT/windows/ci/check.sh"
+echo "--- Suite 2: linux/ci/test.sh & windows/ci/check.sh ---"
+LINUX_TEST_SCRIPT="$ROOT/linux/ci/test.sh"
+if [ -f "$LINUX_TEST_SCRIPT" ]; then
+    assert_eq "linux-test.sh is executable" "true" "$([ -x "$LINUX_TEST_SCRIPT" ] && echo true || echo false)"
+    LINUX_SCRIPT_CONTENT=$(cat "$LINUX_TEST_SCRIPT")
+    assert_contains "linux-test.sh runs workspace tests with --locked" "cargo test --workspace --exclude morrow-app --locked" "$LINUX_SCRIPT_CONTENT"
+else
+    echo "  [FAIL] linux/ci/test.sh does not exist"
+    FAILED=$((FAILED + 1))
+fi
 
+WIN_CHECK_SCRIPT="$ROOT/windows/ci/check.sh"
 if [ -f "$WIN_CHECK_SCRIPT" ]; then
     assert_eq "windows-check.sh is executable" "true" "$([ -x "$WIN_CHECK_SCRIPT" ] && echo true || echo false)"
     

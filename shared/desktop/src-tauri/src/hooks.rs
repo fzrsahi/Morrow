@@ -4,8 +4,9 @@
 
 use std::path::{Path, PathBuf};
 
+use morrow_platform::hooks;
 #[cfg(unix)]
-use morrow_platform::hooks::{self, Paths};
+use morrow_platform::hooks::Paths;
 use morrow_platform::hooks::{Report, Status, TargetStatus};
 #[cfg(windows)]
 use morrow_platform::hooks_windows;
@@ -55,11 +56,12 @@ pub fn hooks_status(site: State<'_, HooksSite>) -> HooksSnapshot {
     {
         HooksSnapshot {
             status: hooks_windows::status(&windows_paths(&site), version.as_deref()),
-            // The other eight CLIs' files are read by the same core policy, but
-            // their Windows locations are #99's follow-up, not this ticket's:
-            // an entry pointing at `~/.codex/config.toml` on Windows would be a
-            // path that does not exist.
-            targets: Vec::new(),
+            // The other CLIs' files are `<home>/<target.path>` on both platforms
+            // — every one of them is a CLI that calls `os.homedir()`, and that is
+            // `%USERPROFILE%` here — so the same table and the same policy read
+            // them. What was Windows-specific was the *command* each entry names,
+            // and that lives in `hooks_windows`.
+            targets: hooks::targets_status(&site.paths),
             opencode: opencode::Status {
                 detected: false,
                 plugin_installed: false,
@@ -74,7 +76,7 @@ pub fn hooks_status(site: State<'_, HooksSite>) -> HooksSnapshot {
             yaml: Vec::new(),
             version,
             note: Some(
-                "On Windows this build hooks Claude Code only; the other eight targets arrive with their Windows paths."
+                "On Windows this build leaves OpenCode, Kimi and the YAML sources alone: their plugins and file formats are Unix paths today."
                     .to_owned(),
             ),
         }
@@ -199,11 +201,17 @@ pub fn target_install(
 ) -> Result<Option<Report>, String> {
     #[cfg(windows)]
     {
-        let _ = (site, source);
-        Err(
-            "The other eight targets have no Windows paths yet: that follows this build."
-                .to_owned(),
+        // The script first: a fork installed on a profile whose Claude hooks were
+        // never installed still needs the `.cmd` its entries name.
+        let paths = windows_paths(&site);
+        hooks_windows::ensure_script(&paths).map_err(|error| error.to_string())?;
+        hooks::install_target_with(
+            &site.paths,
+            &source,
+            &stamp(),
+            &hooks_windows::command(&paths),
         )
+        .map_err(|error| error.to_string())
     }
     #[cfg(unix)]
     {
@@ -217,18 +225,9 @@ pub fn target_uninstall(
     site: State<'_, HooksSite>,
     source: String,
 ) -> Result<Option<Report>, String> {
-    #[cfg(windows)]
-    {
-        let _ = (site, source);
-        Err(
-            "The other eight targets have no Windows paths yet: that follows this build."
-                .to_owned(),
-        )
-    }
-    #[cfg(unix)]
-    {
-        hooks::uninstall_target(&site.paths, &source).map_err(|error| error.to_string())
-    }
+    // No command needed: uninstall removes entries by recognising our own, and
+    // that test is the same on both platforms.
+    hooks::uninstall_target(&site.paths, &source).map_err(|error| error.to_string())
 }
 
 /// Remove: the script, the bridge, and our entries in `settings.json`.
@@ -284,19 +283,42 @@ pub fn site() -> HooksSite {
     }
 }
 
-/// Claude Code's own folder: `$CLAUDE_CONFIG_DIR` when it names a directory, the
-/// home's `.claude` otherwise.
+/// Claude Code's own folder: `$CLAUDE_CONFIG_DIR` when it names a directory,
+/// otherwise the same ladder macOS walks (#258).
 ///
 /// The variable is **not** used verbatim. `~/work/claude` is a documented form
 /// and reaches this process unexpanded, so writing `settings.json` beside a
 /// literal `~` would put hooks in a folder Claude Code never reads — while still
-/// reporting success. `morrow_core::config_roots::normalize` is the same seam the
-/// installer and discovery share (#247), so the answer is the same as macOS's:
-/// `~` expanded, trailing separators dropped, and a relative value or a bare root
-/// rejected in favour of the default.
-fn claude_config_dir(home: &Path, raw: Option<&str>) -> Option<PathBuf> {
+/// reporting success.
+///
+/// And when the variable is unset, `~/.claude` is not automatically the answer:
+/// macOS prefers a **live** root — one holding `projects/`, which only Claude
+/// Code writes — and only then falls back. A `~/.claude` holding nothing but the
+/// `settings.json` our own installer wrote is not evidence, so the ladder keeps
+/// walking past it. Without that step a user whose config lives in
+/// `~/.config/claude` gets hooks written where Claude Code never looks, and
+/// everything reports success.
+///
+/// `morrow_core::config_roots` is the one implementation of both halves, shared
+/// with discovery, so the installer and the scanner cannot disagree about which
+/// folder is "the" folder.
+pub(crate) fn claude_config_dir(home: &Path, raw: Option<&str>) -> Option<PathBuf> {
     let home_text = home.to_str()?;
-    morrow_core::config_roots::normalize(raw, home_text, path_style()).map(PathBuf::from)
+    let style = path_style();
+    let resolved = morrow_core::config_roots::resolve(
+        None,
+        raw,
+        home_text,
+        style,
+        morrow_core::config_roots::probe_entry,
+    );
+    // A live root is chosen even when the variable was set-but-unusable, so the
+    // answer is never empty; `Paths::new` reads `None` as `~/.claude`.
+    let default = morrow_core::config_roots::PathStyle::join(style, home_text, ".claude");
+    if resolved == default {
+        return None;
+    }
+    Some(PathBuf::from(resolved))
 }
 
 /// `$HOME` and the style it is written in agree, but they are separate facts
@@ -395,6 +417,44 @@ mod tests {
         assert_eq!(
             path_style().join("/home/dev", ".claude"),
             "/home/dev/.claude"
+        );
+    }
+
+    /// The ladder (#258): without it a user whose config lives in
+    /// `~/.config/claude` gets hooks written where Claude Code never looks.
+    #[test]
+    fn an_unset_variable_falls_through_to_the_ladder() {
+        let scratch = std::env::temp_dir().join(format!("morrow-ladder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&scratch);
+        // A `~/.claude` holding only a hook file of ours is not evidence.
+        std::fs::create_dir_all(scratch.join(".claude")).expect("a directory");
+        std::fs::write(scratch.join(".claude/settings.json"), b"{}").expect("a file");
+        // The real config dir is the one with `projects/`.
+        std::fs::create_dir_all(scratch.join(".config/claude/projects")).expect("a directory");
+
+        let resolved = claude_config_dir(&scratch, None).expect("a config dir");
+        assert_eq!(
+            resolved,
+            scratch.join(".config/claude"),
+            "our own settings.json must not decide which folder is the root"
+        );
+
+        // With a live `~/.claude` that one wins again — and because it *is* the
+        // default, the answer is `None` rather than a path that repeats it.
+        std::fs::create_dir_all(scratch.join(".claude/projects")).expect("a directory");
+        assert_eq!(claude_config_dir(&scratch, None), None);
+
+        let _ = std::fs::remove_dir_all(&scratch);
+    }
+
+    /// The default is expressed as `None` so `Paths::new` derives it; a path
+    /// equal to it must not be passed through as "explicitly configured".
+    #[test]
+    fn the_default_root_is_not_reported_as_an_explicit_choice() {
+        assert_eq!(claude_config_dir(Path::new("/home/dev"), None), None);
+        assert_eq!(
+            claude_config_dir(Path::new("/home/dev"), Some("/home/dev/.claude")),
+            None
         );
     }
 

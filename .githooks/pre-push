@@ -2,6 +2,23 @@
 # Morrow Local Pre-Push Verification Hook
 # Catches compiler timeouts, syntax errors, and unit test regressions before code is pushed.
 
+ROOT="$(git rev-parse --show-toplevel)"
+
+# Frontend gate: lint, type check, bun test, vite build. A checkout without bun
+# or without installed deps is skipped with a notice, the same way a missing
+# 'swift' skips the SwiftPM gate below.
+if command -v bun >/dev/null 2>&1 && [ -d "$ROOT/shared/desktop/node_modules" ]; then
+    echo "==> [Pre-Push Hook] Verifying desktop shell (lint, types, tests, build)..."
+    if ! ( cd "$ROOT" && ./shared/ci/desktop-check.sh ); then
+        echo ""
+        echo "❌ [Pre-Push Error] Desktop shell check failed!"
+        echo "👉 Fix the FAIL lines above, or run './shared/ci/desktop-check.sh' for the full log."
+        exit 1
+    fi
+else
+    echo "==> [Pre-Push Hook] 'bun' or shared/desktop/node_modules missing. Skipping desktop shell check."
+fi
+
 if [ -d /Applications/Xcode.app/Contents/Developer ]; then
     export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
 fi
@@ -12,7 +29,7 @@ if ! command -v swift >/dev/null 2>&1; then
 fi
 
 # The Swift package lives in macos/ (hooks run from the repo root).
-cd "$(git rev-parse --show-toplevel)/macos" || exit 1
+cd "$ROOT/macos" || exit 1
 
 echo "==> [Pre-Push Hook] Verifying build & unit tests locally..."
 if ! swift build --build-tests -q; then

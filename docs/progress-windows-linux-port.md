@@ -1,6 +1,8 @@
 # Progress — Windows & Linux port
 
 **Status:** fase 0–5 **sudah di `main`** — stack #55 (28 PR) merge sebagai `90cdbbf`, disusul #115, #117, #123, #127, #161 dan #169. **Panel UI #180–#202 belum di `main`**: seluruhnya ada di PR #203 (`prototype/island-states`). Audit paritas #240 membuka 8 sub-issue (#232–#239); remediasinya berjalan di #249 dan #250. Core = **Rust**.
+**Checkpoint terakhir:** 2026-11-22 (keduabelas) — dua puluh empat slice remediasi (#249–#287). #232 tertutup kecuali gate hardware: **tiga belas reader**, cache scan tersambung, dan observer peristiwa ada (kedua lengan platform belum pernah berjalan). Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan sisa sub-issue #240.
+
 **Checkpoint terakhir:** 2026-11-22 — audit #240 dan dua slice remediasi pertama. Yang tersisa: gate hardware (#91 E2E-1, L-011, W-001…W-009), #110 (izin maintainer), dan delapan sub-issue #240.
 **Fase kanonik:** [`plan-windows-linux.md`](plan-windows-linux.md) §7. Kalau dokumen ini berbeda dengan §7, §7 yang benar.
 
@@ -71,6 +73,8 @@ Status: `belum` · `sedang` · `PR dibuka` · `revisi` · `merged` · `gagal` ·
 | 6 | #235 → PR #249 | Capability jujur: 11 baris Linux / 8 Windows turun ke `Unsupported(reason)`, registry `ADAPTERS` + test penjaga | `PR dibuka` (stacked #203) | 635 test Rust; guard merah dulu untuk 11 baris |
 | 6 | #241 → PR #250 | outlet suara: `PlaySound` diputar, tabel cue, `PlaySoundW` di Windows, halaman Settings → Sound | `PR dibuka` (stacked #249) | 643 test Rust, 211 frontend, `windows/ci/check.sh` PASS |
 | 6 | #242 → PR #251 | dokumen status cocok dengan kode: 33 baris papan, kolom Status §5.1/§5.2 | `PR dibuka` (stacked #250) | `rg` tidak menemukan klaim yang dibantah |
+| 6 | #243 → PR #252 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `PR dibuka` (stacked #251) | self-check 11/11; gate penuh butuh host dengan `claude` |
+
 | 6 | #243 → PR #253 | gate `E2E-2`: `linux/ci/e2e2.sh` (+ `--self-check`), `windows/ci/e2e2.ps1`, dan `morrow-app --hooks` | `revisi` (stacked #251) | self-check 14/14 di checkout bersih; gate penuh **belum jalan** di host mana pun |
 
 Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge commit*, hapus branch setelah merge.
@@ -98,6 +102,10 @@ Stack PR dan urutan merge: body #33, bagian **Stack PR**. Merge pakai *merge com
 |---|---|---|---|---|---|
 | `E2E-1` | 1 | hook JSON sintetis | kabel tersambung dua arah | Xvfb (smoke) → host Debian X11 (final) | `linux/ci/e2e1.sh` |
 | `E2E-2` | 3, 4 | `claude` asli + hook terinstall | produk bekerja terhadap CLI nyata | host Debian; Windows QEMU/hardware | `linux/ci/e2e2.sh` · `windows/ci/e2e2.ps1` |
+
+`linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude` dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Itu bisa dijalankan siapa pun, di mesin mana pun, dan 11 pemeriksaannya lulus pada 2026-11-22. Separuh panel (CLI asli + klik) tetap butuh host.
+
+`windows/ci/e2e2.ps1` **belum pernah dijalankan di host Windows**. Bagian installer-nya otomatis; bagian panel masih manual dan tercetak sebagai langkah di blok Evidence-nya.
 
 `linux/ci/e2e2.sh --self-check` menjalankan separuh installer tanpa `claude`, tanpa frontend, dan tanpa display: install → `settings.json` memuat hook → install ulang idempoten → uninstall → file kembali **byte-for-byte**. Ia tidak memanggil `x11_binaries`/`x11_workdir`, jadi jalan di checkout bersih asal ada biner aplikasi (`MORROW_APP`, atau `target/debug/morrow-app`) — Tauri memerlukan `dist` saat mengompilasi, jadi skrip tidak lagi membangunnya sendiri. 14 pemeriksaan (11 installer + 3 untuk logika file marker). Separuh panel (CLI asli + klik) tetap butuh host.
 
@@ -128,6 +136,96 @@ Urutan yang disarankan: merge #49 → retarget + merge `main` ke #50 dan #117 �
 ---
 
 ## Log Checkpoint
+
+### 2026-11-22 (keduabelas) — #232 ditutup, kecuali yang tidak bisa dijalankan
+
+- **Sudah:** **#284 → PR #285** cache scan tersambung + gerbang kesegaran. **#286 → PR #287** crate `morrow-watch` (inotify, `ReadDirectoryChangesW`, fallback poll) dan penyambungannya ke tick.
+- **Yang ditemukan saat mengukur:** `ClaudeTranscripts::read` membaca **setiap** transkrip di setiap proyek — 4000 file, empat kali per detik. **1,5 detik per scan.** Gerbang kesegaran sebelum membaca memotongnya jadi 88 ms; cache memotong bacaannya jadi nol pada tick berikutnya. Cache teks memakai `Arc<str>` karena menyerahkan salinan 64 KB × 4000 file berarti 250 MB memcpy per scan.
+- **Kekhawatiran saya sendiri yang tidak berdasar:** "O(9 × proses)" yang saya ulang di tiga PR. Diukur: **2,9 ms** terhadap scan 84 ms — 3,4%. Sekarang ada angkanya, bukan penilaian.
+- **Yang tidak selesai:** E2E-2 penuh (#240 kriteria 4) butuh host dengan `claude` asli. Lengan Linux dan Windows `morrow-watch` di-type-check untuk kedua target tapi **belum pernah berjalan** — dinyatakan di dokumentasi crate.
+- **Bukti:** `cargo test --workspace` 848 lulus (843 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS (kini termasuk `morrow-watch`); `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** menurunkan rantai 26 PR ke `main` dan me-review satu slice dari ujung ke ujung di mesin Linux. Tidak ada PR yang pernah merge.
+
+### 2026-11-22 (kesebelas) — #244 batch 2: enam agent, tiga PR
+
+- **Sudah:** **#278 → PR #279** Cline (store-first, tanpa proses: ekstensi VS Code) dan flat store Qoder/CodeBuddy/Factory sebagai satu reader bertabel. **#280 → PR #281** Copilot (direktori dinamai sesi, cwd dibaca dari aliran event) dan Grok (direktori dinamai cwd yang di-percent-encode, `%2F` bukan `-`). **#282 → PR #283** Kimi (index = peta; legacy `md5(cwd)`) dan Kiro (V3 per-workspace + V2 `sessions/cli`).
+- **Dengan itu #244 tertutup**, dan #232 hanya menyisakan observer peristiwa dan `ScanCache`.
+- **Bug yang ditemukan test sendiri:** `{{` literal di dalam `concat!` (benih Grok bukan JSON); reader Copilot membaca satu tingkat terlalu tinggi; envelope legacy Kimi dikenali dari objek `message` sehingga `context.append_message` tertelan; `is_session_process` tanpa aturan untuk `cursor`/`qoder`/`codebuddy`/`droid`; dan modul baru dua kali masuk **ke dalam doc block modul lain** — tertangkap clippy `doc_lazy_continuation`.
+- **Dua ekspektasi test saya sendiri yang salah:** md5 yang membandingkan hash dengan dirinya, dan urutan giliran Kiro yang mengandaikan "tiga user lalu tiga balasan" padahal reader menggabung menurut indeks baris.
+- **Biaya baru yang terlihat:** `scan_with` menjalankan **sembilan** reader proses atas tabel proses tiap scan — O(9 × proses), sekali per lima detik. Tiga PR berturut-turut menaikkannya.
+- **Bukti:** `cargo test --workspace` 843 lulus (792 sebelum batch 2); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** menyambungkan `ScanCache` (#263) ke reader — satu-satunya AC yang masih saya tandai "sebagian", dan sekarang penghalang utama biaya scan.
+- **Blocker:** gate hardware tidak berubah.
+
+### 2026-11-22 (kesepuluh) — Cursor dan Gemini, dari prosesnya
+
+- **Sudah:** **#276 → PR #277** `scan::ProcessReader` + `scan::run_all`, dan dua reader process-first. Direktori store Cursor **diturunkan** dari cwd (`appProjectDirEncoded`, sudah ada sejak #256); Gemini **dipetakan** lewat `~/.gemini/projects.json` (folder-nya hash yang tidak didokumentasikan), dengan `.project_root` sebagai cadangan. Keduanya memberi sesuatu yang store-first tidak punya: **pid datang bersama sesinya**, tanpa korelasi.
+- **Cara PR ini pertama gagal:** `run_all` bertanya `is_session_process(reader.source(), …)` dan `"cursor"` belum punya aturan di core, jadi reader-nya tidak pernah dipanggil — test mengharapkan satu hit, mendapat nol. Diperbaiki di core, bukan dengan special-case di koordinator.
+- **Bukti:** `cargo test --workspace` 792 lulus (784 sebelum); `discovery::` 22 lulus; `gemini_map` 3 lulus; lima test shell memakai tabel proses palsu; `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Batasan:** jendela kesegaran lima menit berarti sesi yang diam lebih lama tidak muncul sebagai hasil discovery (sama dengan macOS); Cursor IDE tidak dikenali (tidak ada `.app` di Linux/Windows), hanya CLI `cursor-agent`.
+- **Berikutnya:** #244 batch 2 (Kimi, Grok, Kiro, Cline, Copilot, FlatStore — ~1.834 LOC), dan menyambungkan `ScanCache` (#263) ke reader.
+- **Blocker:** gate hardware tidak berubah.
+
+### 2026-11-22 (kesembilan) — Codex, dan tick yang dijaga policy
+
+- **Sudah:** **#272 → PR #273** pembaca rollout Codex. Codex store-first seperti OpenCode: rollout membawa thread id, cwd dan model sendiri, jadi bisa di-backfill tanpa proses. **#274 → PR #275** tick discovery yang dijaga `scan_policy` (#259): panel tersembunyi atau terkunci **tidak memindai sama sekali** (`probes_active`, gate yang sama dengan tailer), yang terlihat paling sering satu scan per 5 detik, dan kembali terlihat langsung memindai.
+- **Dengan itu AC #248 tertutup penuh:** policy akhirnya dipakai, bukan hanya teruji.
+- **Bug yang ditemukan test:** pembaca Codex versi pertama mengumpulkan user dan asisten ke dua daftar lalu menyambungnya, jadi "tanya, jawab, tanya" menjadi "jawab, jawab, jawab". Sekarang tiap turn membawa indeks baris.
+- **Bukti:** `cargo test --workspace` 784 lulus (772 sebelum dua slice ini); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** `ScanCache` (#263) belum dipakai reader — itu yang membuat tick 5 detik membaca ulang store yang tidak berubah, dan alasan tertulis jaraknya 5 detik bukan 1. Lalu jalur process-first untuk Cursor/Gemini, dan #244 batch 2.
+- **Blocker:** gate hardware tidak berubah.
+
+### 2026-11-22 (kedelapan) — reader yang sudah jadi, dan yang ternyata belum bisa
+
+- **Sudah:** **#270 → PR #271**. `opencode::recent_sessions` (query backfill) dan `StoreReader::roots()` — tiap reader menyatakan sendiri di mana ia mencari, karena Claude punya satu store per config root sementara OpenCode punya satu database untuk semua sesi. `scan_once(config_dir, data_dir)` sekarang menjalankan dua reader; `backfill` me-resolve config dir lewat tangga installer (#258).
+- **Yang ternyata tidak bisa didaftarkan:** `cursor` dan `gemini`. Direktori store-nya **diturunkan dari cwd sebuah proses** (`cwd.appProjectDirEncoded()`), dan encoding itu memetakan `/` dan spasi ke `-` yang sama — jadi tanpa proses, cwd tidak bisa dipulihkan dan mendekode-nya akan mengarang direktori yang tidak ada. Keduanya ditinggalkan dengan alasan tertulis di kode.
+- **Bukti:** `cargo test --workspace` 772 lulus (769 sebelum); tiga test baru menyemai database SQLite sungguhan dengan skema OpenCode; `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **Berikutnya:** jalur process-first untuk Cursor/Gemini (tabel proses #266 → cwd per pid → direktori store), Codex sebagai reader store-first berikutnya, #244 batch 2, dan watcher berbasis `scan_policy` (#259) yang sudah ada tapi belum dipakai.
+- **Blocker:** gate hardware tidak berubah.
+
+### 2026-11-22 (ketujuh) — korelasi pid, dan kartu yang akhirnya bisa mati
+
+- **Sudah:** **#266 → PR #268** `morrow-core::agent_process` + `morrow-platform::agent_process`. Yang diport adalah bagian yang menentukan: **apakah sebuah proses adalah sesi sama sekali** — binary Claude Code itu multicall, jadi `ugrep`, `bfs`, `rg` dan `apply-seccomp` adalah executable yang sama, begitu pula `claude bg-pty-host` dan MCP server. Tabel bundle `.app` (600 dari 796 LOC Swift) tidak diport: tidak ada `.app` di Linux/Windows. **#267 → PR #269** menyambungkannya ke `backfill_with`, jadi sesi hasil discovery punya `pid` dan `Watches` memangkasnya.
+- **Aturan yang salah dulu:** versi pertama memilih proses terbaru. Untuk dua sesi di satu direktori itu memberi sesi A proses milik sesi B (`[11, 10]` bukan `[10, 11]`) — kartu A hidup melewati prosesnya sendiri dan mati saat tetangganya keluar. Ditemukan oleh test, bukan review. Sekarang: proses harus mulai **pada atau sebelum** store terakhir ditulis.
+- **"Diukur, bukan diasumsikan":** test biaya **menghitung lintasan**, bukan waktu — 500 proses, 1 permintaan, harus 250 probe liveness. Satu pass per proses per sesi akan jadi 500.
+- **Bukti:** `cargo test --workspace` 769 lulus (753 sebelum dua slice ini); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11.
+- **Batasan:** di Windows korelasi hanya bisa mencocokkan nama executable (argv dan cwd ada di PEB proses lain), jadi dua `claude.exe` di dua direktori bisa tertukar. Implementasi `/proc` dikompilasi di setiap host tetapi hanya berjalan di Linux — cross-check Linux dari macOS gagal di build script `libsqlite3-sys`, jadi yang terbukti di sini hanyalah `parse_cmdline`.
+- **Berikutnya:** #244 (pembaca Cursor/Gemini yang belum didaftarkan ke `scan_once`), reader `codex`/`opencode` untuk backfill, watcher berbasis `scan_policy` (#259), dan sisa #232.
+- **Blocker:** gate hardware tidak berubah.
+
+### 2026-11-22 (keenam) — #247 dan #248 selesai, dan panel tidak lagi kosong setelah restart
+
+- **Sudah:** empat slice lagi. **#258 → PR #262** tangga `resolve` lengkap (`is_live_config_dir` + `probe_entry`), jadi installer dan discovery menunjuk folder yang sama; `~/.claude` yang hanya berisi `settings.json` buatan kita tidak lagi bisa mengalahkan config dir asli. **#259 → PR #263** `scan_policy` (`is_interesting`, `ScanThrottle` leading+trailing, `ScanCache` + `read_if_changed`). **#260 → PR #264** koordinator `scan::run` — root × reader, dedupe, budget, `scan_roots` yang akhirnya memberi `path_identity` pemanggil produksi. **#261 → PR #265** backfill: `insert_discovered`, `Feed::backfill` dipanggil dari `subscribe`, dan reader transkrip Claude asli (tail 64 KB yang sama dengan tailer).
+- **Aturan yang membuat backfill aman:** `insert_discovered` menolak sesi yang sudah ada. Baris hasil scan selalu saksi yang lebih tua, jadi menimpanya akan mengembalikan kartu WORKING ke DONE dan mengambil tempat permission prompt di tier order.
+- **Bukti:** `cargo test --workspace` 753 lulus (703 sebelum empat slice ini); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11; `bun test` 211; `svelte-check` 0/0.
+- **AC #247 yang ditolak:** "walk direktori punya batas kedalaman" — `Discovery/` di macOS hanya memanggil `contentsOfDirectory`, tidak pernah rekursif. Port dari tidak-apa-apa.
+- **AC #248 yang baru sebagian:** policy belum disambungkan ke `ambient.ts` (scan hanya saat attach), dan sesi hasil backfill belum bisa dipangkas sampai #246 memberi mereka `pid`.
+- **Berikutnya:** #246 (`AgentProcessFinder`) — ia yang memberi `pid` pada sesi discovery, sehingga prune bekerja dan `process_watch` (#103) berguna. Lalu #244, #264-#248 sisa reader (opencode/cursor/gemini cukup didaftarkan di `scan_once`), dan watcher berbasis `scan_policy`.
+- **Blocker:** gate hardware tidak berubah.
+
+### 2026-11-22 (kelima) — store SQLite, dan guard yang ternyata mati
+
+- **Sudah:** **#247c → PR #257** `morrow-core::sqlite` (buka read-only, fallback `immutable`, `table_columns` dengan nama tabel yang ditolak kecuali identifier polos, `non_empty_text`) dan `discovery::opencode` (sesi terbaru untuk sebuah cwd lewat `directory` **atau** `path.cwd` di pesan setelah `/cd`, `root_sessions_only` untuk sesi subagent MiMo, model dari pesan terbaru, tiga turn teks terakhir). Dependensi baru: `rusqlite` dengan feature `bundled`.
+- **Bug yang ditemukan:** guard `SQLITE_CANTOPEN` yang saya tulis pertama **tidak pernah terpicu** — SQLite di mesin ini melaporkan `SQLITE_IOERR` untuk keadaan yang sama, dan untuk WAL yang ditutup bersih tanpa sidecar ia bahkan tidak gagal. Fallback sekarang dipicu kegagalan probe apa pun. Selain itu SQL saya sendiri menghasilkan `WHERE AND (…)` saat kedua filter opsional kosong; statement gagal prepare dan `None` dikembalikan — yang terlihat persis seperti "tidak ada agen berjalan".
+- **Tidak dikerjakan:** AC "walk direktori punya batas kedalaman" **tidak punya padanan di Swift** — `Discovery/` hanya me-list satu direktori, tidak pernah rekursif. Walk rekursif di sini akan jadi port dari tidak-apa-apa; AC-nya perlu ditulis ulang.
+- **Bukti:** `cargo test --workspace` 703 lulus (684 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS termasuk `rusqlite` bundled untuk MSVC; `e2e2.sh --self-check` 11/11; `bun test` 211.
+- **Berikutnya:** #247d (tangga `resolve` sebagai perubahan perilaku installer), #246 (`AgentProcessFinder`), #248 (coordinator + backfill + dedupe yang memakai `identity`), #244.
+- **Blocker:** tidak ada slice #232 yang bisa "dipakai" sampai #248 menyambungkannya; gate hardware tetap butuh host Debian/Windows.
+
+### 2026-11-22 (keempat) — path identity, dan klaim yang harus dicabut
+
+- **Sudah:** **#247b → PR #256** `morrow-core::path_identity`: `resolved` (symlink diikuti, komponen memakai ejaan di disk, ekor yang belum ada dipertahankan, dangling link diikuti ke targetnya), `identity` (case fold hanya di Windows), `lexically_normalized` (sadar `PathStyle`, bisa diuji di host POSIX). Pemanggil nyatanya `discovery::transcript_files::list` — **direktori** project di-resolve, entri **tidak**, karena project dir yang berupa symlink adalah cara dua akun berbagi satu project, sementara transkrip yang di-symlink harus melaporkan mtime-nya sendiri.
+- **Dicabut:** klaim di checkpoint sebelumnya bahwa `CLAUDE_CONFIG_DIR` berupa symlink membuat penulisan mengganti link dengan file biasa. **Tidak benar** — `fs::write` membuka path dan truncate *menembus* link, jadi link bertahan. `ConfigPathIdentity.writeTarget` hanya ada karena `String.write(atomically:)` di Swift me-rename salinan sementara di atas file. Tidak ada yang perlu diport; ada test yang memaku perilaku Rust-nya supaya "perbaikan" atomik tidak memasukkannya kembali.
+- **Bukti:** `cargo test --workspace` 684 lulus (666 sebelum); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11.
+- **Berikutnya:** #247c (`SQLiteReader` + batas kedalaman walk + visited-set anti-loop), #247d (tangga `resolve`), #246 (`AgentProcessFinder`), #248 (policy + backfill + dedupe yang akhirnya memakai `identity`).
+- **Blocker:** `identity` belum punya pemanggil produksi sampai #248; cabang Windows `resolved` hanya di-compile-check, tidak dijalankan.
+
+### 2026-11-22 (ketiga) — discovery: seam pembaca, seam config-root, dan `~` yang ditulis literal
+
+- **Sudah:** tiga slice discovery. **#243 → PR #253** gate E2E-2 (lihat entri di bawah). **#245 → PR #254** seam `morrow-core::discovery`: `DiscoveryHit`, `ProjectDirEncoding`, tiga pembaca murni (model [CC], transkrip Cursor, file sesi Gemini) dengan fixture yang **diekspor dari Swift**, bukan diketik tangan. **#247 → PR #255** seam `morrow-core::config_roots`, dan bug yang ia temukan: `CLAUDE_CONFIG_DIR` dibaca mentah oleh installer, jadi `CLAUDE_CONFIG_DIR=~/work/claude` menulis `settings.json` ke folder bernama literal `~` sambil melaporkan sukses — [CC] membaca hook-nya dari tempat lain dan tidak melihat apa pun.
+- **Bukti:** `cargo test --workspace` 666 lulus (647 sebelum dua slice ini); `cargo test -p morrow-core --lib config_roots` 7 lulus; `swift test --filter DiscoveryFixtureExporter` lulus (fixture di disk memang keluaran Swift); `clippy` bersih; `windows/ci/check.sh` PASS; `e2e2.sh --self-check` 11/11 (installer tetap byte-for-byte).
+- **Berikutnya:** #247b (`ConfigPathIdentity`: `realpath`, symlink, `writeTarget`), #247c (walk + `SQLiteReader`), #247d (tangga `resolve` sebagai perubahan perilaku installer), lalu #246 (`AgentProcessFinder`), #248 (policy + backfill), #244.
+- **Blocker:** sama seperti sebelumnya — dan `CLAUDE_CONFIG_DIR` yang berupa symlink masih bisa membuat penulisan mengganti link itu dengan file biasa sampai #247b mendarat.
 
 ### 2026-11-23 (revisi review #253) — gate kini bisa gagal, dan jalan di checkout bersih
 

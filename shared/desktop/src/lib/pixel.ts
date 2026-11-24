@@ -7,6 +7,11 @@ import ICONS from './pixel-icons.json';
 
 export { FONT, ICONS };
 
+// The JSON maps are typed by their literal keys, so a lookup by the character
+// or icon name a caller passes has to go through a plain index signature.
+const FONT_BY_CHAR: Record<string, string | undefined> = FONT;
+const ICON_BY_NAME: Record<string, { w: number; h: number; d: string } | undefined> = ICONS;
+
 export type Rect = { x: number; y: number };
 export type GlyphGrid = { rects: Rect[]; width: number; height: number };
 
@@ -34,7 +39,7 @@ export function pixelTextRects(text: string, max?: number): GlyphGrid {
   let x = 0;
   const rects: Rect[] = [];
   for (const char of chars) {
-    const bits = FONT[char];
+    const bits = FONT_BY_CHAR[char];
     if (!bits) {
       x += UNKNOWN_ADVANCE;
       continue;
@@ -48,7 +53,7 @@ export function pixelTextRects(text: string, max?: number): GlyphGrid {
 }
 
 export function pixelIconRects(name: string): GlyphGrid {
-  const icon = ICONS[name] ?? ICONS.agents;
+  const icon = ICON_BY_NAME[name] ?? ICONS.agents;
   return {
     rects: rectsFrom(icon.d, icon.w, icon.h),
     width: icon.w,

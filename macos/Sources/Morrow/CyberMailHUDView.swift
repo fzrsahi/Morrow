@@ -10,6 +10,8 @@ struct CyberMailHUDView: View {
 
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
+    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
+    private let signals = IslandSignals.shared
 
     init(appState: AppState) {
         self.appState = appState
@@ -20,7 +22,12 @@ struct CyberMailHUDView: View {
     }
 
     private var themeColor: Color {
-        AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isRetroTheme)
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return AppColorTheme.readableOnDark(
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isRetroTheme)
+        )
     }
 
     var body: some View {
@@ -33,6 +40,7 @@ struct CyberMailHUDView: View {
         }
         .animation(.easeInOut(duration: 0.22), value: isRetroTheme)
         .animation(.easeInOut(duration: 0.22), value: musicHUDProgressColor)
+        .animation(.easeInOut(duration: 0.22), value: signals.albumPaletteRevision)
     }
 }
 
@@ -50,7 +58,7 @@ private struct ModernRefreshButton: View {
         } label: {
             Image(systemName: "arrow.clockwise")
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(isSpinning || mailManager.isRefreshing ? 0.95 : 0.55))
+                .foregroundStyle(color.opacity(isSpinning || mailManager.isRefreshing ? 0.95 : 0.65))
                 .rotationEffect(.degrees(spinDegrees))
                 .frame(width: 22, height: 22)
                 .contentShape(Rectangle())

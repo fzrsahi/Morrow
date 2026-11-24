@@ -25,6 +25,9 @@ final class IslandSignals {
     /// The collapsed bar's music tooltip, composed once per track instead of
     /// on every render.
     private(set) var musicTooltip = "Session & Token Usage"
+    private(set) var albumPaletteRevision: Int = 0
+    private(set) var albumPalette: AlbumArtPalette = .fallback
+    private(set) var hasAlbumArtwork: Bool = false
 
     // Session / panel
     private(set) var tooltipText = ""
@@ -33,6 +36,7 @@ final class IslandSignals {
     // Banners and HUDs
     private(set) var showChargingBanner = false
     private(set) var batteryLevel = 100
+    private(set) var chargingBannerState: PowerBannerState = .charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil)
     private(set) var showMiniPeekBanner = false
     private(set) var isVolumeHUDVisible = false
 
@@ -74,6 +78,18 @@ final class IslandSignals {
         withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
             if showChargingBanner != visible { showChargingBanner = visible }
             if self.batteryLevel != batteryLevel { self.batteryLevel = batteryLevel }
+        }
+    }
+
+    func setChargingBannerState(_ state: PowerBannerState) {
+        if chargingBannerState != state { chargingBannerState = state }
+    }
+
+    func setAlbumPalette(_ palette: AlbumArtPalette, hasArtwork: Bool) {
+        if albumPalette != palette || hasAlbumArtwork != hasArtwork {
+            albumPalette = palette
+            hasAlbumArtwork = hasArtwork
+            albumPaletteRevision &+= 1
         }
     }
 

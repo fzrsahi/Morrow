@@ -4,18 +4,26 @@ import AppKit
 struct NotchVolumeHUDView: View {
     @ObservedObject var volumeManager: SystemVolumeManager = .shared
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
+    @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
+    private let signals = IslandSignals.shared
 
     private var isPixel: Bool {
         islandUITheme == IslandUITheme.pixel.rawValue
     }
 
     private var activeProgressColor: Color {
-        (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).color
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).color
     }
 
     private var activeProgressGradient: LinearGradient {
-        (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).gradient
+        _ = signals.isPlaying
+        _ = signals.albumPaletteRevision
+        _ = syncThemeWithAlbumArt
+        return (MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme).gradient
     }
 
     private var speakerIconName: String {

@@ -25,6 +25,7 @@ windows = { version = "0.62", features = [
 ] }
 
 [dependencies]
+morrow-watch = { path = "../../crates/morrow-watch" }
 morrow-core = { path = "../../crates/morrow-core" }
 morrow-ipc = { path = "../../crates/morrow-ipc" }
 morrow-platform = { path = "../../crates/morrow-platform" }
@@ -45,3 +46,8 @@ custom-protocol = ["tauri/custom-protocol"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# The OpenCode reader's tests seed a real SQLite store (#270). `rusqlite` is
+# already compiled for `morrow-core` (bundled), so this adds build time to nothing.
+rusqlite.workspace = true

@@ -243,8 +243,21 @@ fn sound_effects_are_supported_only_when_a_player_is_on_path() {
         "no player, no sound"
     );
 
-    // A file named like a player is what the probe looks for.
-    fs::write(bin.join("pw-play"), "#!/bin/sh\n").expect("player");
+    // A file named like a player is not enough: the probe asks the same
+    // question as the player, and the feed can only spawn an executable.
+    let player = bin.join("pw-play");
+    fs::write(&player, "#!/bin/sh\n").expect("player");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            matches!(Feature::Audio.probe(&env), Capability::Unsupported(_)),
+            "a non-executable pw-play cannot be spawned"
+        );
+        fs::set_permissions(&player, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    // Once it is executable (or on Windows, where there is no such bit), the
+    // same file is a real player.
     assert_eq!(Feature::Audio.probe(&env), Capability::Supported);
 }
 

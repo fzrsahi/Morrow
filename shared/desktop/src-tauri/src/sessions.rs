@@ -94,6 +94,10 @@ pub struct Session {
     /// frontend shows only this on the reply row; the hook fields above still
     /// own card status, tier order and the collapsed bar.
     pub live_reply: String,
+    /// `live_reply` (or the hook's reply) folded into one line of running text
+    /// (#238 AC 4). A card row cannot show a table or a fence — only its syntax —
+    /// so the shell flattens it once here instead of every surface guessing.
+    pub reply_preview: String,
     pub model: String,
     /// The full working directory; `cwd_name` is its last component.
     pub cwd: String,
@@ -157,6 +161,70 @@ pub struct Sessions {
 }
 
 impl Sessions {
+    /// Put the session list a previous launch wrote back in place (#238 AC 6).
+    ///
+    /// `title` resolves the sessions that did not carry one — the store's own name for
+    /// them — and is asked only for a row that has none. A session a hook already
+    /// reported is left alone: the file is a memory of last time, not the truth.
+    pub fn restore(
+        &mut self,
+        rows: Vec<morrow_core::session_store::PersistedSession>,
+        title: impl Fn(
+            &morrow_core::session_store::PersistedSession,
+        ) -> Option<morrow_core::session_store::ResolvedSessionTitle>,
+    ) -> usize {
+        let mut restored = 0;
+        for row in rows {
+            if self.inner.contains_key(&row.session_id) {
+                continue;
+            }
+            let mut snapshot = morrow_core::session_store::into_snapshot(&row);
+            if snapshot.session_title.is_none() {
+                if let Some(resolved) = title(&row) {
+                    snapshot.session_title = Some(resolved.title);
+                }
+            }
+            self.inner.insert(row.session_id, snapshot);
+            restored += 1;
+        }
+        restored
+    }
+
+    /// Sessions waiting on the user some other way than an island request: a Cowork
+    /// card, an in-IDE question, a Codex Desktop flag. Returns the two kinds, because
+    /// `sync` reconciles each on its own.
+    pub fn display_only_waiting(
+        &self,
+        island_request_session_ids: &std::collections::BTreeSet<String>,
+    ) -> (
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    ) {
+        use morrow_core::display_only_wait;
+        use morrow_core::follow_up::FollowUpKind;
+        (
+            display_only_wait::session_ids(
+                FollowUpKind::Approval,
+                &self.inner,
+                island_request_session_ids,
+            ),
+            display_only_wait::session_ids(
+                FollowUpKind::Question,
+                &self.inner,
+                island_request_session_ids,
+            ),
+        )
+    }
+
+    /// The rows a save would write.
+    pub fn persisted(&self) -> Vec<morrow_core::session_store::PersistedSession> {
+        self.inner
+            .iter()
+            .filter(|(id, snap)| morrow_core::session_store::is_persisted(id, snap))
+            .map(|(id, snap)| morrow_core::session_store::to_persisted(id, snap))
+            .collect()
+    }
+
     /// Creates a session store whose reducer ignores `home_directory` as a
     /// bare project `cwd`.
     pub fn with_home(home_directory: impl Into<String>) -> Self {
@@ -251,6 +319,44 @@ impl Sessions {
         self.apply_with_intents(payload, now_ms).effects
     }
 
+    /// A session that was **found**, not announced (#261).
+    ///
+    /// Until now a session could only be born from a hook, so a panel opened
+    /// after a restart stayed empty until the next hook arrived — and a session
+    /// whose hook never carried a pid was never pruned. This is the other way in,
+    /// and it deliberately produces the same `SessionSnapshot` a hook does, so
+    /// the card, the tier order and the pruner cannot tell the difference.
+    ///
+    /// Returns `false` and changes nothing when the session already exists. A
+    /// discovered row is by definition older than whatever a hook last said:
+    /// overwriting would take a card that is WORKING back to DONE, and take a
+    /// permission prompt's place in the tier order with it. "Scan never wins" is
+    /// the rule; the hook is the more specific witness.
+    pub fn insert_discovered(&mut self, hit: &morrow_core::discovery::DiscoveryHit) -> bool {
+        if self.inner.contains_key(&hit.session_id) {
+            return false;
+        }
+        let modified_at = hit.modified_at.unwrap_or_default() as f64 / 1000.0;
+        let mut snapshot = SessionSnapshot::new(Timestamp(modified_at));
+        snapshot.status = AgentStatus::Idle;
+        // The agent the reader named, not the one a hook would have named: a
+        // scan knows which store it read.
+        snapshot.source = hit.source.to_owned();
+        snapshot.cwd = (!hit.cwd.is_empty()).then(|| hit.cwd.clone());
+        snapshot.model = hit.model.clone();
+        snapshot.recent_messages = hit.recent_messages.clone();
+        snapshot.transcript_path = hit.transcript_path.clone();
+        snapshot.cli_pid = hit.pid;
+        // The `Close`-less shape: a hook names the session; a scan only guesses
+        // from the agent's own store, so the source comes with the hit.
+        self.inner.insert(hit.session_id.clone(), snapshot);
+        self.transcript_paths
+            .entry(hit.session_id.clone())
+            .or_insert_with(|| hit.transcript_path.clone().unwrap_or_default());
+        self.branches.remove(&hit.session_id);
+        true
+    }
+
     /// The transcript paths the hooks reported, for the shell's tailer.
     pub fn transcript_paths(&self) -> Vec<(String, String)> {
         self.transcript_paths
@@ -302,6 +408,11 @@ impl Sessions {
         self.live_replies.remove(session_id);
     }
 
+    /// The home this store reduces against, which is where discovery looks.
+    pub fn home_directory(&self) -> String {
+        self.home_directory.clone()
+    }
+
     /// No sessions left to watch.
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
@@ -319,6 +430,18 @@ impl Sessions {
                     .get(session_id)
                     .and_then(|(_, info)| info.as_ref());
                 let tasks = &snap.agent_tasks;
+                let live_reply = self
+                    .live_replies
+                    .get(session_id)
+                    .cloned()
+                    .unwrap_or_default();
+                // A streaming line wins over the reply the hook reported (#192); the
+                // preview is folded from whichever the card would have shown.
+                let shown = if live_reply.trim().is_empty() {
+                    or_empty(&snap.last_assistant_message)
+                } else {
+                    live_reply.clone()
+                };
                 Session {
                     session_id: session_id.clone(),
                     source: snap.source.clone(),
@@ -339,11 +462,8 @@ impl Sessions {
                     tool_description: or_empty(&snap.tool_description),
                     last_user_prompt: or_empty(&snap.last_user_prompt),
                     last_assistant_message: or_empty(&snap.last_assistant_message),
-                    live_reply: self
-                        .live_replies
-                        .get(session_id)
-                        .cloned()
-                        .unwrap_or_default(),
+                    live_reply: live_reply.clone(),
+                    reply_preview: reply_preview(&shown),
                     model: or_empty(&snap.model),
                     cwd: or_empty(&snap.cwd),
                     term_app: or_empty(&snap.term_app),
@@ -386,6 +506,16 @@ fn basename(path: &str) -> &str {
         .unwrap_or_default()
 }
 
+/// The shell folds one reply into a card row. #337's source budget belongs
+/// here, on the production path — not only in the fixture tests next to
+/// `preview_source`.
+fn reply_preview(shown: &str) -> String {
+    morrow_core::markdown_preview::plain(
+        &morrow_core::markdown_preview::preview_source(shown),
+        true,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,6 +523,98 @@ mod tests {
 
     fn hook(json: &str) -> HookPayload {
         decode_payload(json.as_bytes()).unwrap()
+    }
+
+    fn discovered(
+        session_id: &str,
+        cwd: &str,
+        model: Option<&str>,
+    ) -> morrow_core::discovery::DiscoveryHit {
+        morrow_core::discovery::DiscoveryHit {
+            session_id: session_id.to_owned(),
+            source: "claude",
+            cwd: cwd.to_owned(),
+            model: model.map(str::to_owned),
+            modified_at: Some(5_000),
+            recent_messages: vec![
+                morrow_core::reduce::ChatMessage::new(true, "Add a filter bar"),
+                morrow_core::reduce::ChatMessage::new(false, "Added the bar"),
+            ],
+            transcript_path: Some(format!("/home/u/.claude/projects/p/{session_id}.jsonl")),
+            ..morrow_core::discovery::DiscoveryHit::default()
+        }
+    }
+
+    /// Backfill and hooks must produce the same card, or the panel would look
+    /// different depending on which arrived first.
+    #[test]
+    fn a_discovered_session_becomes_an_ordinary_card() {
+        let mut sessions = Sessions::default();
+        assert!(sessions.insert_discovered(&discovered("a", "/home/u/project", Some("model-x"))));
+
+        let rows = sessions.snapshot();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].session_id, "a");
+        assert_eq!(rows[0].source, "claude");
+        assert_eq!(rows[0].cwd, "/home/u/project");
+        assert_eq!(rows[0].cwd_name, "project");
+        assert_eq!(rows[0].model, "model-x");
+        assert_eq!(rows[0].updated_at, 5_000);
+        // DONE, not IDLE: a transcript whose last word is the assistant's is a
+        // finished turn, which is exactly what the card tier "done" means. A
+        // session with no usable turn at all stays IDLE.
+        assert_eq!(rows[0].status, CardStatus::Done);
+    }
+
+    /// A discovered session with nothing to show is IDLE, not a blank DONE card.
+    #[test]
+    fn a_discovered_session_with_no_turns_is_idle() {
+        let mut sessions = Sessions::default();
+        let mut hit = discovered("a", "/home/u/project", None);
+        hit.recent_messages.clear();
+        sessions.insert_discovered(&hit);
+        assert_eq!(sessions.snapshot()[0].status, CardStatus::Idle);
+    }
+
+    /// The rule that keeps a scan from fighting a hook: a discovered row is
+    /// always the older witness, so it never overwrites one.
+    #[test]
+    fn a_scan_never_overwrites_a_session_a_hook_already_reported() {
+        let mut sessions = Sessions::default();
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"PreToolUse","cwd":"/home/u/a"}"#),
+            20,
+        );
+        let before = sessions.snapshot();
+
+        assert!(
+            !sessions.insert_discovered(&discovered("a", "/home/u/elsewhere", Some("stale"))),
+            "the second sighting must be refused"
+        );
+        assert_eq!(sessions.snapshot(), before);
+    }
+
+    #[test]
+    fn a_discovered_session_is_added_once() {
+        let mut sessions = Sessions::default();
+        assert!(sessions.insert_discovered(&discovered("a", "/home/u/p", None)));
+        assert!(!sessions.insert_discovered(&discovered("a", "/home/u/p", None)));
+        assert_eq!(sessions.snapshot().len(), 1);
+    }
+
+    /// A hook arriving after the scan still owns the card: the discovered row is
+    /// a starting point, not a lock.
+    #[test]
+    fn a_hook_arriving_after_the_scan_still_updates_the_card() {
+        let mut sessions = Sessions::default();
+        sessions.insert_discovered(&discovered("a", "/home/u/p", Some("model-x")));
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"PreToolUse","cwd":"/home/u/p"}"#),
+            30,
+        );
+        let rows = sessions.snapshot();
+        assert_eq!(rows[0].last_event, "PreToolUse");
+        assert_eq!(rows[0].updated_at, 30);
     }
 
     #[test]
@@ -438,6 +660,7 @@ mod tests {
                 last_user_prompt: String::new(),
                 last_assistant_message: String::new(),
                 live_reply: String::new(),
+                reply_preview: String::new(),
                 model: String::new(),
                 cwd: "/home/u/proj/".into(),
                 term_app: String::new(),
@@ -556,6 +779,14 @@ mod tests {
     }
 
     #[test]
+    fn a_huge_live_reply_is_budgeted_on_the_card_path() {
+        let huge = "A long line of prose that must be counted against the budget.\n".repeat(4_000);
+        let preview = reply_preview(&huge);
+        assert!(preview.len() < 16 * 1024, "{} bytes", preview.len());
+        assert!(preview.starts_with("A long line of prose"));
+    }
+
+    #[test]
     fn basename_of_odd_paths() {
         assert_eq!(basename(""), "");
         assert_eq!(basename("/"), "");
@@ -620,6 +851,124 @@ mod tests {
         assert_eq!(row.last_user_prompt, "Ship it");
         assert_eq!(row.last_assistant_message, "Shipped; all tests pass.");
         assert_eq!(row.current_tool, "");
+    }
+
+    /// #238 AC 4: a card row cannot show a table or a fence, only their syntax, so
+    /// the shell folds the reply into one line of running text before it is sent.
+    /// #238 AC 6: the list a launch wrote comes back, titles included, and a session a
+    /// hook already reported is not overwritten by the file.
+    #[test]
+    fn a_restart_brings_the_session_list_and_its_titles_back() {
+        use morrow_core::session_store::{
+            self, PersistedSession, ResolvedSessionTitle, SessionTitleSource,
+        };
+
+        let row = |id: &str, source: &str, title: Option<&str>| PersistedSession {
+            session_id: id.into(),
+            source: source.into(),
+            cwd: Some(format!("/work/{id}")),
+            session_title: title.map(str::to_owned),
+            start_time: "2026-01-02T03:04:05Z".into(),
+            last_activity: "2026-01-02T03:09:05Z".into(),
+            last_assistant_message: Some("shipped it".into()),
+            ..PersistedSession::default()
+        };
+
+        let mut sessions = Sessions::with_home("/home/u");
+        // A hook lands before the file is read: that session is the hook's.
+        sessions.apply(
+            &hook(r#"{"session_id":"live","hook_event_name":"SessionStart"}"#),
+            10,
+        );
+        let restored = sessions.restore(
+            vec![
+                row("codex-1", "codex", None),
+                row("claude-1", "claude", Some("Named already")),
+                row("live", "claude", None),
+            ],
+            |row| match row.session_id.as_str() {
+                "codex-1" => Some(ResolvedSessionTitle {
+                    title: "Thread name".into(),
+                    source: SessionTitleSource::CodexThreadName,
+                }),
+                _ => None,
+            },
+        );
+        assert_eq!(restored, 2, "the live session is left alone");
+
+        let rows = sessions.snapshot();
+        let codex = rows
+            .iter()
+            .find(|row| row.session_id == "codex-1")
+            .expect("codex row");
+        assert_eq!(codex.cwd_name, "codex-1");
+        assert_eq!(codex.last_assistant_message, "shipped it");
+        // The title the file did not carry was resolved from the store.
+        assert_eq!(
+            sessions
+                .inner
+                .get("codex-1")
+                .and_then(|s| s.session_title.clone()),
+            Some("Thread name".to_owned())
+        );
+        assert_eq!(
+            sessions
+                .inner
+                .get("claude-1")
+                .and_then(|s| s.session_title.clone()),
+            Some("Named already".to_owned())
+        );
+        assert_eq!(sessions.inner["live"].session_title, None);
+
+        // Saving writes the same three sessions back.
+        let persisted = sessions.persisted();
+        assert_eq!(persisted.len(), 3);
+        let dir = std::env::temp_dir().join(format!(
+            "morrow-restore-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        session_store::save(&dir, &persisted);
+        let back = session_store::load(&dir);
+        assert_eq!(back.len(), 3);
+        assert!(back.iter().any(|row| row.session_id == "codex-1"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_reply_preview_is_one_flat_line_whatever_the_reply_is() {
+        use morrow_core::transcript::ScanDelta;
+
+        let mut sessions = Sessions::with_home("/home/u");
+        sessions.apply(
+            &hook(r#"{"session_id":"a","hook_event_name":"SessionStart"}"#),
+            10,
+        );
+        assert_eq!(sessions.snapshot()[0].reply_preview, "");
+
+        let reply = "## Summary\nFixed **login**:\n- [x] token refresh\n\n| File | Lines |\n|---|---|\n| auth.ts | 12 |\n\n```bash\nnpm test\nnpm run lint\n```";
+        let delta = ScanDelta {
+            last_assistant_message: Some(reply.into()),
+            ..ScanDelta::default()
+        };
+        sessions.apply_transcript_delta("a", &delta);
+
+        let row = &sessions.snapshot()[0];
+        // The raw text is still there for the surfaces that render Markdown.
+        assert_eq!(row.live_reply, reply);
+        assert_eq!(
+            row.reply_preview,
+            "Summary · Fixed login: ☑ token refresh · File, Lines · auth.ts, 12 · npm test …"
+        );
+        assert!(!row.reply_preview.contains('\n'));
+
+        // A streaming line wins over the hook's reply, so the preview follows it.
+        let delta = ScanDelta {
+            last_assistant_message: Some("- one\n- two".into()),
+            ..ScanDelta::default()
+        };
+        sessions.apply_transcript_delta("a", &delta);
+        assert_eq!(sessions.snapshot()[0].reply_preview, "one · two");
     }
 
     #[test]
