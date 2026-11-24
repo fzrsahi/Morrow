@@ -23,6 +23,7 @@
 //! - [`digest`]: SHA-256, for the delivery digest of a hook Cursor ran.
 #![forbid(unsafe_code)]
 
+pub mod agent_process;
 pub mod agent_tasks;
 pub mod attention;
 pub mod config_roots;
@@ -36,6 +37,7 @@ pub mod model_label;
 pub mod music;
 pub mod path_identity;
 pub mod reduce;
+pub mod scan_policy;
 pub mod session_recap;
 pub mod sqlite;
 pub mod time;
