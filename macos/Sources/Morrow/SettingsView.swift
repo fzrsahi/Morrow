@@ -2089,7 +2089,6 @@ private struct AppearancePage: View {
 
                     Grid(alignment: .leading, horizontalSpacing: 10, verticalSpacing: 8) {
                         GridRow {
-<<<<<<< HEAD:Sources/Morrow/SettingsView.swift
                             Button(action: {
                                 SystemMonitorManager.shared.triggerChargingBanner(
                                     previewState: .charging(kind: .magSafe, watts: 140, timeToFullMinutes: 28),
@@ -2105,7 +2104,6 @@ private struct AppearancePage: View {
                                 }
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3.5)
-=======
                             notificationPreviewButton(
                                 icon: "battery.100.bolt",
                                 color: Color(red: 0.19, green: 0.82, blue: 0.35),
@@ -2115,7 +2113,6 @@ private struct AppearancePage: View {
                                     previewState: .charging(kind: .magSafe, watts: 140, timeToFullMinutes: 28),
                                     previewBatteryLevel: 54
                                 )
->>>>>>> origin/main:macos/Sources/Morrow/SettingsView.swift
                             }
 
                             notificationPreviewButton(
@@ -2231,7 +2228,6 @@ private struct AppearancePage: View {
 
                         GridRow {
                             Button(action: {
-<<<<<<< HEAD:Sources/Morrow/SettingsView.swift
                                 SystemMonitorManager.shared.triggerChargingBanner(
                                     previewState: .charging(kind: .usbC, watts: 67, timeToFullMinutes: 41),
                                     previewBatteryLevel: 64
@@ -2309,11 +2305,9 @@ private struct AppearancePage: View {
                         GridRow {
                             Button(action: {
                                 SystemVolumeManager.shared.presentHUD()
-=======
                                 if let appState {
                                     triggerApprovalPreview(on: appState)
                                 }
->>>>>>> origin/main:macos/Sources/Morrow/SettingsView.swift
                             }) {
                                 HStack(spacing: 6) {
                                     Image(systemName: "checkmark.shield.fill")

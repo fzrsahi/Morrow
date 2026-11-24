@@ -4,30 +4,24 @@ import IOKit
 import IOKit.ps
 import Darwin
 
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
 public enum PowerAdapterKind: String, CaseIterable, Sendable, Equatable {
     case magSafe
     case usbC
     case ac
-=======
 public enum PowerSourceKind: String, Sendable, Equatable {
     case magSafe
     case usbC
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
 
     public var label: String {
         switch self {
         case .magSafe: return "MagSafe"
         case .usbC: return "USB-C"
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
         case .ac: return "AC Power"
-=======
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
+
         }
     }
 }
 
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
 public enum PowerBannerState: Equatable, Sendable {
     case charging(kind: PowerAdapterKind, watts: Int?, timeToFullMinutes: Int?)
     case chargingOnHold(kind: PowerAdapterKind, watts: Int?)
@@ -43,7 +37,6 @@ public enum PowerBannerState: Equatable, Sendable {
             case .ac: return "Charging"
             }
         case .chargingOnHold: return "Charging On Hold"
-=======
 public enum PowerBannerState: Sendable, Equatable {
     case charging(kind: PowerSourceKind, watts: Int?, timeToFullMinutes: Int?)
     case onHold(kind: PowerSourceKind)
@@ -54,7 +47,6 @@ public enum PowerBannerState: Sendable, Equatable {
         switch self {
         case .charging: return "Charging"
         case .onHold: return "Charging On Hold"
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
         case .fullyCharged: return "Fully Charged"
         case .lowBattery: return "Low Battery"
         }
@@ -63,7 +55,6 @@ public enum PowerBannerState: Sendable, Equatable {
     public var subtitle: String {
         switch self {
         case .charging(let kind, let watts, let mins):
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
             var parts: [String] = []
             if let watts, watts > 0 {
                 parts.append("\(watts)W \(kind.label)")
@@ -81,7 +72,6 @@ public enum PowerBannerState: Sendable, Equatable {
             return "Optimized Charging · \(kind.label)"
         case .fullyCharged(let kind):
             return "\(kind.label) Connected"
-=======
             var parts = [kind.label]
             if let watts, watts > 0 { parts.append("\(watts)W") }
             if let mins, mins > 0 {
@@ -94,13 +84,11 @@ public enum PowerBannerState: Sendable, Equatable {
             return "\(kind.label) · Optimized charging"
         case .fullyCharged(let kind):
             return "\(kind.label) · 100% charged"
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
         case .lowBattery:
             return "Connect power adapter"
         }
     }
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
-=======
+
 
     public var accentColor: Color {
         switch self {
@@ -129,7 +117,6 @@ public enum PowerBannerState: Sendable, Equatable {
         case .fullyCharged: return .checkmark
         }
     }
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
 }
 
 public struct SystemMetrics: Sendable, Equatable {
@@ -153,11 +140,8 @@ public final class SystemMonitorManager: ObservableObject {
     @Published public var showChargingBanner: Bool = false
     @Published public private(set) var activeBannerState: PowerBannerState = .charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil)
     @Published public private(set) var activeBannerBatteryLevel: Int = 100
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
     private var chargingDismissWorkItem: DispatchWorkItem?
-=======
     private let bannerTimer = BannerHoverHoldTimer(defaultDuration: 3.0)
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
 
     public func dismissChargingBanner() {
         bannerTimer.cancel()
@@ -166,7 +150,6 @@ public final class SystemMonitorManager: ObservableObject {
         }
     }
 
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
     public func triggerChargingBanner(previewState: PowerBannerState? = nil, previewBatteryLevel: Int? = nil) {
         PrayerTimeManager.shared.dismissMiniPeekBanner()
         if let previewState {
@@ -180,7 +163,6 @@ public final class SystemMonitorManager: ObservableObject {
             activeBannerBatteryLevel = metrics.batteryLevel
         }
         showChargingBanner = true
-=======
     public func setChargingBannerHovered(_ hovering: Bool) {
         bannerTimer.setHovered(hovering, isVisible: showChargingBanner) { [weak self] in
             self?.dismissChargingBanner()
@@ -194,7 +176,6 @@ public final class SystemMonitorManager: ObservableObject {
         withAnimation(.spring(response: 0.38, dampingFraction: 0.84)) {
             showChargingBanner = true
         }
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
         bannerTimer.start { [weak self] in
             self?.dismissChargingBanner()
@@ -270,7 +251,6 @@ public final class SystemMonitorManager: ObservableObject {
     /// power fields are re-read; the gauges are not running a timer here.
     private func powerSourceChanged() {
         let (battery, isCharging, isAC, bannerState) = readPowerStatus()
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
         let becameCharging = (lastChargingState == false && isCharging)
         let becameAC = (lastACState == false && isAC)
         let becameLowBattery = (!isAC && battery <= 20 && !lastLowBatteryAlerted)
@@ -283,20 +263,16 @@ public final class SystemMonitorManager: ObservableObject {
         lastChargingState = isCharging
         lastACState = isAC
 
-=======
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
         if metrics.batteryLevel != battery || metrics.isCharging != isCharging || metrics.isACPowered != isAC || metrics.powerBannerState != bannerState {
             metrics.batteryLevel = battery
             metrics.isCharging = isCharging
             metrics.isACPowered = isAC
             metrics.powerBannerState = bannerState
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
         }
 
         if becameCharging || becameAC || becameLowBattery {
             triggerChargingBanner()
-=======
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
+
         }
         if lastChargingState == false, isCharging {
             triggerChargingBanner(previewState: bannerState, previewBatteryLevel: battery)
@@ -347,7 +323,6 @@ public final class SystemMonitorManager: ObservableObject {
         let (downSpeed, upSpeed) = readNetworkSpeeds()
         let (battery, isCharging, isAC, bannerState) = readPowerStatus()
 
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
         let becameCharging = (lastChargingState == false && isCharging)
         let becameAC = (lastACState == false && isAC)
         let becameLowBattery = (!isAC && battery <= 20 && !lastLowBatteryAlerted)
@@ -355,13 +330,11 @@ public final class SystemMonitorManager: ObservableObject {
             lastLowBatteryAlerted = false
         } else if becameLowBattery {
             lastLowBatteryAlerted = true
-=======
         // Check for charger connection event (MagSafe / USB-C animation trigger)
         if let lastState = lastChargingState {
             if !lastState && isCharging {
                 triggerChargingBanner(previewState: bannerState, previewBatteryLevel: battery)
             }
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
         }
         lastChargingState = isCharging
         lastACState = isAC
@@ -472,12 +445,8 @@ public final class SystemMonitorManager: ObservableObject {
     // MARK: - Power & Battery Status via IOKit
 
     private func readPowerStatus() -> (batteryLevel: Int, isCharging: Bool, isAC: Bool, bannerState: PowerBannerState) {
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
         let (adapterKind, watts) = readExternalPowerAdapterDetails()
-
-=======
         let (adapterKind, adapterWatts) = readExternalAdapterDetails()
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
         guard let snapshot = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
               let sources = IOPSCopyPowerSourcesList(snapshot)?.takeRetainedValue() as? [CFTypeRef],
               !sources.isEmpty else {
@@ -489,7 +458,6 @@ public final class SystemMonitorManager: ObservableObject {
             let curCapacity = desc[kIOPSCurrentCapacityKey as String] as? Int ?? 100
             let isCharging = desc[kIOPSIsChargingKey as String] as? Bool ?? false
             let isCharged = desc[kIOPSIsChargedKey as String] as? Bool ?? false
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
             let powerSourceState = desc[kIOPSPowerSourceStateKey as String] as? String
             let isAC = (powerSourceState == (kIOPSACPowerValue as String))
             let timeToFull = desc[kIOPSTimeToFullChargeKey as String] as? Int
@@ -508,8 +476,6 @@ public final class SystemMonitorManager: ObservableObject {
             } else {
                 bannerState = .charging(kind: adapterKind, watts: watts, timeToFullMinutes: nil)
             }
-
-=======
             let rawTimeToFull = desc[kIOPSTimeToFullChargeKey as String] as? Int
             let timeToFull = (rawTimeToFull ?? -1) > 0 ? rawTimeToFull : nil
             let powerSourceState = desc[kIOPSPowerSourceStateKey as String] as? String
@@ -525,14 +491,12 @@ public final class SystemMonitorManager: ObservableObject {
             } else {
                 bannerState = .charging(kind: adapterKind, watts: adapterWatts, timeToFullMinutes: timeToFull)
             }
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
             return (curCapacity, isCharging, isAC, bannerState)
         }
 
         return (100, false, true, .fullyCharged(kind: adapterKind))
     }
 
-<<<<<<< HEAD:Sources/Morrow/SystemMonitorManager.swift
     private func readExternalPowerAdapterDetails() -> (kind: PowerAdapterKind, watts: Int?) {
         guard let details = IOPSCopyExternalPowerAdapterDetails()?.takeRetainedValue() as? [String: Any] else {
             return (.ac, nil)
@@ -549,7 +513,6 @@ public final class SystemMonitorManager: ObservableObject {
             return (.usbC, watts)
         }
         return (.ac, watts)
-=======
     private func isMagSafePortConnected() -> Bool {
         var iterator: io_iterator_t = 0
         guard let matching = IOServiceMatching("IOPort"),
@@ -606,7 +569,6 @@ public final class SystemMonitorManager: ObservableObject {
             kind = (family == 0xE000400A || family == 0xE0004007) ? .usbC : .magSafe
         }
         return (kind, watts)
->>>>>>> origin/main:macos/Sources/Morrow/SystemMonitorManager.swift
     }
 
     // Formatters

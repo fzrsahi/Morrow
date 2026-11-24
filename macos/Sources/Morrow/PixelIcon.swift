@@ -17,11 +17,9 @@ public enum PixelIconGlyph: String, CaseIterable, Sendable {
     case settings
     case power
     case bolt
-<<<<<<< HEAD:Sources/Morrow/PixelIcon.swift
     case pause
     case messageBubble
-=======
->>>>>>> origin/main:macos/Sources/Morrow/PixelIcon.swift
+
 }
 
 // Crisp Canvas-based vector pixel icon renderer
@@ -203,7 +201,6 @@ public struct PixelIcon: View {
             ])
         case .bolt:
             return (9, 9, [
-<<<<<<< HEAD:Sources/Morrow/PixelIcon.swift
                 0,0,0,0,1,1,1,0,0,
                 0,0,0,1,1,1,0,0,0,
                 0,0,1,1,1,0,0,0,0,
@@ -241,7 +238,6 @@ public struct PixelIcon: View {
                 0,1,1,0,0,0,0,0,0,0,0,0,0,0,
                 0,0,0,0,0,0,0,0,0,0,0,0,0,0
             ])
-=======
                 0,0,0,0,1,1,0,0,0,
                 0,0,0,1,1,0,0,0,0,
                 0,0,1,1,0,0,0,0,0,
@@ -252,7 +248,6 @@ public struct PixelIcon: View {
                 0,1,1,0,0,0,0,0,0,
                 0,0,0,0,0,0,0,0,0
             ])
->>>>>>> origin/main:macos/Sources/Morrow/PixelIcon.swift
         }
     }
 

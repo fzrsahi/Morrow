@@ -591,7 +591,6 @@ struct NotchPanelView: View {
     /// left and right wings must keep identical widths so the hardware notch stays centered
     /// without horizontal shifting.
     private var usesAsymmetricNotchWings: Bool {
-<<<<<<< HEAD:Sources/Morrow/NotchPanelView.swift
         let isToolActive = showToolStatus && showAgentDetails && appState.currentTool != nil
         return hasNotch
             && appState.status == .idle
@@ -606,9 +605,7 @@ struct NotchPanelView: View {
             && !mailManager.showMailArrivalAnimation
             && !(signals.showChargingBanner && !appState.surface.isExpanded)
             && !(signals.showMiniPeekBanner && !appState.surface.isExpanded)
-=======
         false
->>>>>>> origin/main:macos/Sources/Morrow/NotchPanelView.swift
     }
 
     private var collapsedWidthScaleFactor: CGFloat {
@@ -1307,7 +1304,6 @@ struct NotchPanelView: View {
     @ViewBuilder
     private var panelChromeBackground: some View {
         if displayMode == .dynamicIsland {
-<<<<<<< HEAD:Sources/Morrow/NotchPanelView.swift
             dynamicIslandShape
                 .fill(Color.black)
                 .overlay(
@@ -1317,7 +1313,6 @@ struct NotchPanelView: View {
                 .clipShape(dynamicIslandShape)
                 .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
         } else if appState.isFullscreenMode {
-=======
             let isFlushMagSafeToast = isToastOnly && signals.showChargingBanner && !shouldShowExpanded
             if isFlushMagSafeToast {
                 dynamicIslandShape
@@ -1349,7 +1344,6 @@ struct NotchPanelView: View {
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             }
         } else if isFullscreenActive {
->>>>>>> origin/main:macos/Sources/Morrow/NotchPanelView.swift
             RoundedRectangle(cornerRadius: 7)
                 .fill(Color.black)
                 .overlay(
@@ -1686,11 +1680,8 @@ struct NotchPanelView: View {
                 let isFlushNonNotchToast = displayMode == .dynamicIsland && !hasNotch && isToastOnly && !shouldShowExpanded
                 if isFlushNonNotchToast {
                     belowNotchContent
-<<<<<<< HEAD:Sources/Morrow/NotchPanelView.swift
                         .padding(.vertical, 2)
-=======
                         .frame(minHeight: effectiveNotchHeight)
->>>>>>> origin/main:macos/Sources/Morrow/NotchPanelView.swift
                 } else {
                     Group {
                         if showBar || shouldShowExpanded {
@@ -2106,11 +2097,8 @@ struct NotchPanelView: View {
             }
             .transition(toastBannerTransition)
         } else if signals.showMiniPeekBanner && !appState.surface.isExpanded {
-<<<<<<< HEAD:Sources/Morrow/NotchPanelView.swift
             // PRAYER MINI PEEK BANNER: Buka tipis saat T-10m & saat masuk waktu salat
-=======
             // PRAYER MINI PEEK BANNER: Sun-Arc compact notification at prayer entry (T-0m)
->>>>>>> origin/main:macos/Sources/Morrow/NotchPanelView.swift
             PrayerMiniPeekBannerView(manager: prayerManager, displayMode: displayMode) {
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                     appState.transitionToTab(.prayer)

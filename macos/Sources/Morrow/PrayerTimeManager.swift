@@ -566,10 +566,8 @@ public final class PrayerTimeManager: ObservableObject {
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
     }
 
-<<<<<<< HEAD:Sources/Morrow/PrayerTimeManager.swift
     private func presentBanner(title: String, subtitle: String) {
         SystemMonitorManager.shared.dismissChargingBanner()
-=======
     /// Cycles through the 5 Fardh prayers in the live compact notch right wing for 10 seconds.
     public func triggerTestCompactWing(thinking: Bool = false) {
         let cycle: [PrayerType] = [.subuh, .dzuhur, .ashar, .maghrib, .isya]
@@ -603,7 +601,6 @@ public final class PrayerTimeManager: ObservableObject {
     private func presentBanner(title: String, subtitle: String, previewPrayer: PrayerType? = nil) {
         SystemMonitorManager.shared.dismissChargingBanner()
         previewPrayerType = previewPrayer
->>>>>>> origin/main:macos/Sources/Morrow/PrayerTimeManager.swift
         if let appState, appState.surface.isExpanded {
             appState.surface = .collapsed
         }
