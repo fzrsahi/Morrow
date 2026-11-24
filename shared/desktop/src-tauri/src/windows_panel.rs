@@ -27,7 +27,7 @@
 
 use std::sync::Mutex;
 
-use morrow_platform::panel::{Panel, Rect};
+use morrow_platform::panel::{Panel, Radii, Rect};
 use tauri::WebviewWindow;
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
@@ -140,11 +140,19 @@ unsafe extern "system" fn panel_proc(
 /// so the shell can answer a smoke test without a click (W-005); until that
 /// harness exists, nothing calls it.
 #[allow(dead_code)]
-pub fn is_island_at(window: Rect, island: Rect, radius: i32, x: i32, y: i32) -> bool {
+pub fn is_island_at(
+    window: Rect,
+    island: Rect,
+    radii: Radii,
+    shoulders: i32,
+    x: i32,
+    y: i32,
+) -> bool {
     Panel {
         window,
         island,
-        radius,
+        radii,
+        shoulders,
     }
     .is_island(x - window.x, y - window.y)
 }

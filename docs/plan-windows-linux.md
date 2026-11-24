@@ -183,29 +183,31 @@ Urutan: rebase & merge #49–#52 → **satu PR khusus `git mv` + perbaikan path*
 
 Di-port dari Swift, **bukan didesain ulang**, supaya conformance test bermakna.
 
-| Modul Swift (`Sources/MorrowCore`) | LOC | Catatan |
-|---|---|---|
-| `SessionSnapshot.swift` → `reduceHookEvent` (`:1143`) / `applyHookEvent` / `SideEffect` | 2.560 (file) | **Hampir** murni: `Date()` dipanggil di banyak tempat (`:1272, 1312, 1596, …`) dan `UserDefaults.standard` dibaca di `loadCustomSources` (`:451, 463`). Port Rust wajib meng-inject `Clock` dan `CustomSources`, atau conformance flaky |
-| `AttentionPolicy.swift` (termasuk `HookEventFacts` `:316`) | 578 | Murni |
-| `HookIntake.swift` | 717 | **Murni dengan fakta di-inject** — hanya `import Foundation`; semua lookup proses masuk lewat closure `Facts` (`:13-15`). **Masuk core.** Panggilan OS (`proc_pidpath`, `/dev/tty`, `sysctl`) ada di `Sources/MorrowBridge/main.swift:41-114` |
-| `HookEdgeFacts` | 107 | Murni |
-| `GitBranchReader.swift` | 79 | Baca `.git` dengan `FileManager`; `parseHEAD`/`parseGitdirPointer` murni. Asumsi separator `/` — perlu perhatian di Windows. I/O lewat trait `FileSystem` |
-| `MarkdownBlockParser.swift` | 708 | Murni. Emit blok JSON, bukan HTML |
-| `NotchHoopsEngine.swift` | 415 | Murni |
-| `ESP32Protocol.swift` | 589 | Murni (protokol); transport di `platform` |
-| `ClaudeQuota.swift`, `PushChannel.swift` (parsing) | 345, 752 | Murni kecuali `Date()` default dan HMAC (pakai `hmac`/`sha2`) |
-| `JSONLTailer.swift` | 1.132 | **Tidak murni** — fd + `DispatchSource` vnode. Pecah: parser baris di core, watcher (`notify` crate) di `platform` |
+**Status** (diverifikasi 2026-11-22 terhadap kode, bukan terhadap niat): `selesai` = modul ada, dipanggil, dan ada test; `sebagian` = ada tapi belum lengkap; `belum` = tidak ada sama sekali; `ditunda` / `keluar lingkup` = dinyatakan, bukan dikerjakan.
+
+| Modul Swift (`Sources/MorrowCore`) | LOC | Catatan | Status |
+|---|---|---|---|
+| `SessionSnapshot.swift` → `reduceHookEvent` (`:1143`) / `applyHookEvent` / `SideEffect` | 2.560 (file) | **Hampir** murni: `Date()` dipanggil di banyak tempat (`:1272, 1312, 1596, …`) dan `UserDefaults.standard` dibaca di `loadCustomSources` (`:451, 463`). Port Rust wajib meng-inject `Clock` dan `CustomSources`, atau conformance flaky | `selesai` — `morrow-core::reduce` |
+| `AttentionPolicy.swift` (termasuk `HookEventFacts` `:316`) | 578 | Murni | `sebagian` — `intents` + `settle_completion` ada; `settle` (switch, quiet hours, lock) → #238 |
+| `HookIntake.swift` | 717 | **Murni dengan fakta di-inject** — hanya `import Foundation`; semua lookup proses masuk lewat closure `Facts` (`:13-15`). **Masuk core.** Panggilan OS (`proc_pidpath`, `/dev/tty`, `sysctl`) ada di `Sources/MorrowBridge/main.swift:41-114` | `selesai` — `morrow-core::intake` |
+| `HookEdgeFacts` | 107 | Murni | `selesai` — `morrow-core::intake::hook_edge_facts` |
+| `GitBranchReader.swift` | 79 | Baca `.git` dengan `FileManager`; `parseHEAD`/`parseGitdirPointer` murni. Asumsi separator `/` — perlu perhatian di Windows. I/O lewat trait `FileSystem` | `selesai` — `morrow-core::git` |
+| `MarkdownBlockParser.swift` | 708 | Murni. Emit blok JSON, bukan HTML | `selesai` — `morrow-core::markdown` |
+| `NotchHoopsEngine.swift` | 415 | Murni | `belum` — #238 |
+| `ESP32Protocol.swift` | 589 | Murni (protokol); transport di `platform` | `belum` — #238 |
+| `ClaudeQuota.swift`, `PushChannel.swift` (parsing) | 345, 752 | Murni kecuali `Date()` default dan HMAC (pakai `hmac`/`sha2`) | `belum` — #236 (`ClaudeQuota`), #238 (`PushChannel`) |
+| `JSONLTailer.swift` | 1.132 | **Tidak murni** — fd + `DispatchSource` vnode. Pecah: parser baris di core, watcher (`notify` crate) di `platform` | `selesai` — parser di `morrow-core::transcript`, watcher di `src-tauri/src/transcripts.rs` |
 
 **Scope yang sebelumnya tidak dihitung.** Logika domain yang dibutuhkan Windows/Linux apa pun bahasa core-nya, tapi hari ini ada di target app (`Sources/Morrow`), bukan di core:
 
-| App-held | LOC | Tujuan di port |
-|---|---|---|
-| `ConfigInstaller.swift` | 4.326 | `morrow-hooks` (JSON/JSON5/YAML/TOML, merge yang mempertahankan komentar) |
-| `Discovery/` (19 file) | 5.282 | core (parser) + platform (scan FS, process table) |
-| `RemoteInstaller.swift` + `SSHForwarder` | 1.852 + 265 | `morrow-hooks` |
-| `HookServer.swift` + `HookSocket.swift` | 808 + 762 | `morrow-ipc` + orkestrasi |
-| `CodexPermissionRules`, `SessionPersistence`, `SessionTitleStore`, `CodexTmuxRouting` | ~1.300 | core |
-| Orkestrasi `AppState` + model `Settings` | ~2–4K (perkiraan) | app Rust |
+| App-held | LOC | Tujuan di port | Status |
+|---|---|---|---|
+| `ConfigInstaller.swift` | 4.326 | `morrow-hooks` (JSON/JSON5/YAML/TOML, merge yang mempertahankan komentar) | `sebagian` — 12 dari 31 source (#234) |
+| `Discovery/` (19 file) | 5.282 | core (parser) + platform (scan FS, process table) | `belum` — #232, dipecah ke #244–#248 |
+| `RemoteInstaller.swift` + `SSHForwarder` | 1.852 + 265 | `morrow-hooks` | `belum` — #233 |
+| `HookServer.swift` + `HookSocket.swift` | 808 + 762 | `morrow-ipc` + orkestrasi | `selesai` — `morrow-ipc` |
+| `CodexPermissionRules`, `SessionPersistence`, `SessionTitleStore`, `CodexTmuxRouting` | ~1.300 | core | `belum` — #238 |
+| Orkestrasi `AppState` + model `Settings` | ~2–4K (perkiraan) | app Rust | `sebagian` — panel ada di PR #203, orkestrasi `AppState` belum (#239) |
 
 Total perilaku yang harus ada di Windows/Linux: **~37–40K LOC Swift-ekuivalen**, bukan ~18K seperti estimasi awal. Ini menambah bobot pada Opsi E dan wajib masuk anggaran Fase 2–3.
 
@@ -213,29 +215,31 @@ Total perilaku yang harus ada di Windows/Linux: **~37–40K LOC Swift-ekuivalen*
 
 Setiap trait wajib punya `probe() -> Capability` (`Supported | Degraded(reason) | Unsupported(reason)`). Fitur yang tidak didukung **dinyatakan di UI**, bukan gagal diam-diam.
 
-| Trait | Windows | Linux X11 | Linux Wayland | Sumber macOS |
-|---|---|---|---|---|
-| `NowPlaying` (baca + kontrol + seek) | `GlobalSystemMediaTransportControlsSessionManager` (timeline, `TryChangePlaybackPositionAsync`) | `zbus` → MPRIS2 (`Position` µs, `Seek`, `CanSeek`; `Position` tidak ikut `PropertiesChanged`) | sama dengan X11 | `NowPlayingManager.swift` (AppleScript + DistributedNotification) |
-| `Lyrics` | lrclib.net via `reqwest` | sama | sama | `NowPlayingManager.swift:1533-1570` |
-| `SystemVolume` | `IAudioEndpointVolume` (scalar, mute, change notify) | `wpctl`/`pactl` atau `libpulse-binding` | sama | `SystemVolumeManager.swift` (37× `AudioObject*`) |
-| `TerminalActivator` | `EnumWindows` + `SetForegroundWindow` + UIA | `/proc/<pid>/cwd` + `_NET_ACTIVE_WINDOW`; kitty/wezterm/tmux/zellij/herdr IPC | compositor IPC (`swaymsg`, `hyprctl`); selain itu copy-path | `TerminalActivator.swift` |
-| `TerminalVisibility` | `EnumWindows` + foreground | `_NET_ACTIVE_WINDOW` | Unsupported | `TerminalVisibilityDetector.swift` |
-| `ProcessTable` (+ exit watch) | `sysinfo` + `OpenProcess`/`WaitForSingleObject` | `sysinfo` + `pidfd_open` | sama | `ProcessTable.swift`, `SessionProcessMonitor.swift:51` |
-| `GlobalHotkey` | `RegisterHotKey` (`tauri-plugin-global-shortcut`) | `XGrabKey` (plugin) | XDG Portal `GlobalShortcuts` bila ada; fallback: shortcut desktop → `morrow toggle` | `GlobalHotKeyManager.swift` (Carbon) |
-| `PointerMonitor` (klik luar → collapse, hover lyrics) | polling `GetCursorPos` / `WH_MOUSE_LL` | `XQueryPointer` / XInput2 | **Unsupported** — Wayland tidak memberi posisi pointer global; hanya event di surface sendiri | `PanelWindowController.swift:374`, `CyberMusicView.swift:2280-2350` |
-| `Fullscreen` | `SHQueryUserNotificationState` (`QUNS_BUSY`, `QUNS_RUNNING_D3D_FULL_SCREEN`) | `_NET_WM_STATE_FULLSCREEN` pada `_NET_ACTIVE_WINDOW` | Unsupported (kecuali wlr-foreign-toplevel) | `PanelWindowController.swift:759` (CGWindowList) |
-| `SessionLock` | `WTSRegisterSessionNotification` → `WM_WTSSESSION_CHANGE` | logind `Lock`/`Unlock` + `LockedHint`; `org.freedesktop.ScreenSaver` | sama | `SceneMuteMonitor.swift` |
-| `Notifications` | `tauri-plugin-notification` (**hanya app ter-install**) | `tauri-plugin-notification` | sama | `PrayerTimeManager.swift:599-615` |
-| `SyntheticInput` + clipboard | `enigo` + `arboard` | `enigo` (X11) | portal RemoteDesktop (butuh izin per sesi) atau Unsupported | `CyberQuickPromptView.swift:144-154`, Warp tab keystroke |
-| `SystemStats` (CPU/mem/net/baterai) | `sysinfo` + `GetSystemPowerStatus` | `sysinfo` + `/sys/class/power_supply` | sama | `SystemMonitorManager.swift` |
-| `Geolocation` | `Windows.Devices.Geolocation` | GeoClue2; fallback `OfflineCityDatabase` | sama | `PrayerLocationService.swift` |
-| `Tray` | Tauri (`Shell_NotifyIcon`) | Tauri (libayatana-appindicator, SNI) — GNOME butuh ekstensi AppIndicator; tanpa lib app bisa panic | sama | `StatusItemController.swift` |
-| `Autostart` | `tauri-plugin-autostart` | `~/.config/autostart/*.desktop` | sama | `Settings.swift:800` (SMAppService) |
-| `Secrets` | `keyring-core` + store Credential Manager (pin versi; v4 baru dipecah) | Secret Service (`zbus-secret-service-keyring-store`) | sama | Keychain |
-| `ClaudeCredentials` | `%USERPROFILE%\.claude\.credentials.json` (read-only, hormati `CLAUDE_CONFIG_DIR`) | `~/.claude/.credentials.json` | sama | `ClaudeQuotaClient.swift:20-118` (Keychain) |
-| `Ble` (ESP32, peran central) | `btleplug` (WinRT) | `btleplug` (BlueZ) | sama | `ESP32BridgeManager.swift` |
-| `Audio` (sound effect) | `rodio`; sound sistem macOS (Glass, Funk…) harus di-bundle | `rodio` | sama | `SoundManager.swift`, `SoundPackManager.swift:89-95` |
-| `Updater` | `tauri-plugin-updater` (NSIS) | `tauri-plugin-updater` (deb/rpm/AppImage, ≥ v2.10.0) | sama | Sparkle (`UpdateChecker.swift`) |
+**Status** per 2026-11-22. Kolom ini adalah satu-satunya sumber kebenaran untuk tabel Capability: `capability::ADAPTERS` hanya boleh memuat baris yang `selesai` atau `sebagian`, dan `tests/capability_and_settings.rs` gagal bila sebuah baris mengaku lebih dari yang ada (#235).
+
+| Trait | Windows | Linux X11 | Linux Wayland | Sumber macOS | Status |
+|---|---|---|---|---|---|
+| `NowPlaying` (baca + kontrol + seek) | `GlobalSystemMediaTransportControlsSessionManager` (timeline, `TryChangePlaybackPositionAsync`) | `zbus` → MPRIS2 (`Position` µs, `Seek`, `CanSeek`; `Position` tidak ikut `PropertiesChanged`) | sama dengan X11 | `NowPlayingManager.swift` (AppleScript + DistributedNotification) | `selesai` — `platform::music`, `windows::media` |
+| `Lyrics` | lrclib.net via `reqwest` | sama | sama | `NowPlayingManager.swift:1533-1570` | `selesai` — `platform::music::lyrics` |
+| `SystemVolume` | `IAudioEndpointVolume` (scalar, mute, change notify) | `wpctl`/`pactl` atau `libpulse-binding` | sama | `SystemVolumeManager.swift` (37× `AudioObject*`) | `selesai` — `platform::music`, `windows::volume` |
+| `TerminalActivator` | `EnumWindows` + `SetForegroundWindow` + UIA | `/proc/<pid>/cwd` + `_NET_ACTIVE_WINDOW`; kitty/wezterm/tmux/zellij/herdr IPC | compositor IPC (`swaymsg`, `hyprctl`); selain itu copy-path | `TerminalActivator.swift` | `selesai` — `platform::terminal`, `windows::terminal` |
+| `TerminalVisibility` | `EnumWindows` + foreground | `_NET_ACTIVE_WINDOW` | Unsupported | `TerminalVisibilityDetector.swift` | `belum` — tidak ada reader; baris Capability turun di #235 |
+| `ProcessTable` (+ exit watch) | `sysinfo` + `OpenProcess`/`WaitForSingleObject` | `sysinfo` + `pidfd_open` | sama | `ProcessTable.swift`, `SessionProcessMonitor.swift:51` | `selesai` — `platform::process`, `windows::process` |
+| `GlobalHotkey` | `RegisterHotKey` (`tauri-plugin-global-shortcut`) | `XGrabKey` (plugin) | XDG Portal `GlobalShortcuts` bila ada; fallback: shortcut desktop → `morrow toggle` | `GlobalHotKeyManager.swift` (Carbon) | `selesai` — `src-tauri/src/hotkey.rs` |
+| `PointerMonitor` (klik luar → collapse, hover lyrics) | polling `GetCursorPos` / `WH_MOUSE_LL` | `XQueryPointer` / XInput2 | **Unsupported** — Wayland tidak memberi posisi pointer global; hanya event di surface sendiri | `PanelWindowController.swift:374`, `CyberMusicView.swift:2280-2350` | `sebagian` — Windows `windows::pointer`; Linux belum (#235) |
+| `Fullscreen` | `SHQueryUserNotificationState` (`QUNS_BUSY`, `QUNS_RUNNING_D3D_FULL_SCREEN`) | `_NET_WM_STATE_FULLSCREEN` pada `_NET_ACTIVE_WINDOW` | Unsupported (kecuali wlr-foreign-toplevel) | `PanelWindowController.swift:759` (CGWindowList) | `sebagian` — Windows `windows::fullscreen`; Linux belum (#235) |
+| `SessionLock` | `WTSRegisterSessionNotification` → `WM_WTSSESSION_CHANGE` | logind `Lock`/`Unlock` + `LockedHint`; `org.freedesktop.ScreenSaver` | sama | `SceneMuteMonitor.swift` | `selesai` — `platform::lock`, `windows::lock` |
+| `Notifications` | `tauri-plugin-notification` (**hanya app ter-install**) | `tauri-plugin-notification` | sama | `PrayerTimeManager.swift:599-615` | `selesai` — `platform::notify`, `windows::toast` |
+| `SyntheticInput` + clipboard | `enigo` + `arboard` | `enigo` (X11) | portal RemoteDesktop (butuh izin per sesi) atau Unsupported | `CyberQuickPromptView.swift:144-154`, Warp tab keystroke | `belum` — #235 |
+| `SystemStats` (CPU/mem/net/baterai) | `sysinfo` + `GetSystemPowerStatus` | `sysinfo` + `/sys/class/power_supply` | sama | `SystemMonitorManager.swift` | `belum` — #235 |
+| `Geolocation` | `Windows.Devices.Geolocation` | GeoClue2; fallback `OfflineCityDatabase` | sama | `PrayerLocationService.swift` | `belum` — #235, lalu #237 |
+| `Tray` | Tauri (`Shell_NotifyIcon`) | Tauri (libayatana-appindicator, SNI) — GNOME butuh ekstensi AppIndicator; tanpa lib app bisa panic | sama | `StatusItemController.swift` | `selesai` — `src-tauri/src/tray.rs` |
+| `Autostart` | `tauri-plugin-autostart` | `~/.config/autostart/*.desktop` | sama | `Settings.swift:800` (SMAppService) | `selesai` — `platform::autostart`, `windows::autostart` |
+| `Secrets` | `keyring-core` + store Credential Manager (pin versi; v4 baru dipecah) | Secret Service (`zbus-secret-service-keyring-store`) | sama | Keychain | `belum` — #235 |
+| `ClaudeCredentials` | `%USERPROFILE%\.claude\.credentials.json` (read-only, hormati `CLAUDE_CONFIG_DIR`) | `~/.claude/.credentials.json` | sama | `ClaudeQuotaClient.swift:20-118` (Keychain) | `belum` — #235, memblokir #236 |
+| `Ble` (ESP32, peran central) | `btleplug` (WinRT) | `btleplug` (BlueZ) | sama | `ESP32BridgeManager.swift` | `belum` — #235, lalu #238 |
+| `Audio` (sound effect) | `rodio`; sound sistem macOS (Glass, Funk…) harus di-bundle | `rodio` | sama | `SoundManager.swift`, `SoundPackManager.swift:89-95` | `selesai` — `platform::sound`, `windows::sound` (#241) |
+| `Updater` | `tauri-plugin-updater` (NSIS) | `tauri-plugin-updater` (deb/rpm/AppImage, ≥ v2.10.0) | sama | Sparkle (`UpdateChecker.swift`) | `belum` — #235 |
 
 Visualizer musik **tidak** butuh audio capture: `CAMusicVisuals.swift:22-31` kurva sin/cos sintetis.
 

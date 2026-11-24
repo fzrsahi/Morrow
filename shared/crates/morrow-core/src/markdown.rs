@@ -18,6 +18,8 @@
 //! Unicode: Swift counts and splits `Character`s (grapheme clusters); this
 //! counts and splits `char`s (scalar values).
 
+use serde::Serialize;
+
 /// Lists and quotes nest at most this deep; anything below is kept as plain
 /// paragraph text so pathological input cannot build a view tree (or a
 /// recursion) of unbounded depth.
@@ -871,4 +873,146 @@ fn trim(text: &str) -> &str {
 
 fn chars_to_string(chars: &[char]) -> String {
     chars.iter().collect()
+}
+
+// MARK: Inline spans
+
+/// One styled run inside a heading, paragraph, list item or table cell. The
+/// same tagged shape goes on the wire, so the panel only draws spans and
+/// never re-parses Markdown source. Runs nest for strong/emphasis.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MarkdownInline {
+    Text { text: String },
+    Code { text: String },
+    Link { text: String, url: String },
+    Strong { spans: Vec<MarkdownInline> },
+    Emphasis { spans: Vec<MarkdownInline> },
+}
+
+/// `MarkdownInlineLiterals.escapingWordDelimiters(...)` plus the inline parse
+/// Apple's Markdown renderer does for the reply: code spans, links, strong
+/// and emphasis. Delimiters inside a word stay literal (`2*3*4`, `__init__`).
+pub fn parse_inline(text: &str) -> Vec<MarkdownInline> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut plain = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == '\\' && i + 1 < chars.len() {
+            plain.push(chars[i + 1]);
+            i += 2;
+            continue;
+        }
+        if ch == '`' {
+            let run = run_length(&chars, i, '`');
+            if let Some((end, after)) = closing_run(&chars, i + run, '`', run) {
+                flush_span(&mut out, &mut plain);
+                out.push(MarkdownInline::Code {
+                    text: chars_to_string(&chars[i + run..end]),
+                });
+                i = after;
+                continue;
+            }
+            plain.extend(std::iter::repeat_n('`', run));
+            i += run;
+            continue;
+        }
+        if ch == '[' {
+            if let Some((label_end, url_start, url_end, end)) = link_bounds(&chars, i) {
+                flush_span(&mut out, &mut plain);
+                out.push(MarkdownInline::Link {
+                    text: chars_to_string(&chars[i + 1..label_end]),
+                    url: chars_to_string(&chars[url_start..url_end]),
+                });
+                i = end;
+                continue;
+            }
+        }
+        if ch == '*' || ch == '_' {
+            let run = run_length(&chars, i, ch);
+            let inside_word = chars
+                .get(i.wrapping_sub(1))
+                .is_some_and(|c| c.is_alphanumeric())
+                && chars.get(i + run).is_some_and(|c| c.is_alphanumeric());
+            if !inside_word {
+                let strong = run >= 2;
+                let needed = if strong { 2 } else { 1 };
+                if let Some((content_end, next)) = closing_run(&chars, i + needed, ch, needed) {
+                    flush_span(&mut out, &mut plain);
+                    let inner = chars_to_string(&chars[i + needed..content_end]);
+                    let spans = parse_inline(&inner);
+                    if strong {
+                        out.push(MarkdownInline::Strong { spans });
+                    } else {
+                        out.push(MarkdownInline::Emphasis { spans });
+                    }
+                    i = next;
+                    continue;
+                }
+            }
+            plain.extend(std::iter::repeat_n(ch, run));
+            i += run;
+            continue;
+        }
+        plain.push(ch);
+        i += 1;
+    }
+    flush_span(&mut out, &mut plain);
+    out
+}
+
+fn flush_span(out: &mut Vec<MarkdownInline>, plain: &mut String) {
+    if !plain.is_empty() {
+        out.push(MarkdownInline::Text {
+            text: std::mem::take(plain),
+        });
+    }
+}
+
+fn run_length(chars: &[char], start: usize, marker: char) -> usize {
+    chars[start..].iter().take_while(|c| **c == marker).count()
+}
+
+/// Index of the first closing run of at least `length`, and the index just
+/// past it. Backslash-escaped markers are literal text, not a closing run.
+fn closing_run(chars: &[char], from: usize, marker: char, length: usize) -> Option<(usize, usize)> {
+    let mut i = from;
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            i += 2;
+            continue;
+        }
+        if chars[i] == marker {
+            let run = run_length(chars, i, marker);
+            if run >= length {
+                return Some((i, i + length));
+            }
+            i += run;
+            continue;
+        }
+        i += 1;
+    }
+    None
+}
+
+/// `[label](url)` bounds: label end, URL start/end and the index after `)`.
+fn link_bounds(chars: &[char], start: usize) -> Option<(usize, usize, usize, usize)> {
+    let mut i = start + 1;
+    while i < chars.len() && chars[i] != ']' && chars[i] != '[' {
+        i += 1;
+    }
+    if i >= chars.len() || chars[i] != ']' || chars.get(i + 1) != Some(&'(') {
+        return None;
+    }
+    let url_start = i + 2;
+    let mut end = url_start;
+    while end < chars.len() && chars[end] != ')' {
+        end += 1;
+    }
+    if end >= chars.len() || end == url_start {
+        return None;
+    }
+    Some((i, url_start, end, end + 1))
 }

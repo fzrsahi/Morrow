@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "test": "bun test"
   },
   "dependencies": {
     "@tauri-apps/api": "2.12.5"

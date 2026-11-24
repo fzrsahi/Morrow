@@ -49,6 +49,9 @@ pub enum Feature {
     TerminalActivator,
     TerminalVisibility,
     Anchoring,
+    /// #196: whether the app may place the panel itself (X11/Windows), or the
+    /// compositor owns window position (Wayland).
+    IslandReposition,
     ProcessTable,
     GlobalHotkey,
     PointerMonitor,
@@ -74,6 +77,7 @@ impl Feature {
         Feature::SystemVolume,
         Feature::TerminalActivator,
         Feature::TerminalVisibility,
+        Feature::IslandReposition,
         Feature::ProcessTable,
         Feature::GlobalHotkey,
         Feature::PointerMonitor,
@@ -100,6 +104,7 @@ impl Feature {
             Self::TerminalActivator => "Jump to terminal",
             Self::TerminalVisibility => "Terminal visibility",
             Self::Anchoring => "Panel anchoring",
+            Self::IslandReposition => "Island repositioning",
             Self::ProcessTable => "Process table",
             Self::GlobalHotkey => "Global hotkey",
             Self::PointerMonitor => "Pointer outside the island",
@@ -166,13 +171,12 @@ impl Feature {
                     Capability::Unsupported("no window API and no clipboard tool".into())
                 }
             }
-            Self::TerminalVisibility => {
-                if environment.is_x11() {
-                    Capability::Supported
-                } else {
-                    Capability::Unsupported("needs _NET_ACTIVE_WINDOW, which Wayland lacks".into())
-                }
-            }
+            Self::TerminalVisibility => Capability::Unsupported(if environment.is_x11() {
+                // #235: no reader exists yet, so X11 cannot claim this either.
+                "no terminal-visibility reader yet: _NET_ACTIVE_WINDOW is not queried".into()
+            } else {
+                "needs _NET_ACTIVE_WINDOW, which Wayland lacks".into()
+            }),
             // #109: a layer surface on a compositor that has wlr-layer-shell,
             // an always-on-top window on GNOME — stated, never simulated
             // (plan §6.4).
@@ -180,6 +184,21 @@ impl Feature {
                 crate::compositor::Anchoring::Available => Capability::Supported,
                 crate::compositor::Anchoring::Unavailable(reason) => Capability::Degraded(reason),
             },
+            // A window manager honours a placement request; on Wayland the
+            // compositor places surfaces, so drag is stated, not simulated.
+            Self::IslandReposition => {
+                if environment.is_x11() {
+                    Capability::Supported
+                } else if environment.is_wayland() {
+                    Capability::Unsupported(
+                        "Wayland lets the compositor place windows; the island stays at the top centre here".into(),
+                    )
+                } else {
+                    Capability::Unsupported(
+                        "no display: there is nowhere to move the island".into(),
+                    )
+                }
+            }
             Self::ProcessTable => Capability::Supported,
             Self::GlobalHotkey => {
                 if environment.is_x11() {
@@ -195,22 +214,18 @@ impl Feature {
                     )
                 }
             }
-            Self::PointerMonitor => {
-                if environment.is_x11() {
-                    Capability::Supported
-                } else {
-                    Capability::Unsupported("Wayland gives no global pointer position".into())
-                }
-            }
-            Self::Fullscreen => {
-                if environment.is_x11() {
-                    Capability::Supported
-                } else {
-                    Capability::Unsupported(
-                        "needs _NET_WM_STATE_FULLSCREEN on the active window".into(),
-                    )
-                }
-            }
+            Self::PointerMonitor => Capability::Unsupported(if environment.is_x11() {
+                // #235: `pointer_position` answers `None` on every Unix session.
+                "no pointer reader yet: XQueryPointer is not wired".into()
+            } else {
+                "Wayland gives no global pointer position".into()
+            }),
+            Self::Fullscreen => Capability::Unsupported(if environment.is_x11() {
+                // #235: `fullscreen` answers `false` on every Unix session.
+                "no fullscreen reader yet: _NET_WM_STATE is not queried".into()
+            } else {
+                "needs _NET_WM_STATE_FULLSCREEN on the active window".into()
+            }),
             Self::SessionLock => {
                 if environment.has_bus() {
                     Capability::Supported
@@ -225,21 +240,14 @@ impl Feature {
                     Capability::Unsupported("needs notify-send for reminders".into())
                 }
             }
-            Self::SyntheticInput => {
-                if environment.is_x11() {
-                    Capability::Supported
-                } else {
-                    Capability::Unsupported("needs the portal's RemoteDesktop permission".into())
-                }
-            }
-            Self::SystemStats => Capability::Supported,
-            Self::Geolocation => {
-                if environment.has_bus() {
-                    Capability::Degraded("through GeoClue when the desktop offers it".into())
-                } else {
-                    Capability::Degraded("offline city database only: no GeoClue".into())
-                }
-            }
+            Self::SyntheticInput => Capability::Unsupported(
+                "no synthetic-input adapter yet: XTEST and the portal are not wired".into(),
+            ),
+            Self::SystemStats => Capability::Unsupported(NO_SYSTEM_STATS.into()),
+            Self::Geolocation => Capability::Unsupported(
+                "no geolocation adapter yet: GeoClue and the offline city database are not wired"
+                    .into(),
+            ),
             Self::Tray => {
                 if environment.has("libayatana-appindicator3.so.1")
                     || environment.has("libappindicator3.so.1")
@@ -259,42 +267,202 @@ impl Feature {
                     Capability::Unsupported("no ~/.config to write an autostart entry into".into())
                 }
             }
-            Self::Secrets => {
-                if environment.has_bus() {
-                    Capability::Supported
-                } else {
-                    Capability::Unsupported("secret storage needs the session bus".into())
-                }
-            }
-            Self::ClaudeCredentials => {
-                if environment.claude_credentials.is_file() {
-                    Capability::Supported
-                } else {
-                    Capability::Degraded("no ~/.claude/.credentials.json to read".into())
-                }
-            }
+            Self::Secrets => Capability::Unsupported(
+                "no secret-store adapter yet: the session bus is not used for secrets".into(),
+            ),
+            Self::ClaudeCredentials => Capability::Unsupported(
+                "no credential reader yet: ~/.claude/.credentials.json is not read".into(),
+            ),
             Self::Ble => {
-                if environment.has_bus() {
-                    Capability::Degraded(
-                        "BlueZ through the system bus, when a adapter is present".into(),
-                    )
-                } else {
-                    Capability::Unsupported("no system bus: Bluetooth unavailable".into())
-                }
+                Capability::Unsupported("no Bluetooth adapter yet: BlueZ is not used".into())
             }
-            Self::Audio => Capability::Supported,
-            Self::Updater => {
-                if environment.appimage {
-                    Capability::Degraded(
-                        "an AppImage updates itself; a deb/rpm goes to apt/dnf".into(),
-                    )
-                } else {
-                    Capability::Supported
-                }
-            }
+            // #241: the row follows the same tool list the feed plays through.
+            Self::Audio => match crate::sound::player(|tool| environment.has(tool)) {
+                Some(_) => Capability::Supported,
+                None => Capability::Unsupported(
+                    "needs pw-play (PipeWire), paplay (PulseAudio) or canberra-gtk-play".into(),
+                ),
+            },
+            Self::Updater => Capability::Unsupported(NO_UPDATER.into()),
         }
     }
 }
+
+/// Where a row's answer actually comes from (#235).
+///
+/// A row may not say more than the code does: `Supported` and `Degraded` both
+/// mean "there is an adapter", so both need an entry here. The registry is an
+/// explicit list rather than a search, and `module` is a path from this crate's
+/// root so `tests/capability_and_settings.rs` can prove the file exists — a
+/// registry that names a module nobody wrote is the same lie in a new place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Adapter {
+    pub os: Os,
+    pub feature: Feature,
+    pub module: &'static str,
+}
+
+/// Every adapter that exists today. Adding a row here is a claim that the file
+/// behind it answers that feature on that OS; removing one is how a feature
+/// goes back to `Unsupported` without the table lying.
+pub const ADAPTERS: &[Adapter] = &[
+    // Linux: the Unix modules shell out to a tool, so the tool's presence is
+    // the probe and the module is the caller.
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::NowPlaying,
+        module: "src/music.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Lyrics,
+        module: "src/music.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::SystemVolume,
+        module: "src/music.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::TerminalActivator,
+        module: "src/terminal.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Anchoring,
+        module: "src/compositor.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::IslandReposition,
+        module: "../../desktop/src-tauri/src/position.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::ProcessTable,
+        module: "src/process.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::GlobalHotkey,
+        module: "../../desktop/src-tauri/src/hotkey.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::SessionLock,
+        module: "src/lock.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Notifications,
+        module: "src/notify.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Tray,
+        module: "../../desktop/src-tauri/src/tray.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Autostart,
+        module: "src/autostart.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Audio,
+        module: "src/sound.rs",
+    },
+    // Windows: each of these is a WinRT/Win32 call, so the module is the probe.
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::NowPlaying,
+        module: "src/windows/media.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Lyrics,
+        module: "src/music.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::SystemVolume,
+        module: "src/windows/volume.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::TerminalActivator,
+        module: "src/windows/terminal.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Anchoring,
+        module: "../../desktop/src-tauri/src/windows_panel.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::IslandReposition,
+        module: "../../desktop/src-tauri/src/position.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::ProcessTable,
+        module: "src/windows/process.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::GlobalHotkey,
+        module: "../../desktop/src-tauri/src/hotkey.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::PointerMonitor,
+        module: "src/windows/pointer.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Fullscreen,
+        module: "src/windows/fullscreen.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::SessionLock,
+        module: "src/windows/lock.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Notifications,
+        module: "src/windows/toast.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Tray,
+        module: "../../desktop/src-tauri/src/tray.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Autostart,
+        module: "src/windows/autostart.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::Audio,
+        module: "src/windows/sound.rs",
+    },
+];
+
+/// The adapter behind a row, if one is registered for that OS.
+pub fn adapter(os: Os, feature: Feature) -> Option<&'static Adapter> {
+    ADAPTERS
+        .iter()
+        .find(|entry| entry.os == os && entry.feature == feature)
+}
+
+/// The reason a row gives while no adapter exists (#235). Shared by the two
+/// arms where the absence is the same on both OSes, so Linux and Windows cannot
+/// drift into describing one missing adapter two different ways.
+const NO_SYSTEM_STATS: &str = "no system-stats adapter yet: CPU, memory and battery are not read";
+const NO_UPDATER: &str = "no updater yet: no update feed is configured";
 
 /// One row of the Settings table.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
@@ -330,6 +498,8 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         // A Win32 window can be topsmost and non-activating; there is no
         // separate anchoring protocol to lack.
         Feature::Anchoring => Capability::Supported,
+        // SetWindowPos: Windows lets the app place its own window.
+        Feature::IslandReposition => Capability::Supported,
         Feature::ProcessTable => Capability::Supported,
         Feature::GlobalHotkey => Capability::Supported,
         // `GetCursorPos` is global on Windows, unlike on Wayland.
@@ -337,28 +507,28 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::Fullscreen => Capability::Supported,
         Feature::SessionLock => Capability::Supported,
         Feature::Notifications => Capability::Supported,
-        Feature::SyntheticInput => Capability::Supported,
-        Feature::SystemStats => Capability::Supported,
-        Feature::Geolocation => {
-            Capability::Degraded("WinRT Geolocation, subject to the privacy setting".into())
+        Feature::SyntheticInput => {
+            Capability::Unsupported("no synthetic-input adapter yet: SendInput is not wired".into())
         }
+        Feature::SystemStats => Capability::Unsupported(NO_SYSTEM_STATS.into()),
+        Feature::Geolocation => Capability::Unsupported(
+            "no geolocation adapter yet: WinRT Geolocation is not called".into(),
+        ),
         Feature::Tray => Capability::Supported,
         // `HKCU\\…\\CurrentVersion\\Run`, one value, no administrator.
         Feature::Autostart => Capability::Supported,
-        // Credential Manager: per user, no prompt beyond the first write.
-        Feature::Secrets => Capability::Supported,
-        Feature::ClaudeCredentials => {
-            if environment.claude_credentials.is_file() {
-                Capability::Supported
-            } else {
-                Capability::Degraded("no .claude/.credentials.json to read".into())
-            }
-        }
-        Feature::Ble => Capability::Degraded(
-            "WinRT Bluetooth LE, when the radio is on and the app is allowed".into(),
+        Feature::Secrets => Capability::Unsupported(
+            "no secret-store adapter yet: the Credential Manager is not used".into(),
         ),
+        Feature::ClaudeCredentials => Capability::Unsupported(
+            "no credential reader yet: .claude/.credentials.json is not read".into(),
+        ),
+        Feature::Ble => Capability::Unsupported(
+            "no Bluetooth adapter yet: WinRT Bluetooth LE is not called".into(),
+        ),
+        // `PlaySoundW` is part of the OS: no tool to find, no bus to have.
         Feature::Audio => Capability::Supported,
-        Feature::Updater => Capability::Supported,
+        Feature::Updater => Capability::Unsupported(NO_UPDATER.into()),
     }
 }
 
@@ -392,7 +562,8 @@ impl Os {
 }
 
 /// What the probes are allowed to know: read once, from the process, or handed
-/// in by a test.
+/// in by a test. Only what a probe actually reads is here — a field nothing
+/// reads is a promise the table cannot keep (#235).
 #[derive(Clone, Debug)]
 pub struct Environment {
     pub os: Os,
@@ -400,9 +571,7 @@ pub struct Environment {
     pub has_session_bus: bool,
     pub path_tools: Vec<String>,
     pub config_home: std::path::PathBuf,
-    pub claude_credentials: std::path::PathBuf,
     pub has_portal_shortcuts: bool,
-    pub appimage: bool,
 }
 
 impl Environment {
@@ -411,9 +580,11 @@ impl Environment {
         let home = std::env::var_os("HOME").map_or_else(|| "/".into(), std::path::PathBuf::from);
         let config_home = std::env::var_os("XDG_CONFIG_HOME")
             .map_or_else(|| home.join(".config"), std::path::PathBuf::from);
-        let claude_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
-            .map_or_else(|| home.join(".claude"), std::path::PathBuf::from);
-        let session_type = std::env::var("XDG_SESSION_TYPE").ok();
+        let session_type = std::env::var("XDG_SESSION_TYPE").ok().or_else(|| {
+            std::env::var_os("WAYLAND_DISPLAY")
+                .is_some()
+                .then(|| "wayland".to_owned())
+        });
         Self {
             os: Os::current(),
             session_type,
@@ -422,9 +593,7 @@ impl Environment {
                 .map(|path| path.split(':').map(str::to_owned).collect())
                 .unwrap_or_default(),
             config_home,
-            claude_credentials: claude_dir.join(".credentials.json"),
             has_portal_shortcuts: Path::new("/usr/share/xdg-desktop-portal/portals").is_dir(),
-            appimage: std::env::var_os("APPIMAGE").is_some(),
         }
     }
 
@@ -435,15 +604,22 @@ impl Environment {
             || (self.session_type.is_none() && std::env::var_os("DISPLAY").is_some())
     }
 
+    fn is_wayland(&self) -> bool {
+        self.session_type
+            .as_deref()
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("wayland"))
+    }
+
     fn has_bus(&self) -> bool {
         self.has_session_bus
     }
 
-    fn has(&self, tool: &str) -> bool {
+    pub fn has(&self, tool: &str) -> bool {
+        // Only PATH entries: a stray file in the working directory is not a
+        // tool the shell can spawn, so it may not make a row say "Supported".
         self.path_tools
             .iter()
             .any(|entry| Path::new(entry).join(tool).is_file())
-            || Path::new(tool).exists()
     }
 
     fn has_any(&self, tools: &[&str]) -> bool {

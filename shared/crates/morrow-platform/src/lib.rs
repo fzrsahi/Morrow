@@ -31,6 +31,7 @@ pub mod panel;
 pub mod process;
 pub mod runner;
 pub mod settings;
+pub mod sound;
 pub mod terminal;
 #[cfg(windows)]
 pub mod windows;
