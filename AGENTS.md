@@ -16,7 +16,7 @@ This is the canonical context file for humans and AI agents. Read it before impl
 | [Workflow](.agents/docs/workflow.md) | Before creating an issue or PR, committing, pushing, or reviewing locally. |
 | [Review policy](.agents/docs/review-policy.md) | Before reviewing a PR or deciding approve versus request changes. |
 | [Memory index](.agents/memory/memory.md) | Before starting work in an area already recorded there. |
-| [Skills](.agents/skills/) | When the task matches a skill: PR writing, anti-slop copy/code, Bahasa Indonesia, ponytail simplicity. |
+| [Skills](.agents/skills/) | When the task matches a skill: PR writing, anti-slop copy/code, ponytail simplicity. |
 | [Codebase memory rule](.agents/rules/codebase-memory.md) | Before grep or file search for a structural code question. |
 | [Notch geometry](docs/specs/notch-geometry.md) | When modifying `macos/Sources/Morrow/` notch UI. |
 | [Edge protocol](shared/contract/hook-edge-protocol.md) | When changing hook transport, envelopes, or endpoint rules. |
