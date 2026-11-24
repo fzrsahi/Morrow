@@ -55,6 +55,11 @@ const PRUNE_POLL: Duration = Duration::from_secs(1);
 /// silent" is only observable if something was asked to play.
 pub type SoundOutlet = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Where a due reminder goes. Production leaves it `None` and the desktop's
+/// notifier posts it; a test installs a recorder, because "no later nag" is
+/// only observable if something was asked to notify.
+pub type NotifyOutlet = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 pub struct Feed {
     state: Mutex<State>,
     changed: Condvar,
@@ -62,6 +67,8 @@ pub struct Feed {
     /// condvar so a single hook cannot wake only the wrong waiter.
     prune_changed: Condvar,
     sound: Option<SoundOutlet>,
+    /// See [`NotifyOutlet`].
+    notify: Option<NotifyOutlet>,
     /// What the last scan read, kept **across** ticks: a cache built inside one
     /// scan would read everything and forget it (#284). On the `Feed` rather than
     /// in `State` because a scan runs outside the state lock and this is
@@ -79,6 +86,7 @@ impl Default for Feed {
             changed: Condvar::new(),
             prune_changed: Condvar::new(),
             sound: None,
+            notify: None,
             scan_cache: morrow_core::scan_policy::TextCache::new(
                 morrow_core::scan_policy::SCAN_CACHE_CAPACITY,
             ),
@@ -209,6 +217,15 @@ impl Feed {
         }
     }
 
+    /// A feed whose reminders go to `outlet` instead of the desktop.
+    #[cfg(test)]
+    pub fn with_notify(outlet: NotifyOutlet) -> Self {
+        Self {
+            notify: Some(outlet),
+            ..Self::default()
+        }
+    }
+
     /// Play one cue through the outlet, or the platform's player when there is
     /// none. A missing or failing player is a Capability the Settings table
     /// already states; the feed has nowhere to show it and must not stop.
@@ -220,6 +237,15 @@ impl Feed {
         if let Some(player) = sound::player_on_path() {
             let _ = sound::play(player, cue);
         }
+    }
+
+    /// Post one due reminder through the outlet, or the platform's notifier.
+    fn emit_notification(&self, title: &str, body: &str) {
+        if let Some(outlet) = &self.notify {
+            outlet(title, body);
+            return;
+        }
+        let _ = crate::adapters::notify_send(title.to_owned(), body.to_owned());
     }
 
     /// Reduces one hook into the sessions.
@@ -361,33 +387,36 @@ impl Feed {
         (id, decision)
     }
 
-    /// Capture the session BEFORE the card is removed: `answer`/`drop_request`
-    /// delete it from `held`, so looking it up afterwards finds nothing.
-    fn session_of_card(&self, id: u64) -> Option<String> {
-        self.lock()
-            .snapshot()
+    /// The session behind card `id`, read while the card is still held. Anything
+    /// that removes the card must capture this first: afterwards its id no
+    /// longer resolves to a card, so there is no session to silence.
+    fn held_card_session(state: &State, id: u64) -> Option<String> {
+        state
             .permissions
+            .cards()
             .into_iter()
             .find(|card| card.id == id)
             .map(|card| card.session_id)
     }
 
-    /// Stop the reminder for a request the user just handled. The scheduler
-    /// rule existed in core but had no caller; this is it.
-    fn silence_reminder(&self, session: &str) {
+    /// Stop every reminder for the session a just-handled card belonged to.
+    /// The scheduler rule existed in core but had no caller; this is it.
+    fn silence_reminder_for(&self, session_id: &str) {
         self.reminders
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .silence_session(session);
+            .silence_session(session_id);
     }
 
     /// The user's answer to card `id`; false if it is no longer held.
     pub fn answer(&self, id: u64, decision: Decision) -> bool {
-        let session = self.session_of_card(id);
-        let changed = self.change(|state| state.permissions.answer(id, decision));
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.answer(id, decision), session)
+        });
         if changed {
             if let Some(session) = session {
-                self.silence_reminder(&session);
+                self.silence_reminder_for(&session);
             }
         }
         changed
@@ -395,11 +424,13 @@ impl Feed {
 
     /// #188: a question option was picked; its label is echoed as the answer.
     pub fn answer_question(&self, id: u64, pick: &str) -> bool {
-        let session = self.session_of_card(id);
-        let changed = self.change(|state| state.permissions.answer_question(id, pick));
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.answer_question(id, pick), session)
+        });
         if changed {
             if let Some(session) = session {
-                self.silence_reminder(&session);
+                self.silence_reminder_for(&session);
             }
         }
         changed
@@ -407,11 +438,13 @@ impl Feed {
 
     /// #190: one answer per question of a wizard request, in question order.
     pub fn answer_questions(&self, id: u64, answers: Vec<String>) -> bool {
-        let session = self.session_of_card(id);
-        let changed = self.change(|state| state.permissions.answer_questions(id, answers));
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.answer_questions(id, answers), session)
+        });
         if changed {
             if let Some(session) = session {
-                self.silence_reminder(&session);
+                self.silence_reminder_for(&session);
             }
         }
         changed
@@ -419,11 +452,13 @@ impl Feed {
 
     /// #188: the question card was skipped, not answered.
     pub fn skip_question(&self, id: u64) -> bool {
-        let session = self.session_of_card(id);
-        let changed = self.change(|state| state.permissions.skip_question(id));
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.skip_question(id), session)
+        });
         if changed {
             if let Some(session) = session {
-                self.silence_reminder(&session);
+                self.silence_reminder_for(&session);
             }
         }
         changed
@@ -431,10 +466,13 @@ impl Feed {
 
     /// Card `id`'s hook is gone.
     pub fn drop_request(&self, id: u64) {
-        let session = self.session_of_card(id);
-        self.change(|state| state.permissions.drop_request(id));
+        let session = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            state.permissions.drop_request(id);
+            session
+        });
         if let Some(session) = session {
-            self.silence_reminder(&session);
+            self.silence_reminder_for(&session);
         }
     }
 
@@ -551,7 +589,7 @@ impl Feed {
         for reminder in &due {
             // The island notifies from here, not the webview: a hidden panel has no
             // timer, and the reminder is about something the user cannot see.
-            let _ = crate::adapters::notify_send(reminder.title.clone(), reminder.body.clone());
+            self.emit_notification(&reminder.title, &reminder.body);
         }
         book.hinted()
     }
@@ -920,6 +958,55 @@ mod tests {
         assert!(
             feed.tick_reminders(false, now + 120_000).is_empty(),
             "an answered request must not chime again"
+        );
+    }
+
+    /// Answering a card silences its whole session, not just the card that was
+    /// removed. A second card still held for that session is the observable: if
+    /// the session is not silenced, its reminder nags again a full interval later.
+    /// Looking the session up by the answered card's id after the decision cannot
+    /// work — the card is already out of `held`.
+    #[test]
+    fn answering_a_card_silences_later_nags_for_its_session() {
+        let nags = Arc::new(Mutex::new(Vec::new()));
+        let recorder = {
+            let nags = Arc::clone(&nags);
+            Arc::new(move |_title: &str, body: &str| nags.lock().unwrap().push(body.to_owned()))
+        };
+        let feed = Feed::with_notify(recorder);
+        feed.set_reminder_interval(Some(60.0));
+
+        // One session, two held requests: an approval and a question. Both carry
+        // an active reminder once the interval passes; the approval is answered.
+        let (approval, approval_rx) = feed.hold(&hook(
+            r#"{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#,
+        ));
+        let (question, question_rx) = feed.hold(&hook(
+            r#"{"session_id":"s1","hook_event_name":"PermissionRequest","tool_input":{"questions":[{"question":"Which DB?","header":"DB","options":[{"label":"Postgres","description":""}],"multiSelect":false}]}}"#,
+        ));
+        let _keep_receivers = (approval_rx, question_rx);
+
+        feed.tick_reminders(false, 0); // sync the requests; nothing due yet
+        assert!(nags.lock().unwrap().is_empty());
+        feed.tick_reminders(false, 60_000);
+        assert_eq!(
+            nags.lock().unwrap().len(),
+            2,
+            "both cards carry an active reminder"
+        );
+        let snapshot = feed.snapshot();
+        assert!(snapshot.reminder_ids.contains(&approval));
+        assert!(snapshot.reminder_ids.contains(&question));
+
+        assert!(feed.answer(approval, Decision::Allow));
+        nags.lock().unwrap().clear();
+
+        // The question is still held and would be due again at 120 s. The answer
+        // silenced the session, so there is no later nag.
+        feed.tick_reminders(false, 120_000);
+        assert!(
+            nags.lock().unwrap().is_empty(),
+            "no reminder may nag after the session's card was answered"
         );
     }
 
