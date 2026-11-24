@@ -132,7 +132,15 @@ pub fn is_session_process(source: &str, info: &ProcessInfo) -> bool {
         "grok" => executable_name(&info.executable) == "grok",
         "kimi" => executable_name(&info.executable) == "kimi",
         "qwen" => executable_name(&info.executable) == "qwen",
-        "cursor-agent" | "cursor-cli" => executable_name(&info.executable) == "cursor-agent",
+        // The CLI binary is `cursor-agent`; `cursor` is the name it is sometimes
+        // installed under. The IDE's own process is a desktop app, which this port
+        // does not try to recognise (no `.app` bundles on Linux or Windows).
+        "cursor" | "cursor-cli" | "cursor-agent" => {
+            matches!(
+                executable_name(&info.executable).as_str(),
+                "cursor-agent" | "cursor"
+            )
+        }
         _ => false,
     }
 }
