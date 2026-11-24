@@ -2895,6 +2895,33 @@ mod cost_probe {
     use super::*;
     use std::io::Write;
 
+    /// The cost I flagged in three PRs without ever measuring it: nine process
+    /// readers walked over a full process table, once per scan.
+    #[test]
+    #[ignore]
+    fn the_process_pass_costs_what() {
+        let root = std::env::temp_dir().join(format!("morrow-ptable-{}", std::process::id()));
+        std::fs::create_dir_all(&root).expect("a home");
+        let table: Vec<ProcessInfo> = (0..500)
+            .map(|pid| ProcessInfo {
+                pid,
+                executable: "/usr/bin/claude".to_owned(),
+                arguments: vec!["claude".to_owned()],
+                cwd: Some("/home/dev/project".to_owned()),
+                start_time_ms: Some(0),
+            })
+            .collect();
+        let cache = TextCache::default();
+        let started = std::time::Instant::now();
+        for _ in 0..20 {
+            let _ = scan_with(&[], &root, &table, &cache, now_ms());
+        }
+        println!(
+            "nine readers over 500 processes: {:?} per scan",
+            started.elapsed() / 20
+        );
+    }
+
     /// Not an assertion: a measurement. Run with
     /// `cargo test -p morrow-app cost_probe -- --ignored --nocapture`.
     #[test]

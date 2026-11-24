@@ -105,6 +105,26 @@ Known difference: Swift counts `sourceBudget` in UTF-8 bytes but cuts with
 `line.prefix(allowance)`, which counts `Character`s; the port counts bytes on both
 sides and never splits a character.
 
+## `codex_rules`: CodexPermissionRules
+
+Whether a Codex permission request is handed back to Codex's own reviewer instead of
+putting up a card (`macos/Sources/Morrow/CodexPermissionRules.swift`). The reviewer can
+be named in three places — the request's payload, the rollout's newest `turn_context`,
+`config.toml` — in that order, and desktop selections never reach `config.toml` at all.
+A remote Codex is never handed back: nothing here describes its host, and a wrong
+hand-back leaves the request waiting in a terminal on another machine.
+
+The "Always allow" rule is a prefix of the **command**, up to three words, read from the
+command and never from a `prefix_rule` field in the payload — that one is written by the
+model, and taking it gave `["bash"]` for a card that showed `ls -la`.
+
+Reading the rollout and writing `config.toml` are not here: both need a file system and
+a resolved Codex root, and the decisions they feed are.
+
+Known difference: the rollout search is not ported, so a request that names no reviewer
+and has no `config.toml` answer is `None` here too — the caller decides, exactly as
+macOS decides `false`.
+
 ## `git`: GitBranchReader
 
 The checked-out branch of a session's `cwd`, read from `.git` rather than by
@@ -276,6 +296,11 @@ managed YAML region (14), `tests/json_minimal_editor.rs` is `JSONMinimalEditorTe
 the version gates, the legacy-name cleanup, install/repair/uninstall and the
 back-up rule).
 
+The `codex_rules` module's own tests are the decision half of
+`AppStatePermissionFlowTests` (24 tests: the rule prefix, the reviewer spellings, the
+profile ladder, the MCP server key resolution, the `#316` repair, and the rule block's
+quoting).
+
 `tests/markdown_preview_conformance.rs` runs the 16 cases of
 `shared/contract/fixtures/core/markdown_preview.json` — exported from Swift by
 `MarkdownPreviewFixtureExporter` — through both preview modes and `preview_source`, so a
@@ -297,6 +322,26 @@ or Windows translation of it, and there never will be — the port ships
 because it is the only channel that can replace a signed `.app` in place. Listed here so
 the difference between "nobody wrote it" and "it does not belong here" survives the next
 audit.
+
+`CodexTmuxRouting` is out of scope **for now**, and the reason is measured rather than
+assumed: it decides where a jump lands *inside* tmux, and the port has no tmux jump to
+decide about. `morrow-platform::terminal::activate` reaches a window through the
+compositor (`swaymsg`, `hyprctl`) or by copying the path; `rg tmux` over
+`morrow-platform/src` and `src-tauri/src` matches one file, and it is not an activator.
+
+Porting it would first need the thing it routes for:
+
+- a `list-panes -a -F` / `list-clients -F` runner with a tmux branch in `activate`;
+- a parent pid per process — `ProcessInfo` carries pid, executable, argv, cwd and start
+  time but no `ppid`, so the walk up to the pane's process needs `/proc/<pid>/stat` on
+  Linux and `th32ParentProcessID` on Windows;
+- the decision itself, which is the part that ports cleanly: process → pane by pid,
+  then by `"<title> | <last path component>"` against the pane title with the braille
+  spinner stripped, and **`ambiguous`** rather than a guess when two panes match.
+
+That last rule is the one worth keeping written down: a shared app-server hook carries
+the daemon's environment, not the TUI's, so the hook's `TMUX_PANE` is often another
+session's, and switching to it lands the user somewhere they did not ask to be.
 
 The same goes for the Apple-only surfaces in the macOS tree: hardware-notch detection,
 Live Activities, the Apple Companion (`CBPeripheralManager` + `MultipeerConnectivity`),

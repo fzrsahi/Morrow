@@ -16,6 +16,7 @@ use morrow_platform::process::Watch;
 use morrow_platform::sound;
 use morrow_protocol::HookPayload;
 use serde::Serialize;
+use serde_json::Value;
 use tauri::ipc::Channel;
 
 use crate::completion::{self, SnapshotCompletion};
@@ -33,6 +34,9 @@ pub struct Snapshot {
     /// The last finished turn's reply, parsed into Markdown blocks by the
     /// core, and its settled presentation. `None` after the next prompt.
     pub completion: Option<SnapshotCompletion>,
+    /// Cards whose follow-up reminder already went out (#238 AC 9): the panel keeps a
+    /// bell on them until the request is answered or dropped.
+    pub reminder_ids: Vec<u64>,
 }
 
 /// One push per 1/60 s at most.
@@ -51,6 +55,11 @@ const PRUNE_POLL: Duration = Duration::from_secs(1);
 /// silent" is only observable if something was asked to play.
 pub type SoundOutlet = Arc<dyn Fn(&str) + Send + Sync>;
 
+/// Where a due reminder goes. Production leaves it `None` and the desktop's
+/// notifier posts it; a test installs a recorder, because "no later nag" is
+/// only observable if something was asked to notify.
+pub type NotifyOutlet = Arc<dyn Fn(&str, &str) + Send + Sync>;
+
 pub struct Feed {
     state: Mutex<State>,
     changed: Condvar,
@@ -58,11 +67,16 @@ pub struct Feed {
     /// condvar so a single hook cannot wake only the wrong waiter.
     prune_changed: Condvar,
     sound: Option<SoundOutlet>,
+    /// See [`NotifyOutlet`].
+    notify: Option<NotifyOutlet>,
     /// What the last scan read, kept **across** ticks: a cache built inside one
     /// scan would read everything and forget it (#284). On the `Feed` rather than
     /// in `State` because a scan runs outside the state lock and this is
     /// internally synchronised on its own.
     scan_cache: morrow_core::scan_policy::TextCache,
+    /// #238 AC 9: the follow-up schedule, in the core. Off the `State` lock because the
+    /// reminder thread ticks while hooks are being reduced.
+    reminders: Mutex<crate::reminders::ReminderBook>,
 }
 
 impl Default for Feed {
@@ -72,9 +86,11 @@ impl Default for Feed {
             changed: Condvar::new(),
             prune_changed: Condvar::new(),
             sound: None,
+            notify: None,
             scan_cache: morrow_core::scan_policy::TextCache::new(
                 morrow_core::scan_policy::SCAN_CACHE_CAPACITY,
             ),
+            reminders: Mutex::new(crate::reminders::ReminderBook::default()),
         }
     }
 }
@@ -129,6 +145,17 @@ fn sessions_directory(home: &Path) -> std::path::PathBuf {
     morrow_core::session_store::directory(override_dir.as_deref(), home)
 }
 
+/// #341: the feature starts **off**. Only a positive stored interval arms it;
+/// 0 or a missing key leaves every timer silent.
+pub const REMINDER_INTERVAL_KEY: &str = "followUpReminderIntervalSeconds";
+
+pub fn reminder_interval(stored: Option<&Value>) -> Option<f64> {
+    stored
+        .and_then(|value| value.get(REMINDER_INTERVAL_KEY))
+        .and_then(Value::as_f64)
+        .filter(|seconds| *seconds > 0.0)
+}
+
 /// `$CODEX_HOME` (a leading `~` expanded) or `~/.codex`, where `session_index.jsonl`
 /// keeps the thread names.
 fn codex_home(home: &Path) -> std::path::PathBuf {
@@ -174,6 +201,8 @@ impl State {
             sessions: self.sessions.snapshot(),
             permissions: self.permissions.cards(),
             completion: self.completion.clone(),
+            // Set by `Feed::snapshot`, which can see the scheduler.
+            reminder_ids: Vec::new(),
         }
     }
 }
@@ -184,6 +213,15 @@ impl Feed {
     pub fn with_sound(outlet: SoundOutlet) -> Self {
         Self {
             sound: Some(outlet),
+            ..Self::default()
+        }
+    }
+
+    /// A feed whose reminders go to `outlet` instead of the desktop.
+    #[cfg(test)]
+    pub fn with_notify(outlet: NotifyOutlet) -> Self {
+        Self {
+            notify: Some(outlet),
             ..Self::default()
         }
     }
@@ -199,6 +237,15 @@ impl Feed {
         if let Some(player) = sound::player_on_path() {
             let _ = sound::play(player, cue);
         }
+    }
+
+    /// Post one due reminder through the outlet, or the platform's notifier.
+    fn emit_notification(&self, title: &str, body: &str) {
+        if let Some(outlet) = &self.notify {
+            outlet(title, body);
+            return;
+        }
+        let _ = crate::adapters::notify_send(title.to_owned(), body.to_owned());
     }
 
     /// Reduces one hook into the sessions.
@@ -256,6 +303,15 @@ impl Feed {
                     ),
                     blocks: completion::blocks(&session.last_assistant_message),
                 });
+                // #238 AC 9: a finished turn is nudged once, and its card is the hint.
+                self.reminders
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .track_completion(
+                        session_id,
+                        completion.turn_failed,
+                        morrow_core::reduce::Timestamp(now as f64 / 1000.0),
+                    );
             }
         }
         state.dirty = true;
@@ -331,29 +387,93 @@ impl Feed {
         (id, decision)
     }
 
+    /// The session behind card `id`, read while the card is still held. Anything
+    /// that removes the card must capture this first: afterwards its id no
+    /// longer resolves to a card, so there is no session to silence.
+    fn held_card_session(state: &State, id: u64) -> Option<String> {
+        state
+            .permissions
+            .cards()
+            .into_iter()
+            .find(|card| card.id == id)
+            .map(|card| card.session_id)
+    }
+
+    /// Stop every reminder for the session a just-handled card belonged to.
+    /// The scheduler rule existed in core but had no caller; this is it.
+    fn silence_reminder_for(&self, session_id: &str) {
+        self.reminders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .silence_session(session_id);
+    }
+
     /// The user's answer to card `id`; false if it is no longer held.
     pub fn answer(&self, id: u64, decision: Decision) -> bool {
-        self.change(|state| state.permissions.answer(id, decision))
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.answer(id, decision), session)
+        });
+        if changed {
+            if let Some(session) = session {
+                self.silence_reminder_for(&session);
+            }
+        }
+        changed
     }
 
     /// #188: a question option was picked; its label is echoed as the answer.
     pub fn answer_question(&self, id: u64, pick: &str) -> bool {
-        self.change(|state| state.permissions.answer_question(id, pick))
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.answer_question(id, pick), session)
+        });
+        if changed {
+            if let Some(session) = session {
+                self.silence_reminder_for(&session);
+            }
+        }
+        changed
     }
 
     /// #190: one answer per question of a wizard request, in question order.
     pub fn answer_questions(&self, id: u64, answers: Vec<String>) -> bool {
-        self.change(|state| state.permissions.answer_questions(id, answers))
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.answer_questions(id, answers), session)
+        });
+        if changed {
+            if let Some(session) = session {
+                self.silence_reminder_for(&session);
+            }
+        }
+        changed
     }
 
     /// #188: the question card was skipped, not answered.
     pub fn skip_question(&self, id: u64) -> bool {
-        self.change(|state| state.permissions.skip_question(id))
+        let (changed, session) = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            (state.permissions.skip_question(id), session)
+        });
+        if changed {
+            if let Some(session) = session {
+                self.silence_reminder_for(&session);
+            }
+        }
+        changed
     }
 
     /// Card `id`'s hook is gone.
     pub fn drop_request(&self, id: u64) {
-        self.change(|state| state.permissions.drop_request(id));
+        let session = self.change(|state| {
+            let session = Self::held_card_session(state, id);
+            state.permissions.drop_request(id);
+            session
+        });
+        if let Some(session) = session {
+            self.silence_reminder_for(&session);
+        }
     }
 
     /// #185: the user removed a session from its card. Its held cards go too,
@@ -433,6 +553,54 @@ impl Feed {
                 }
                 _ => None,
             })
+    }
+
+    /// One pass of the follow-up reminders (#238 AC 9): reconcile with the held
+    /// requests, deliver what is due, and return the ids whose bell should stay up.
+    ///
+    /// `held_back` is the lock screen or a suspended probe (#197); quiet hours live in
+    /// the frontend's settings and reach here through the same flag once they are read
+    /// by the shell.
+    pub fn tick_reminders(&self, held_back: bool, now_ms: u64) -> Vec<u64> {
+        let held = self.lock().snapshot();
+        let cards: Vec<crate::reminders::WaitingCard> = held
+            .permissions
+            .iter()
+            .map(|card| crate::reminders::WaitingCard {
+                id: card.id,
+                session_id: card.session_id.clone(),
+                question: card
+                    .question
+                    .as_ref()
+                    .map(|question| question.question.clone())
+                    .unwrap_or_default(),
+                summary: card.summary.clone(),
+                tool_name: card.tool_name.clone(),
+            })
+            .collect();
+        let mut book = self
+            .reminders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let due = book.tick(
+            &cards,
+            held_back,
+            morrow_core::reduce::Timestamp(now_ms as f64 / 1000.0),
+        );
+        for reminder in &due {
+            // The island notifies from here, not the webview: a hidden panel has no
+            // timer, and the reminder is about something the user cannot see.
+            self.emit_notification(&reminder.title, &reminder.body);
+        }
+        book.hinted()
+    }
+
+    /// Arm the reminder interval: 0 or less turns the feature off.
+    pub fn set_reminder_interval(&self, seconds: Option<f64>) {
+        self.reminders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .set_interval(seconds);
     }
 
     /// Write the session list out, at most once per save gap.
@@ -517,6 +685,11 @@ impl Feed {
                     })
                     .collect();
                 feed.restore_sessions(&sessions_dir, &codex_indexes);
+                // #341: off until the user chooses an interval. The old
+                // unconditional 60s default made the core's "off until set"
+                // rule true only in unit tests.
+                let stored = morrow_platform::settings::load(&sessions_dir).ok();
+                feed.set_reminder_interval(reminder_interval(stored.as_ref()));
                 let mut watcher = feed.watcher();
                 loop {
                     // A watcher that reports a change wakes the loop early; one
@@ -534,6 +707,9 @@ impl Feed {
                     let now = now_ms();
                     feed.tick_discovery(now);
                     feed.save_sessions(&sessions_dir, now);
+                    // A locked screen suspends the probes (#197); a held-back reminder is
+                    // reported once and caught up when it ends.
+                    feed.tick_reminders(!feed.lock().probes_active, now);
                 }
             })
             .expect("spawn the discovery thread");
@@ -717,8 +893,11 @@ impl Feed {
                             }
                         }
                         state.dirty = false;
-                        let snapshot = state.snapshot();
-                        (snapshot, state.channel.clone())
+                        let channel = state.channel.clone();
+                        let mut snapshot = state.snapshot();
+                        drop(state);
+                        snapshot.reminder_ids = feed.reminder_hints();
+                        (snapshot, channel)
                     };
                     let counts = (snapshot.sessions.len(), snapshot.permissions.len());
                     if let Some(channel) = channel {
@@ -736,7 +915,17 @@ impl Feed {
     /// The current snapshot (the pusher uses `State::snapshot` directly).
     #[cfg(test)]
     pub fn snapshot(&self) -> Snapshot {
-        self.lock().snapshot()
+        let mut snapshot = self.lock().snapshot();
+        snapshot.reminder_ids = self.reminder_hints();
+        snapshot
+    }
+
+    /// The cards whose reminder already went out.
+    fn reminder_hints(&self) -> Vec<u64> {
+        self.reminders
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .hinted()
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -754,6 +943,93 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn reminders_start_off_until_an_interval_is_stored() {
+        assert_eq!(reminder_interval(None), None);
+        assert_eq!(reminder_interval(Some(&serde_json::json!({}))), None);
+        assert_eq!(
+            reminder_interval(Some(&serde_json::json!({ REMINDER_INTERVAL_KEY: 0 }))),
+            None
+        );
+        assert_eq!(
+            reminder_interval(Some(&serde_json::json!({ REMINDER_INTERVAL_KEY: 45 }))),
+            Some(45.0)
+        );
+    }
+
+    #[test]
+    fn answering_a_card_silences_its_reminder() {
+        let feed = Feed::default();
+        feed.set_reminder_interval(Some(60.0));
+        let (id, _receiver) = feed.hold(&hook(
+            r#"{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash"}"#,
+        ));
+        let now = 1_000_000u64;
+        assert!(
+            feed.tick_reminders(false, now).is_empty(),
+            "timer just started"
+        );
+        assert_eq!(
+            feed.tick_reminders(false, now + 60_000).len(),
+            1,
+            "the wait is due"
+        );
+        assert!(feed.answer(id, Decision::Allow));
+        assert!(
+            feed.tick_reminders(false, now + 120_000).is_empty(),
+            "an answered request must not chime again"
+        );
+    }
+
+    /// Answering a card silences its whole session, not just the card that was
+    /// removed. A second card still held for that session is the observable: if
+    /// the session is not silenced, its reminder nags again a full interval later.
+    /// Looking the session up by the answered card's id after the decision cannot
+    /// work — the card is already out of `held`.
+    #[test]
+    fn answering_a_card_silences_later_nags_for_its_session() {
+        let nags = Arc::new(Mutex::new(Vec::new()));
+        let recorder = {
+            let nags = Arc::clone(&nags);
+            Arc::new(move |_title: &str, body: &str| nags.lock().unwrap().push(body.to_owned()))
+        };
+        let feed = Feed::with_notify(recorder);
+        feed.set_reminder_interval(Some(60.0));
+
+        // One session, two held requests: an approval and a question. Both carry
+        // an active reminder once the interval passes; the approval is answered.
+        let (approval, approval_rx) = feed.hold(&hook(
+            r#"{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"rm -rf build"}}"#,
+        ));
+        let (question, question_rx) = feed.hold(&hook(
+            r#"{"session_id":"s1","hook_event_name":"PermissionRequest","tool_input":{"questions":[{"question":"Which DB?","header":"DB","options":[{"label":"Postgres","description":""}],"multiSelect":false}]}}"#,
+        ));
+        let _keep_receivers = (approval_rx, question_rx);
+
+        feed.tick_reminders(false, 0); // sync the requests; nothing due yet
+        assert!(nags.lock().unwrap().is_empty());
+        feed.tick_reminders(false, 60_000);
+        assert_eq!(
+            nags.lock().unwrap().len(),
+            2,
+            "both cards carry an active reminder"
+        );
+        let snapshot = feed.snapshot();
+        assert!(snapshot.reminder_ids.contains(&approval));
+        assert!(snapshot.reminder_ids.contains(&question));
+
+        assert!(feed.answer(approval, Decision::Allow));
+        nags.lock().unwrap().clear();
+
+        // The question is still held and would be due again at 120 s. The answer
+        // silenced the session, so there is no later nag.
+        feed.tick_reminders(false, 120_000);
+        assert!(
+            nags.lock().unwrap().is_empty(),
+            "no reminder may nag after the session's card was answered"
+        );
+    }
 
     /// The AC of #261, at the feed: a panel that has just appeared shows the
     /// sessions the agent already has, **before** any hook arrives.

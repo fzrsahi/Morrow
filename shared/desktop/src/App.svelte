@@ -38,7 +38,6 @@
     wizardFor,
     type WizardState,
   } from './lib/question';
-  import { FollowUpReminders, type ReminderRoom } from './lib/reminders';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -152,7 +151,6 @@
   const drag = new DragGate();
   // #201: pure timing/decision state; this component only arms the timer and
   // calls the shell.
-  const reminders = new FollowUpReminders();
   let dragging = $state(false);
   let suppressClick = false;
   let hoverTimer: ReturnType<typeof setTimeout>;
@@ -299,8 +297,9 @@
   // or wizard card shows the picks collected for its own request id.
   function questionPicks(id: number, view: NonNullable<ReturnType<typeof questionView>>) {
     if (!view.prompt.multi_select && view.prompts.length === 1) {
-      if (selected?.id !== id) return [];
-      const index = view.prompt.options.findIndex((o) => o.label === selected.label);
+      const inFlight = selected;
+      if (inFlight?.id !== id) return [];
+      const index = view.prompt.options.findIndex((o) => o.label === inFlight.label);
       return index < 0 ? [] : [index];
     }
     return view.wizard.picks[view.wizard.step] ?? [];
@@ -795,6 +794,8 @@
   function acceptSnapshot(snapshot: Snapshot) {
     sessions = snapshot.sessions;
     cards = snapshot.permissions;
+    // #238 AC 9: the shell owns the reminder schedule, so it hands over the bells.
+    reminderIds = snapshot.reminder_ids ?? [];
     // #189: a field whose card was answered or dropped elsewhere must not
     // leave the island holding keys meant for the app underneath.
     if (questionFocus.ownerId !== null && !cards.some((c) => c.id === questionFocus.ownerId)) {
@@ -836,34 +837,6 @@
   // #201: arm one wake-up for the earliest due follow-up. The pure scheduler
   // owns the timeout and the once-per-request rule; this effect only arms and
   // cancels the timer and calls the shell. It shares #197's ambient gate: a
-  // locked screen or quiet hours arms no timer at all, and the first eligible
-  // pass catches a held-back reminder up. Answering or dropping the request
-  // re-syncs, leaving nothing left to schedule.
-  $effect(() => {
-    const room: ReminderRoom = {
-      capable: notificationsCapable,
-      locked: ambient.locked,
-      quiet: ambient.quiet,
-    };
-    // Reading `cards` (not the scheduler's private map) is what re-arms the
-    // wake-up on every feed push: a new request starts its clock, an answered
-    // or dropped one leaves the map and takes its bell with it.
-    reminders.sync(cards, performance.now());
-    const at = reminders.nextDue(performance.now(), room);
-    reminderIds = reminders.hinted();
-    if (at === null) return;
-    const timer = setTimeout(() => {
-      const due = reminders.collect(performance.now(), room);
-      reminderIds = reminders.hinted();
-      for (const reminder of due) {
-        invoke('notify_send', { title: reminder.title, body: reminder.body }).catch(
-          (error) => (hooksError = String(error)),
-        );
-      }
-    }, Math.max(0, at - performance.now()));
-    return () => clearTimeout(timer);
-  });
-
   onMount(() => {
     const channel = new Channel<Snapshot>();
     channel.onmessage = acceptSnapshot;
