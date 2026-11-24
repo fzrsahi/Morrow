@@ -191,6 +191,7 @@
   // went out keep the collapsed bar's bell until the request leaves the feed.
   let notificationsCapable = $state(false);
   let reminderIds = $state<number[]>([]);
+  const reminders = new FollowUpReminders();
 
   // #193: the shell reads MPRIS/SMTC; the deck ticks from an anchor on this
   // webview's clock. No player probe is scheduled while the Music tab is shut.

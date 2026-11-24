@@ -230,7 +230,6 @@
         <ShortcutsPage hotkeySupported={hotkeySupported} hotkeyDetail={hotkeyDetail} />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} onResetPosition={resetPosition} />
-        <AppearancePage {appearance} onChange={saveSetting} />
       {:else if page === 'prayer'}
         <PrayerPage
           settings={prayer}
