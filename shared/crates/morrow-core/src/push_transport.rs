@@ -39,6 +39,11 @@ pub struct PushTransportResponse {
     pub refused_redirect: Option<String>,
     /// The server's `Retry-After`, in seconds, when it sent one.
     pub retry_after: Option<f64>,
+    /// The raw header, including the rare HTTP-date form the shell cannot parse
+    /// into `retry_after` itself.
+    pub retry_after_header: Option<String>,
+    /// `Location` of a 3xx, before the shell decides to follow it.
+    pub location: Option<String>,
 }
 
 /// What the settings page shows after a test push.
@@ -289,7 +294,7 @@ pub fn retries(kind: PushEventKind) -> bool {
 ///
 /// A 5xx or a 429 is a bad moment; a 4xx, a rejected signature or a refused redirect
 /// would fail the same way again. A refused redirect is never retried, whatever the code.
-pub fn retry_delay(response: &PushTransportResponse) -> Option<f64> {
+pub fn retry_delay(response: &PushTransportResponse, now: f64) -> Option<f64> {
     if response.refused_redirect.is_some() {
         return None;
     }
@@ -298,7 +303,10 @@ pub fn retry_delay(response: &PushTransportResponse) -> Option<f64> {
     };
     if status == 429 {
         let hinted = response
-            .retry_after
+            .retry_after_header
+            .as_deref()
+            .and_then(|header| retry_after_seconds(header, now))
+            .or(response.retry_after)
             .or_else(|| telegram_retry_after(&response.body))
             .unwrap_or(RETRY_DELAY_SECONDS);
         return Some(hinted.clamp(1.0, RETRY_MAX_DELAY_SECONDS));
@@ -382,6 +390,51 @@ impl RedirectRefusal {
     /// Whether the user can fix it by saving the new address themselves.
     pub fn names_a_new_address(self) -> bool {
         matches!(self, Self::Downgrade | Self::OtherHost)
+    }
+}
+
+/// A redirect decision, with the original request intact (method, headers,
+/// body) — only the URL changes, so a POST stays a POST (#360).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FollowRedirect {
+    Reissue(PushHttpRequest),
+    Stop(RedirectRefusal),
+}
+
+/// Pure redirect state machine. The shell owns the HTTP client and must disable
+/// its automatic redirect following, then hand each 3xx back through this type.
+#[derive(Clone, Debug, Default)]
+pub struct RedirectFollower {
+    hops: usize,
+}
+
+impl RedirectFollower {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Resolve `Location` against the URL that answered and decide whether the
+    /// hop is safe. Multi-hop counting lives here, not in the transport.
+    pub fn follow(
+        &mut self,
+        original: &PushHttpRequest,
+        from: &str,
+        location: &str,
+    ) -> FollowRedirect {
+        let target = match Url::parse(from)
+            .ok()
+            .and_then(|base| base.join(location).ok())
+        {
+            Some(url) => url.to_string(),
+            None => return FollowRedirect::Stop(RedirectRefusal::UnsupportedScheme),
+        };
+        if let Some(refusal) = redirect_refusal(Some(from), &target, self.hops) {
+            return FollowRedirect::Stop(refusal);
+        }
+        self.hops += 1;
+        let mut next = original.clone();
+        next.url = target;
+        FollowRedirect::Reissue(next)
     }
 }
 
@@ -733,6 +786,43 @@ mod tests {
     }
 
     #[test]
+    fn a_date_form_retry_after_reaches_the_retry_decision() {
+        let mut throttled = response(Some(429), "");
+        // "Wed, 21 Oct 2015 07:28:00 GMT" is 120 seconds after this `now`.
+        let now = 1_445_412_480.0;
+        throttled.retry_after_header = Some("Wed, 21 Oct 2015 07:28:00 GMT".to_owned());
+        assert_eq!(retry_delay(&throttled, now), Some(120.0));
+        // A seconds-form header still wins over the parsed float and the body.
+        throttled.retry_after_header = Some("7".to_owned());
+        assert_eq!(retry_delay(&throttled, now), Some(7.0));
+    }
+
+    #[test]
+    fn a_followed_redirect_reissues_the_original_post() {
+        let original = PushHttpRequest {
+            url: "https://hooks.example.com/start".to_owned(),
+            method: "POST",
+            headers: vec![("X-Token".to_owned(), "secret".to_owned())],
+            body: b"payload".to_vec(),
+        };
+        let mut follower = RedirectFollower::new();
+        match follower.follow(&original, &original.url, "/next") {
+            FollowRedirect::Reissue(next) => {
+                assert_eq!(next.url, "https://hooks.example.com/next");
+                assert_eq!(next.method, "POST");
+                assert_eq!(next.headers, original.headers);
+                assert_eq!(next.body, original.body);
+            }
+            FollowRedirect::Stop(_) => panic!("a same-host path move must be followed"),
+        }
+        // A cross-host Location stops before any second request is built.
+        assert_eq!(
+            follower.follow(&original, &original.url, "https://evil.example/steal"),
+            FollowRedirect::Stop(RedirectRefusal::OtherHost)
+        );
+    }
+
+    #[test]
     fn a_retry_is_only_for_a_bad_moment() {
         assert!(retries(PushEventKind::Permission));
         assert!(retries(PushEventKind::Question));
@@ -741,45 +831,48 @@ mod tests {
         assert!(!retries(PushEventKind::Reminder));
 
         // No response, a 5xx: worth one try.
-        assert_eq!(retry_delay(&response(None, "")), Some(RETRY_DELAY_SECONDS));
         assert_eq!(
-            retry_delay(&response(Some(503), "")),
+            retry_delay(&response(None, ""), 0.0),
+            Some(RETRY_DELAY_SECONDS)
+        );
+        assert_eq!(
+            retry_delay(&response(Some(503), ""), 0.0),
             Some(RETRY_DELAY_SECONDS)
         );
         // A 4xx would fail the same way again.
-        assert_eq!(retry_delay(&response(Some(400), "")), None);
-        assert_eq!(retry_delay(&response(Some(200), "")), None);
+        assert_eq!(retry_delay(&response(Some(400), ""), 0.0), None);
+        assert_eq!(retry_delay(&response(Some(200), ""), 0.0), None);
         // A refused redirect is not a hiccup.
         let mut refused = response(Some(503), "");
         refused.refused_redirect = Some("https://evil.example/".to_owned());
-        assert_eq!(retry_delay(&refused), None);
+        assert_eq!(retry_delay(&refused, 0.0), None);
     }
 
     #[test]
     fn a_429_waits_what_the_server_asked_within_reason() {
         let mut throttled = response(Some(429), "");
         throttled.retry_after = Some(17.0);
-        assert_eq!(retry_delay(&throttled), Some(17.0));
+        assert_eq!(retry_delay(&throttled, 0.0), Some(17.0));
 
         // Telegram puts it in the body.
         let telegram = response(Some(429), r#"{"ok":false,"parameters":{"retry_after":9}}"#);
-        assert_eq!(retry_delay(&telegram), Some(9.0));
+        assert_eq!(retry_delay(&telegram, 0.0), Some(9.0));
 
         // No hint at all: the default.
         assert_eq!(
-            retry_delay(&response(Some(429), "")),
+            retry_delay(&response(Some(429), ""), 0.0),
             Some(RETRY_DELAY_SECONDS)
         );
 
         // Ten minutes is cut: an approval that late is mostly useless.
         let mut long = response(Some(429), "");
         long.retry_after = Some(600.0);
-        assert_eq!(retry_delay(&long), Some(RETRY_MAX_DELAY_SECONDS));
+        assert_eq!(retry_delay(&long, 0.0), Some(RETRY_MAX_DELAY_SECONDS));
 
         // A zero-second hint still waits a minimum, or the retry is immediate.
         let mut zero = response(Some(429), "");
         zero.retry_after = Some(0.0);
-        assert_eq!(retry_delay(&zero), Some(1.0));
+        assert_eq!(retry_delay(&zero, 0.0), Some(1.0));
     }
 
     #[test]
