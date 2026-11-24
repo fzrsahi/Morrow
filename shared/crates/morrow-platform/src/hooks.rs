@@ -131,7 +131,9 @@ fn zcode_path(paths: &Paths) -> PathBuf {
 
 /// The directory each CLI proves itself by. Codex keeps `~/.codex`, Gemini
 /// `~/.gemini`; a file the user has never run their CLI for is ours to leave
-/// alone.
+/// alone. A nested path is allowed: Trae CLI Next owns `~/.trae/cli`, while the
+/// older CLI only creates `~/.trae`, so sharing that directory would detect a
+/// CLI that is not installed.
 const CLI_DIRS: &[(&str, &str)] = &[
     ("codex", ".codex"),
     ("gemini", ".gemini"),
@@ -152,7 +154,8 @@ const CLI_DIRS: &[(&str, &str)] = &[
     ("qwen", ".qwen"),
     // #234 batch 2. Grok is deliberately absent: it hangs from `$GROK_HOME`, and a
     // target with its own root proves itself by that root existing.
-    ("traecli-next", ".trae"),
+    // `~/.trae` alone is the older CLI's marker; Next lives one level deeper.
+    ("traecli-next", ".trae/cli"),
     // #234 batch 3a. Kiro's marker is `.kiro`; its file lives under `agents/`,
     // which an install creates if the directory exists.
     ("trae", ".trae"),
