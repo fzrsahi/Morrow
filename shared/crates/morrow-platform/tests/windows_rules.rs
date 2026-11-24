@@ -165,6 +165,7 @@ fn windows_environment() -> Environment {
         has_session_bus: false,
         path_tools: vec![r"C:\Windows\System32".into()],
         config_home: std::path::PathBuf::from(r"C:\Users\u\.config"),
+        claude_credentials: std::path::PathBuf::from(r"C:\Users\u\.claude\.credentials.json"),
         has_portal_shortcuts: false,
     }
 }
