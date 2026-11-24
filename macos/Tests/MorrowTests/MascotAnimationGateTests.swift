@@ -1,5 +1,6 @@
 import XCTest
 @testable import Morrow
+import MorrowCore
 
 @MainActor
 final class MascotAnimationGateTests: XCTestCase {
@@ -115,10 +116,68 @@ final class AnimationClassGateTests: XCTestCase {
         XCTAssertFalse(MascotAnimationGate.shouldAnimate(.mascot, state: state(settled: true)))
     }
 
-    func testMascotHoldsItsIdlePoseWhileMusicPlays() {
-        // The Music class owns the motion; a running mascot would spend frames
-        // on a pose that says nothing.
-        XCTAssertFalse(MascotAnimationGate.shouldAnimate(.mascot, state: state(music: true)))
+    func testMascotHoldsStillWhileMusicPlaysWhenIslandIsIdleSettled() {
+        // When collapsed & idle while music plays, isIdleSettled is true:
+        // the idle mascot stays still and the Music class owns the motion.
+        XCTAssertFalse(MascotAnimationGate.shouldAnimate(.mascot, state: state(settled: true, music: true)))
+        XCTAssertFalse(MascotAnimationGate.shouldAnimate(.ambientIdle, state: state(settled: true, music: true)))
+        XCTAssertTrue(MascotAnimationGate.shouldAnimate(.music, state: state(settled: true, music: true)))
+    }
+
+    func testMascotAnimatesWhileMusicPlaysWhenUnsettled() {
+        // Active session or expanded panel (isIdleSettled == false) keeps the
+        // mascot animating even while music plays.
+        XCTAssertTrue(MascotAnimationGate.shouldAnimate(.mascot, state: state(settled: false, music: true)))
+        XCTAssertTrue(MascotAnimationGate.shouldAnimate(.music, state: state(settled: false, music: true)))
+
+        // Waiting-quiet timeout still stops the mascot while music plays.
+        XCTAssertFalse(MascotAnimationGate.shouldAnimate(.mascot, state: state(settled: false, music: true, waiting: 60)))
+        XCTAssertTrue(MascotAnimationGate.shouldAnimate(.music, state: state(settled: false, music: true, waiting: 60)))
+    }
+
+    func testMusicPlayingOnlyFreezesMascotWhileSettledAndResumesWithReAnchor() {
+        let gate = MascotAnimationGate.shared
+        gate.setPanelVisible(true)
+        gate.setWaitingForUser(false)
+        gate.setIdleSettled(true)
+        gate.setMusicPlaying(true)
+        defer {
+            gate.setIdleSettled(false)
+            gate.setMusicPlaying(false)
+        }
+
+        XCTAssertFalse(gate.animationsActive)
+        XCTAssertFalse(gate.gates.mascot)
+        XCTAssertTrue(gate.gates.music)
+
+        let settledEpoch = gate.epoch
+        gate.setIdleSettled(false)
+
+        XCTAssertTrue(gate.animationsActive)
+        XCTAssertTrue(gate.gates.mascot)
+        XCTAssertTrue(gate.gates.music)
+        XCTAssertEqual(gate.epoch, settledEpoch + 1, "resuming from settled while music plays must re-anchor schedules")
+    }
+
+    func testIslandSettledUnsettlesOnActiveSessionOrExpandedPanel() {
+        XCTAssertTrue(PanelWindowController.isIslandSettled(isExpanded: false, sessionStatuses: []))
+        XCTAssertTrue(PanelWindowController.isIslandSettled(isExpanded: false, sessionStatuses: [.idle, .idle]))
+
+        let activeStatuses: [AgentStatus] = [.processing, .running, .waitingApproval, .waitingQuestion]
+        for status in activeStatuses {
+            XCTAssertFalse(
+                PanelWindowController.isIslandSettled(isExpanded: false, sessionStatuses: [status]),
+                "\(status) must unsettle the island"
+            )
+            XCTAssertFalse(
+                PanelWindowController.isIslandSettled(isExpanded: false, sessionStatuses: [.idle, status]),
+                "\(status) paired with .idle must unsettle the island"
+            )
+        }
+
+        XCTAssertFalse(PanelWindowController.isIslandSettled(isExpanded: true, sessionStatuses: []))
+        XCTAssertFalse(PanelWindowController.isIslandSettled(isExpanded: true, sessionStatuses: [.idle]))
+        XCTAssertFalse(PanelWindowController.isIslandSettled(isExpanded: true, sessionStatuses: [.running]))
     }
 
     func testAmbientGlowFollowsTheSettledState() {
