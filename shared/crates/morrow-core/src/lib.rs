@@ -37,6 +37,7 @@ pub mod music;
 pub mod path_identity;
 pub mod reduce;
 pub mod session_recap;
+pub mod sqlite;
 pub mod time;
 pub mod transcript;
 
