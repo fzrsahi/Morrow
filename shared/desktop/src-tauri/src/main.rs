@@ -3,6 +3,7 @@
 //! tight-fit, nonactivating panel, which answers permission requests.
 
 mod adapters;
+mod cli;
 mod completion;
 mod feed;
 mod hooks;
@@ -17,6 +18,7 @@ mod prune;
 mod sessions;
 mod settings;
 mod settings_window;
+mod sound;
 mod transcripts;
 mod tray;
 #[cfg(windows)]
@@ -91,6 +93,12 @@ fn session_dismiss(feed: State<'_, Arc<Feed>>, session_id: String) {
 }
 
 fn main() -> ExitCode {
+    // #243: `--hooks …` is the installer without the GUI, for a gate script and
+    // for anyone who would rather not click. Anything else starts the island.
+    if let Some(code) = cli::run(&std::env::args().collect::<Vec<_>>()) {
+        return code;
+    }
+
     let smoke = std::env::var("MORROW_SMOKE").is_ok_and(|v| v == "1");
 
     let endpoint = current_endpoint();
@@ -119,6 +127,15 @@ fn main() -> ExitCode {
             println!("morrow-smoke: pushed sessions={sessions} cards={cards}");
         }
     });
+
+    // #241: AppLaunch is the one cue with no hook to carry it — the app's own
+    // start is the event. A locked screen stays silent, as it does for hook
+    // cues in `Feed::record`.
+    if adapters::screen_locked() != Some(true) {
+        if let Some(player) = morrow_platform::sound::player_on_path() {
+            let _ = morrow_platform::sound::play(player, morrow_core::attention::sound_cue::LAUNCH);
+        }
+    }
 
     let result = tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -158,6 +175,8 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            sound::sound_cues,
+            sound::sound_preview,
             settings_window::open_settings,
             peek_window::close_peek,
             music::music_track,

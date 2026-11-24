@@ -43,7 +43,9 @@ x11_workdir() {
   trap x11_cleanup EXIT
 }
 x11_cleanup() {
-  for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+  # `pids` is empty for a caller that started nothing (e2e2 --self-check), and
+  # `set -u` makes an empty array expansion an error.
+  for pid in ${pids[@]+"${pids[@]}"}; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
   rm -rf "$WORK"
 }

@@ -120,6 +120,7 @@ gh pr edit <pr-id> --base main
   - **Summary:** Architecture walkthrough or visual flow diagram.
   - **Evidence:** Test logs (`verify-local.sh` output) and Before vs After screenshots for UI changes.
   - **Merge Danger:** Explicit One-way / Two-way door classification and blast radius assessment.
+- Authors are expected to fill all three. **How reviewers weigh a missing section is governed by §5.7** — paperwork alone is not a merge blocker.
 
 ### 5.6. Post-Merge Cleanup
 Once your PR has been merged into `main`, clean up your local branch:
@@ -129,6 +130,32 @@ git pull origin main
 git branch -d <old-branch>
 git fetch --prune
 ```
+
+### 5.7. Review Focus (Substance Over Paperwork)
+
+A review exists to catch code that is wrong, not to grade the PR description. Apply this order:
+
+1. **Blocking findings — only when the implementation is wrong:**
+   - behaviour that contradicts the issue's acceptance criteria;
+   - an actual or likely bug (wrong branch, missing guard, stale state, data loss, race, wrong path/offset, leaked resource);
+   - security or privacy regressions (secrets in argv/logs, unredacted payloads, permission bypass);
+   - regressions for existing callers, persisted data, or OS-specific behaviour;
+   - a PR-body claim the code does not support (e.g. "closes AC 3" with no producer).
+2. **Non-blocking notes — approve with a note instead of requesting changes:**
+   - missing `verify-local.sh` output, Before/After screenshots, benchmark tables, or test logs;
+   - branch-name prefix, commit type/title formatting, stale `Refs`, wording in the body;
+   - size above the 250-line ideal, speculative smells, style preferences.
+
+   Record each once, briefly. **Do not withhold approval when the code is correct.** A `CHANGES_REQUESTED` verdict must name a concrete code or behaviour defect: if the finding cannot be written as "with input X the code does Y instead of Z", it is a note, not a blocker.
+
+**GitHub comments (issues and PRs) must be actionable.** Every finding states:
+
+- the exact location (`file:line`, or commit SHA);
+- the wrong behaviour and its impact (who is affected, and when);
+- the concrete fix, or the decision needed from the maintainer;
+- whether it is a **HARD blocker** or a **note**.
+
+Re-read the latest commit before re-reviewing: do not paste a stale finding the current head already fixes, and acknowledge explicitly what was resolved. Do not repeat the same note across sibling PRs — put it in one issue/PR and link it from the others.
 
 ---
 

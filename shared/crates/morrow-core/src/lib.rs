@@ -27,7 +27,9 @@
 
 pub mod agent_tasks;
 pub mod attention;
+pub mod config_roots;
 pub mod digest;
+pub mod discovery;
 pub mod git;
 pub mod installer;
 pub mod intake;
@@ -35,8 +37,10 @@ pub mod markdown;
 pub mod model_label;
 pub mod music;
 pub mod quota;
+pub mod path_identity;
 pub mod reduce;
 pub mod session_recap;
+pub mod sqlite;
 pub mod time;
 pub mod transcript;
 

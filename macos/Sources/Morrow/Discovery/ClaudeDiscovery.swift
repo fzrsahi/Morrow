@@ -16,6 +16,12 @@ enum ClaudeDiscovery {
         defer { handle.closeFile() }
         let chunk = handle.readData(ofLength: 32768)
         guard let text = String(data: chunk, encoding: .utf8) else { return nil }
+        return model(fromTranscript: text)
+    }
+
+    /// The model from transcript text (#245): the first assistant row that has
+    /// one. Split out so the port can be given the same bytes the platform read.
+    static func model(fromTranscript text: String) -> String? {
         for line in text.components(separatedBy: "\n") {
             guard !line.isEmpty,
                   let data = line.data(using: .utf8),
