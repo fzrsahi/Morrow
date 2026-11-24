@@ -445,16 +445,6 @@ We welcome contributions from everyone! Please check out [CONTRIBUTING.md](CONTR
 - Upstream original project: [wxtsky/CodeIsland](https://github.com/wxtsky/CodeIsland) by [@wxtsky](https://github.com/wxtsky) — thanks for creating the foundational notch agent tracker.
 - Inspired by [claude-island](https://github.com/farouqaldori/claude-island) by [@farouqaldori](https://github.com/farouqaldori).
 
-## Star history
-
-<a href="https://star-history.dera.page/#fzrsahi/morrow&type=date&legend=bottom-right">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://star-history.dera.page/svg?repos=fzrsahi/morrow&type=date&theme=dark&legend=top-left" />
-    <source media="(prefers-color-scheme: light)" srcset="https://star-history.dera.page/svg?repos=fzrsahi/morrow&type=date&legend=top-left" />
-    <img alt="Star history chart" src="https://star-history.dera.page/svg?repos=fzrsahi/morrow&type=date&legend=top-left" />
-  </picture>
-</a>
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
