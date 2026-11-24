@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use morrow_core::follow_up::{FollowUpKind, FollowUpReminderScheduler};
+use morrow_core::follow_up::{Delivery, FollowUpKind, FollowUpReminderScheduler};
 use morrow_core::reduce::Timestamp;
 use serde::Serialize;
 
@@ -119,6 +119,10 @@ impl ReminderBook {
         self.scheduler
             .collect_due(now, held_back)
             .iter()
+            // #341: `Deferred` means the item became owed while held back;
+            // nothing played. Rendering it here notified the user at due time
+            // *and* again at catch-up. Only OnTime/CatchUp may make a sound.
+            .filter(|reminder| reminder.delivery != Delivery::Deferred)
             .filter_map(|reminder| self.content(reminder))
             .collect()
     }
@@ -250,7 +254,10 @@ mod tests {
     fn a_held_back_reminder_comes_once_when_the_hold_ends() {
         let mut book = book();
         book.tick(&[approval(1, "s1")], true, at(0.0));
-        book.tick(&[approval(1, "s1")], true, at(60.0));
+        assert!(
+            book.tick(&[approval(1, "s1")], true, at(60.0)).is_empty(),
+            "a deferred item must not notify at its due time"
+        );
         assert!(book.tick(&[approval(1, "s1")], true, at(200.0)).is_empty());
         let catch_up = book.tick(&[approval(1, "s1")], false, at(300.0));
         assert_eq!(
