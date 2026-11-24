@@ -361,64 +361,81 @@ impl Feed {
         (id, decision)
     }
 
-    /// Stop the reminder for a request the user just handled. The scheduler
-    /// rule existed in core but had no caller; this is it.
-    fn silence_reminder_for(&self, id: u64) {
-        let session = self
-            .lock()
+    /// Capture the session BEFORE the card is removed: `answer`/`drop_request`
+    /// delete it from `held`, so looking it up afterwards finds nothing.
+    fn session_of_card(&self, id: u64) -> Option<String> {
+        self.lock()
             .snapshot()
             .permissions
             .into_iter()
             .find(|card| card.id == id)
-            .map(|card| card.session_id);
-        if let Some(session) = session {
-            self.reminders
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .silence_session(&session);
-        }
+            .map(|card| card.session_id)
+    }
+
+    /// Stop the reminder for a request the user just handled. The scheduler
+    /// rule existed in core but had no caller; this is it.
+    fn silence_reminder(&self, session: &str) {
+        self.reminders
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .silence_session(session);
     }
 
     /// The user's answer to card `id`; false if it is no longer held.
     pub fn answer(&self, id: u64, decision: Decision) -> bool {
+        let session = self.session_of_card(id);
         let changed = self.change(|state| state.permissions.answer(id, decision));
         if changed {
-            self.silence_reminder_for(id);
+            if let Some(session) = session {
+                self.silence_reminder(&session);
+            }
         }
         changed
     }
 
     /// #188: a question option was picked; its label is echoed as the answer.
     pub fn answer_question(&self, id: u64, pick: &str) -> bool {
+        let session = self.session_of_card(id);
         let changed = self.change(|state| state.permissions.answer_question(id, pick));
         if changed {
-            self.silence_reminder_for(id);
+            if let Some(session) = session {
+                self.silence_reminder(&session);
+            }
         }
         changed
     }
 
     /// #190: one answer per question of a wizard request, in question order.
     pub fn answer_questions(&self, id: u64, answers: Vec<String>) -> bool {
+        let session = self.session_of_card(id);
         let changed = self.change(|state| state.permissions.answer_questions(id, answers));
         if changed {
-            self.silence_reminder_for(id);
+            if let Some(session) = session {
+                self.silence_reminder(&session);
+            }
         }
         changed
     }
 
     /// #188: the question card was skipped, not answered.
     pub fn skip_question(&self, id: u64) -> bool {
+        let session = self.session_of_card(id);
         let changed = self.change(|state| state.permissions.skip_question(id));
         if changed {
-            self.silence_reminder_for(id);
+            if let Some(session) = session {
+                self.silence_reminder(&session);
+            }
         }
         changed
     }
 
     /// Card `id`'s hook is gone.
     pub fn drop_request(&self, id: u64) {
+        let session = self.session_of_card(id);
         self.change(|state| state.permissions.drop_request(id));
-        self.silence_reminder_for(id);
+        if let Some(session) = session {
+            self.silence_reminder(&session);
+        }
     }
 
     /// #185: the user removed a session from its card. Its held cards go too,
@@ -879,6 +896,30 @@ mod tests {
         assert_eq!(
             reminder_interval(Some(&serde_json::json!({ REMINDER_INTERVAL_KEY: 45 }))),
             Some(45.0)
+        );
+    }
+
+    #[test]
+    fn answering_a_card_silences_its_reminder() {
+        let feed = Feed::default();
+        feed.set_reminder_interval(Some(60.0));
+        let (id, _receiver) = feed.hold(&hook(
+            r#"{"session_id":"s1","hook_event_name":"PermissionRequest","tool_name":"Bash"}"#,
+        ));
+        let now = 1_000_000u64;
+        assert!(
+            feed.tick_reminders(false, now).is_empty(),
+            "timer just started"
+        );
+        assert_eq!(
+            feed.tick_reminders(false, now + 60_000).len(),
+            1,
+            "the wait is due"
+        );
+        assert!(feed.answer(id, Decision::Allow));
+        assert!(
+            feed.tick_reminders(false, now + 120_000).is_empty(),
+            "an answered request must not chime again"
         );
     }
 
