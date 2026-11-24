@@ -427,7 +427,7 @@ impl Feed {
     /// Titles come from the store that named them: Claude's transcript carries them
     /// inline, Codex keeps a `session_index.jsonl` per root and `codex_index` is its
     /// text. Both are injected so this can be exercised without a real home.
-    pub fn restore_sessions(&self, dir: &Path, codex_index: Option<&str>) -> usize {
+    pub fn restore_sessions(&self, dir: &Path, codex_indexes: &[String]) -> usize {
         let rows = morrow_core::session_store::load(dir);
         if rows.is_empty() {
             return 0;
@@ -436,13 +436,14 @@ impl Feed {
         state
             .sessions
             .restore(rows, |row| match row.source.as_str() {
-                "codex" => {
-                    morrow_core::session_store::codex_thread_name(codex_index?, &row.session_id)
-                        .map(|title| morrow_core::session_store::ResolvedSessionTitle {
-                            title,
-                            source: morrow_core::session_store::SessionTitleSource::CodexThreadName,
-                        })
-                }
+                "codex" => morrow_core::session_store::codex_thread_name_from_roots(
+                    &codex_indexes.iter().map(String::as_str).collect::<Vec<_>>(),
+                    &row.session_id,
+                )
+                .map(|title| morrow_core::session_store::ResolvedSessionTitle {
+                    title,
+                    source: morrow_core::session_store::SessionTitleSource::CodexThreadName,
+                }),
                 "claude" => {
                     let path = row.transcript_path.as_deref()?;
                     let (head, tail) = read_head_and_tail(Path::new(path))?;
@@ -564,6 +565,29 @@ impl Feed {
                 feed.restore_sessions(&sessions_dir, codex_index.as_deref());
                 // The interval the panel has always used; 0 in the setting turns it off.
                 feed.set_reminder_interval(Some(morrow_core::follow_up::DEFAULT_INTERVAL_SECONDS));
+                // Swift iterates every Codex root, not only $CODEX_HOME: a
+                // thread renamed in another account's index keeps its title.
+                let mut codex_roots = vec![codex_home(&home)];
+                for entry in std::fs::read_dir(&home).into_iter().flatten().flatten() {
+                    let path = entry.path();
+                    let name = path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("");
+                    if name.starts_with(".codex")
+                        && path != codex_roots[0]
+                        && path.join("session_index.jsonl").is_file()
+                    {
+                        codex_roots.push(path);
+                    }
+                }
+                let codex_indexes: Vec<String> = codex_roots
+                    .iter()
+                    .filter_map(|root| {
+                        std::fs::read_to_string(root.join("session_index.jsonl")).ok()
+                    })
+                    .collect();
+                feed.restore_sessions(&sessions_dir, &codex_indexes);
                 let mut watcher = feed.watcher();
                 loop {
                     // A watcher that reports a change wakes the loop early; one
@@ -1257,7 +1281,7 @@ mod tests {
         let index = "{\"id\":\"codex-1\",\"thread_name\":\"Fix the flaky test\",\"updated_at\":\"2026-01-02T03:00:00Z\"}\n";
 
         let feed = Feed::default();
-        assert_eq!(feed.restore_sessions(&root, Some(index)), 3);
+        assert_eq!(feed.restore_sessions(&root, &[index.to_owned()]), 3);
         let titles: Vec<(String, Option<String>)> = feed
             .lock()
             .sessions

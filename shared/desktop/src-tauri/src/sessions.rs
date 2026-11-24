@@ -437,7 +437,7 @@ impl Sessions {
                     last_user_prompt: or_empty(&snap.last_user_prompt),
                     last_assistant_message: or_empty(&snap.last_assistant_message),
                     live_reply: live_reply.clone(),
-                    reply_preview: morrow_core::markdown_preview::plain(&shown, true),
+                    reply_preview: reply_preview(&shown),
                     model: or_empty(&snap.model),
                     cwd: or_empty(&snap.cwd),
                     term_app: or_empty(&snap.term_app),
@@ -478,6 +478,16 @@ fn basename(path: &str) -> &str {
         .rsplit('/')
         .next()
         .unwrap_or_default()
+}
+
+/// The shell folds one reply into a card row. #337's source budget belongs
+/// here, on the production path — not only in the fixture tests next to
+/// `preview_source`.
+fn reply_preview(shown: &str) -> String {
+    morrow_core::markdown_preview::plain(
+        &morrow_core::markdown_preview::preview_source(shown),
+        true,
+    )
 }
 
 #[cfg(test)]
@@ -740,6 +750,14 @@ mod tests {
         // A new session with the same id starts with no last event.
         sessions.apply(&hook(r#"{"session_id":"a","hook_event_name":"Stop"}"#), 20);
         assert_eq!(sessions.snapshot()[0].last_event, "Stop");
+    }
+
+    #[test]
+    fn a_huge_live_reply_is_budgeted_on_the_card_path() {
+        let huge = "A long line of prose that must be counted against the budget.\n".repeat(4_000);
+        let preview = reply_preview(&huge);
+        assert!(preview.len() < 16 * 1024, "{} bytes", preview.len());
+        assert!(preview.starts_with("A long line of prose"));
     }
 
     #[test]

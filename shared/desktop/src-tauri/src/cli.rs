@@ -11,6 +11,8 @@
 
 use std::process::ExitCode;
 
+
+#[cfg(unix)]
 use morrow_platform::hooks;
 use morrow_platform::hooks::Report;
 use morrow_platform::kimi;
@@ -104,6 +106,10 @@ fn status(site: &HooksSite) {
                 }
             );
         }
+        let _ = site;
+        // The Windows build hooks [CC] only; the other eight arrive with their
+        // Windows paths (#99's follow-up), which is what Settings says too.
+        println!("claude: {}", windows_state(site));
     }
     let opencode = opencode::status(&site.opencode);
     println!(
@@ -226,6 +232,10 @@ fn target(site: &HooksSite, source: &str, install: bool) -> Result<(), String> {
             Some(report) => print_report(source, &report),
         })
         .map_err(|error| error.to_string())
+    let _ = (site, install);
+    Err(format!(
+        "{source}: no Windows path for this source yet (#234)"
+    ))
 }
 
 /// Every source this machine has, in table order, so a caller does not have to
@@ -293,6 +303,7 @@ fn status_sources(site: &HooksSite) -> Vec<(String, &'static str)> {
             ));
         }
     }
+    sources.push(("claude".to_owned(), windows_state(site)));
     let opencode = opencode::status(&site.opencode);
     sources.push((
         "opencode".to_owned(),

@@ -34,10 +34,18 @@
     promptsOf,
     putWizard,
     QuestionFocusGate,
+    setTyped,
     togglePick,
     wizardFor,
     type WizardState,
   } from './lib/question';
+
+  import {
+    followUpMinutesFromSettings,
+    FollowUpReminders,
+    SETTINGS_KEY_FOLLOW_UP_MINUTES,
+    type ReminderRoom,
+  } from './lib/reminders';
   import {
     COMPLETION_AUTO_COLLAPSE_MS,
     CompletionGate,
@@ -272,6 +280,22 @@
     if (selected?.id === id) return;
     selected = { id, label };
     return settle(id, () => invoke<boolean>('answer_question', { id, answer: label }));
+  }
+
+  // #189: a typed answer on a wizard / multi-select step. For a single
+  // question it is the same one-answer path as a clicked option; for a wizard
+  // it becomes that step's answer and advances (or confirms on the last step).
+  function answerTyped(id: number, text: string) {
+    const view = questionView(id);
+    if (!view) return;
+    if (view.prompts.length === 1) return answerQuestion(id, text);
+    const wizard = setTyped(view.wizard, text);
+    if (wizard.step < view.prompts.length - 1) {
+      wizards = putWizard(wizards, id, goNext(wizard, view.prompts.length));
+      return;
+    }
+    const answers = answersOf(wizard, view.prompts);
+    return settle(id, () => invoke<boolean>('answer_questions', { id, answers }));
   }
 
   // #188: macOS' Skip answers the hook without a pick (deny for a
@@ -848,6 +872,10 @@
         const appearance = appearanceFromSettings(stored);
         theme = appearance.theme;
         displayMode = appearance.displayMode;
+        reminders.configure(
+          followUpMinutesFromSettings((stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES]),
+          performance.now(),
+        );
       })
       .catch(() => {});
     // #202: Settings lives in another webview. The shell emits one event after
@@ -858,6 +886,12 @@
       const appearance = appearanceFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
+      reminders.configure(
+        followUpMinutesFromSettings(
+          (event.payload as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
+        ),
+        performance.now(),
+      );
     })
       .then((off) => (unlisten = off))
       .catch(() => {});
@@ -1070,6 +1104,7 @@
                 isLast={view.wizard.step === view.prompts.length - 1}
                 gone={gone.some((g) => g.card.id === card.id)}
                 onPick={answerQuestion}
+                onTyped={answerTyped}
                 onToggle={questionToggle}
                 onBack={questionBack}
                 onAdvance={questionAdvance}
