@@ -271,6 +271,15 @@ pub fn decode(text: &str) -> Vec<PersistedSession> {
         .collect()
 }
 
+/// The first index that names the session wins, matching
+/// `SessionTitleStore.codexThreadName(sessionId:)`: each Codex root keeps its
+/// own `session_index.jsonl` (#339).
+pub fn codex_thread_name_from_roots(indexes: &[&str], session_id: &str) -> Option<String> {
+    indexes
+        .iter()
+        .find_map(|index| codex_thread_name(index, session_id))
+}
+
 /// Where `sessions.json` lives: `~/.morrow`, unless an override names another folder.
 ///
 /// The override and the legacy folder are injected rather than read from the process,
@@ -688,6 +697,21 @@ mod tests {
         let dir_mode = std::fs::metadata(&root).unwrap().permissions().mode() & 0o777;
         assert_eq!(dir_mode, 0o700);
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn a_title_is_resolved_from_the_first_index_that_names_it() {
+        let primary = "{\"id\":\"b\",\"thread_name\":\"from-primary\"}\n";
+        let secondary = "{\"id\":\"a\",\"thread_name\":\"from-secondary\"}\n";
+        assert_eq!(
+            codex_thread_name_from_roots(&[primary, secondary], "a"),
+            Some("from-secondary".to_owned())
+        );
+        assert_eq!(
+            codex_thread_name_from_roots(&[primary, secondary], "b"),
+            Some("from-primary".to_owned())
+        );
+        assert_eq!(codex_thread_name_from_roots(&[primary], "a"), None);
     }
 
     #[test]
