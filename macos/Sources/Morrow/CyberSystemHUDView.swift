@@ -299,6 +299,30 @@ public struct CyberSystemGaugeBar: View {
 
     public init() {}
 
+    static func batteryColor(for metrics: SystemMetrics) -> Color {
+        if case .onHold = metrics.powerBannerState {
+            return PowerBannerState.onHold(kind: .magSafe).accentColor
+        }
+        if case .fullyCharged = metrics.powerBannerState {
+            return PowerBannerState.fullyCharged(kind: .magSafe).accentColor
+        }
+        if !metrics.isCharging && metrics.batteryLevel <= 20 {
+            return PowerBannerState.lowBattery(percent: metrics.batteryLevel).accentColor
+        }
+        if metrics.isCharging {
+            return PowerBannerState.charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil).accentColor
+        }
+        return Color.white.opacity(0.8)
+    }
+
+    static func batteryIcon(for metrics: SystemMetrics) -> String {
+        if metrics.isCharging { return "battery.100.bolt" }
+        if case .fullyCharged = metrics.powerBannerState { return "battery.100" }
+        if metrics.batteryLevel <= 20 { return "battery.25" }
+        if metrics.batteryLevel >= 99 { return "battery.100" }
+        return "battery.75"
+    }
+
     /// Sampling runs only while this gauge is on screen: appearing starts it,
     /// disappearing (the Workspace tab closing) stops it.
     private struct SamplingLifecycle: ViewModifier {
@@ -343,23 +367,8 @@ public struct CyberSystemGaugeBar: View {
             }
 
             // Battery
-            let batteryColor: Color = {
-                if case .onHold = m.powerBannerState {
-                    return PowerBannerState.onHold(kind: .magSafe).accentColor
-                }
-                if !m.isCharging && m.batteryLevel <= 20 {
-                    return PowerBannerState.lowBattery(percent: m.batteryLevel).accentColor
-                }
-                if m.isCharging {
-                    return PowerBannerState.charging(kind: .magSafe, watts: nil, timeToFullMinutes: nil).accentColor
-                }
-                return Color.white.opacity(0.8)
-            }()
-            let batteryIcon: String = {
-                if m.isCharging { return "battery.100.bolt" }
-                if m.batteryLevel <= 20 { return "battery.25" }
-                return "battery.75"
-            }()
+            let batteryColor = Self.batteryColor(for: m)
+            let batteryIcon = Self.batteryIcon(for: m)
             HStack(spacing: 2) {
                 Image(systemName: batteryIcon)
                     .font(.system(size: 7.5, weight: .bold))
