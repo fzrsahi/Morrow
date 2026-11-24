@@ -450,7 +450,6 @@ impl Feed {
             std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
         )
         .unwrap_or_else(|| home.join(".claude"));
-        crate::discovery::scan_once(&config_dir, home)
         crate::discovery::scan_once(&config_dir, &discovery_data_dir(home))
     }
 
