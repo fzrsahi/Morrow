@@ -56,7 +56,7 @@ None of these are usable on Linux or Windows yet. Keep them separate from the wi
 | Item | Evidence |
 |---|---|
 | Star history section | Upstream `:384-392`. Its chart uses `star-history.dera.page`, which returns 404 for this repo. Removal is in PR #406. |
-| Language switcher `English | 简体中文` and the `README.zh-CN.md` link | Upstream `:27`; absent from our README. Our Highlights text still claims 7 UI languages. |
+| Language switcher and translated README images | Upstream `:27` links `README.zh-CN.md` and ships `*-zh.png` screenshots. We removed those files and the "7 UI languages" claim; all docs are English. |
 | Downloads badge and App Store Buddy badge | Upstream `:13,15`; absent from our badge row. Buddy itself is still documented. |
 | "How it works" navigation link | Upstream `:24`; the section still exists in our README `:351`. |
 | Contributing section | Added in this fork, our README `:433`; upstream has none. |

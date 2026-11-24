@@ -26,6 +26,7 @@
 </p>
 
 <p align="center">
+  <a href="#documentation">Documentation</a> •
   <a href="#installation">Install</a> •
   <a href="#highlights">Highlights</a> •
   <a href="#new-features">New Features</a> •
@@ -39,6 +40,22 @@
 <p align="center">
   <img src="docs/images/readme-hero.png" width="760" alt="Morrow expanded from the MacBook notch, showing Claude Code, Codex, Cursor and Gemini CLI sessions">
 </p>
+
+## Documentation
+
+This fork carries more documentation than the upstream README. These are the current docs, all in English:
+
+| Doc | What it covers |
+|---|---|
+| [Build and run on Linux or Windows](docs/build-windows-linux.md) | Prerequisites, build commands, headless checks, host gates, and what still does not work on each OS. |
+| [What changed from CodeIsland](docs/fork-differences.md) | Every user-facing and architectural change from `wxtsky/CodeIsland`, with code and ADR evidence. |
+| [Architecture decisions](docs/adr/) | ADR-0001 (two cores, one contract), ADR-0002 (Tauri v2 shell), ADR-0003 (rejected Swift sidecar). |
+| [Agent docs](.agents/docs/) and [agent skills](.agents/skills/) | Safety, ownership, workflow and review rules, plus the skills agents use for PRs, anti-slop writing and minimal solutions. |
+| [Implementation memory](.agents/memory/memory.md) | Dated entries of what landed, where, how it was verified, and why. |
+| [Notch geometry](docs/specs/notch-geometry.md) | Mandatory symmetry and width rules when editing the macOS notch UI. |
+| [Edge protocol](shared/contract/hook-edge-protocol.md) | Hook envelope, endpoint and peer-verification contract shared by macOS, Linux and Windows. |
+| [Windows adapters](docs/windows-adapters.md) | Which Windows APIs sit behind each capability row. |
+| [Contributing](CONTRIBUTING.md) | Architecture maps, development tips and PR guidelines. |
 
 ## New Features in this Edition
 
@@ -81,7 +98,7 @@
 
 Coding agents spend a lot of time either working or waiting on you — and you only find out by switching to their window. Morrow turns the notch into a live status bar for all of them: which session is thinking, which one needs an approval, which one just finished. Approve the tool call or answer the question right there, or click once to jump to the exact terminal tab.
 
-It works with **30+ AI coding tools**, installs its hooks for you, and keeps everything on your Mac.
+It works with **30+ AI coding tools**, installs its hooks for you, and keeps events on your machine. macOS is the finished build; Linux and Windows are experimental ports documented above.
 
 ## Highlights
 
@@ -131,7 +148,7 @@ It works with **30+ AI coding tools**, installs its hooks for you, and keeps eve
 - An ESP32 desk buddy over Bluetooth
 - Pushes to your phone or team chat — Bark, ntfy, DingTalk, Lark, WeCom, Slack, Telegram — only while you're away
 - Webhook forwarding of raw events for your own automations
-- 7 UI languages; signed, notarized, auto-updating
+- Signed, notarized, auto-updating
 
 </td>
 </tr>
@@ -364,21 +381,22 @@ Cowork runs inside Claude Desktop's sandbox, where hooks never fire, so Morrow r
 
 ```
 AI tool (Claude Code / Codex / Gemini / Cursor / …)
-  └─ hook fires ─→ morrow-bridge (native Swift binary)
-                     └─ Unix socket /tmp/morrow-<uid>.sock
-                          └─ Morrow updates the notch in real time
+  └─ hook fires ─→ morrow-bridge
+                     ├─ macOS: Unix socket /tmp/morrow-<uid>.sock
+                     └─ Windows: named pipe with peer SID check
+                          └─ Morrow updates the panel in real time
                                └─ optional: iPhone / Watch / ESP32 Buddy, push, webhook
 ```
 
-Morrow installs lightweight hooks into each tool's own config. When the tool fires an event — session start, tool call, permission request, question, stop — the bridge forwards it as JSON over a local Unix socket, and the island updates instantly. For events that wait on you, the answer travels back the same way.
+Morrow installs lightweight hooks into each tool's own config. When the tool fires an event (session start, tool call, permission request, question, stop), the bridge forwards it as JSON over a local Unix socket on macOS or a named pipe on Windows, and the panel updates instantly. For events that wait on you, the answer travels back the same way.
 
-**Privacy:** events never leave your Mac unless you opt in. The only network requests Morrow makes are Sparkle update checks, plus — only if you turn them on — Claude plan-limit lookups (sent to `api.anthropic.com` with your own Claude Code login), webhook forwarding to the URL you configure, and pushes to the services you set up.
+**Privacy:** events never leave your machine unless you opt in. The only network requests Morrow makes are Sparkle update checks, plus — only if you turn them on — Claude plan-limit lookups (sent to `api.anthropic.com` with your own Claude Code login), webhook forwarding to the URL you configure, and pushes to the services you set up.
 
 ## Settings
 
 | Page | What's there |
 |------|--------------|
-| **General** | Language, launch at login, display selection |
+| **General** | Launch at login, display selection |
 | **Behavior** | Auto-expand (approvals and questions separately), hover delay, smart suppress, completion style, follow-up reminders, session cleanup, silence rules, auto-approve, push notifications, webhook |
 | **Appearance** | Panel size, notch width, font size, reply lines, open/close speed, project name, git branch, task progress, session recap, model label, usage stats, plan limits |
 | **Mascots** | Preview every character and its animations |
