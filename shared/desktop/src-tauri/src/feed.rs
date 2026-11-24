@@ -401,27 +401,21 @@ impl Feed {
         self.backfill_with(scan)
     }
 
-<<<<<<< HEAD
     /// Polls the policy forever. One second of granularity is enough for a
     /// five-second gap, and it costs a mutex read when nothing is due.
-=======
     /// Polls the policy forever, once per `DISCOVERY_TICK`. A quarter second
     /// is plenty of granularity for a five-second gap, and when nothing is due
     /// the tick costs one mutex read.
->>>>>>> origin/feat/#272-codex-rollouts
     pub fn spawn_discovery(feed: Arc<Self>) {
         thread::Builder::new()
             .name("morrow-discovery".into())
             .spawn(move || {
                 loop {
-<<<<<<< HEAD
                     thread::sleep(Duration::from_millis(250));
                     feed.tick_discovery(now_ms());
-=======
                     let started = Instant::now();
                     feed.tick_discovery(now_ms());
                     thread::sleep(discovery_tick_delay(started.elapsed()));
->>>>>>> origin/feat/#272-codex-rollouts
                 }
             })
             .expect("spawn the discovery thread");
@@ -456,11 +450,8 @@ impl Feed {
             std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref(),
         )
         .unwrap_or_else(|| home.join(".claude"));
-<<<<<<< HEAD
         crate::discovery::scan_once(&config_dir, home)
-=======
         crate::discovery::scan_once(&config_dir, &discovery_data_dir(home))
->>>>>>> origin/feat/#272-codex-rollouts
     }
 
     /// One discovery scan, integrated as ordinary sessions.
@@ -776,8 +767,7 @@ mod tests {
         );
     }
 
-<<<<<<< HEAD
-=======
+
     /// The tick shares `backfill`'s roots, so it must not move where Codex and
     /// OpenCode are looked for: `~/.local/share`, as before the tick existed.
     #[test]
@@ -803,8 +793,6 @@ mod tests {
             Duration::ZERO
         );
     }
-
->>>>>>> origin/feat/#272-codex-rollouts
     /// A store that is not there adds nothing and does not mark the feed dirty.
     #[test]
     fn an_empty_scan_changes_nothing() {

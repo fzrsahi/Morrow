@@ -291,7 +291,6 @@ impl StoreReader for CodexRollouts {
     }
 }
 
-<<<<<<< HEAD
 /// Where VS Code keeps extension storage, per OS.
 ///
 /// Cline is an extension inside VS Code, not a CLI, so its store lives under
@@ -540,8 +539,6 @@ fn is_subagent_worktree(cwd: &str) -> bool {
         || cwd.contains("-worktree/")
 }
 
-=======
->>>>>>> origin/feat/#272-codex-rollouts
 /// How recently a Cursor transcript must have been written to count as the
 /// session a process is running. macOS uses five minutes when the process start is
 /// known, and this reader always knows the process — it was handed one.
@@ -795,7 +792,6 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
             .unwrap_or_else(|| home.join(".codex").to_string_lossy().into_owned()),
         now_ms: now_ms(),
     };
-<<<<<<< HEAD
     // Cline is the one reader of this batch with no process: it runs inside VS
     // Code, so it is discovered from its own task history (#278).
     let cline = ClineStore {
@@ -808,11 +804,9 @@ pub fn scan_once(config_dir: &Path, home: &Path) -> ScanResult {
     // Order is precedence: Claude first, then Codex, then OpenCode, then Cline. A
     // session id two readers both report keeps the earlier one's source.
     let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode, &cline];
-=======
     // Order is precedence: Claude first, then Codex, then OpenCode. A session id
     // two readers both report keeps the earlier one's source.
     let readers: Vec<&dyn StoreReader> = vec![&transcripts, &codex, &opencode];
->>>>>>> origin/feat/#272-codex-rollouts
     scan_with(
         &readers,
         home,
@@ -839,7 +833,6 @@ pub fn scan_with(
         home: home.to_string_lossy().into_owned(),
         now_ms,
     };
-<<<<<<< HEAD
     // Flat stores: one reader per agent, because each spells its store
     // differently and the source has to be the agent's own name (#278).
     let qoder = FlatStore {
@@ -859,9 +852,7 @@ pub fn scan_with(
     };
     let process_readers: Vec<&dyn ProcessReader> =
         vec![&cursor, &gemini, &qoder, &codebuddy, &droid];
-=======
     let process_readers: Vec<&dyn ProcessReader> = vec![&cursor, &gemini];
->>>>>>> origin/feat/#272-codex-rollouts
     scan::run_all(
         readers,
         &process_readers,
@@ -1510,7 +1501,6 @@ mod tests {
         );
     }
 
-<<<<<<< HEAD
     /// #278: Cline is discovered with nothing running, because its task history
     /// records the cwd.
     #[test]
@@ -1707,8 +1697,6 @@ mod tests {
         assert!(result.hits.iter().all(|h| h.source != "qoder"));
     }
 
-=======
->>>>>>> origin/feat/#272-codex-rollouts
     fn process_with_cwd(pid: i32, executable: &str, name: &str, cwd: &str) -> ProcessInfo {
         ProcessInfo {
             pid,

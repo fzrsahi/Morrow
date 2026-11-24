@@ -548,7 +548,6 @@ pub mod transcript_files {
         pub modified_ms: u64,
     }
 
-<<<<<<< HEAD
     /// One file's modification time, in milliseconds, without listing its
     /// directory. `None` when it is not there.
     pub fn mtime_ms(path: &str) -> Option<u64> {
@@ -559,8 +558,6 @@ pub mod transcript_files {
             .map(|since| since.as_millis() as u64)
     }
 
-=======
->>>>>>> origin/feat/#272-codex-rollouts
     /// The same listing with any extension, for a store that is not JSONL
     /// (Gemini's chats are `*.json`).
     pub fn list_any(directory: &str, extension: &str) -> Option<Vec<TranscriptFile>> {
