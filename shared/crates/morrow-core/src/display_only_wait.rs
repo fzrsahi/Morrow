@@ -100,6 +100,24 @@ pub fn fallback_content(kind: FollowUpKind, question: Option<&str>) -> PushConte
     }
 }
 
+/// The four helpers above had definitions and tests but no caller: this is
+/// the one place the shell uses to name where the answer must go and what the
+/// push says. Richer sources win; `fallback_content` is the last resort (#355).
+pub fn answer_elsewhere_content(
+    session: &SessionSnapshot,
+    kind: FollowUpKind,
+    event_name: Option<&str>,
+    data: Option<&Value>,
+    cowork: Option<&CoworkAudit>,
+    question: Option<&str>,
+) -> (Option<PushContent>, Option<String>) {
+    let content = cowork
+        .and_then(content_for_cowork)
+        .or_else(|| event_name.and_then(|name| content_for_aiwork_event(name, data)))
+        .or_else(|| Some(fallback_content(kind, question)));
+    (content, answer_place(session))
+}
+
 /// Claude Desktop Cowork: the card on top in Claude Desktop.
 pub fn content_for_cowork(audit: &CoworkAudit) -> Option<PushContent> {
     let active = audit.active_permission.as_ref()?;
@@ -379,6 +397,36 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn answer_elsewhere_content_uses_the_richest_source_and_names_the_place() {
+        let mut s = session(AgentStatus::WaitingApproval, "aiwork");
+        s.term_bundle_id = Some("com.anthropic.claudefordesktop".to_owned());
+        let (content, place) = answer_elsewhere_content(
+            &s,
+            FollowUpKind::Approval,
+            Some("stream.approval_required"),
+            Some(&json!({"command": "rm -rf build"})),
+            None,
+            None,
+        );
+        assert_eq!(place.as_deref(), Some("Claude Desktop"));
+        assert!(matches!(content, Some(PushContent::Permission { .. })));
+
+        // With no richer source, the fallback still gives the card a body and
+        // an AiWork session still names its own host.
+        let s = session(AgentStatus::WaitingQuestion, "aiwork");
+        let (content, place) = answer_elsewhere_content(
+            &s,
+            FollowUpKind::Question,
+            None,
+            None,
+            None,
+            Some("Which database?"),
+        );
+        assert_eq!(place.as_deref(), Some("AiWork"));
+        assert!(matches!(content, Some(PushContent::Question { .. })));
     }
 
     #[test]

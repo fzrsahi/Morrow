@@ -18,7 +18,11 @@ regex.workspace = true
 rusqlite.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
+<<<<<<< HEAD
 url = "2"
+=======
+unicode-segmentation = "1"
+>>>>>>> origin/feat/#350-push-render
 
 [lints]
 workspace = true

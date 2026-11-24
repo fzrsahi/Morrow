@@ -1989,8 +1989,12 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+<<<<<<< HEAD
  "sha2 0.10.9",
  "url",
+=======
+ "unicode-segmentation",
+>>>>>>> origin/feat/#350-push-render
 ]
 
 [[package]]

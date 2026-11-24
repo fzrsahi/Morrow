@@ -132,10 +132,11 @@ impl ReminderBook {
         &mut self,
         kind: FollowUpKind,
         waiting: &BTreeSet<String>,
+        held_by_island: &BTreeSet<String>,
         now: Timestamp,
     ) {
         self.scheduler
-            .sync_origin(kind, Origin::DisplayOnly, waiting, now);
+            .sync_origin_keeping(kind, Origin::DisplayOnly, waiting, held_by_island, now);
     }
 
     /// A finished turn the user has not looked at yet.
@@ -294,7 +295,7 @@ mod tests {
     fn a_display_only_wait_reminds_without_a_card() {
         let mut book = book();
         let waiting = BTreeSet::from(["s7".to_owned()]);
-        book.sync_display_only(FollowUpKind::Approval, &waiting, at(0.0));
+        book.sync_display_only(FollowUpKind::Approval, &waiting, &BTreeSet::new(), at(0.0));
         assert!(book.tick(&[], false, at(30.0)).is_empty());
         let due = book.tick(&[], false, at(60.0));
         assert_eq!(due.len(), 1);
@@ -303,13 +304,41 @@ mod tests {
         assert_eq!(due[0].id, 0, "no card to open");
 
         // Each kind reconciles on its own, and a wait that ends takes its reminder with it.
-        book.sync_display_only(FollowUpKind::Approval, &BTreeSet::new(), at(70.0));
+        book.sync_display_only(
+            FollowUpKind::Approval,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            at(70.0),
+        );
         assert!(book.tick(&[], false, at(600.0)).is_empty());
 
         let question = BTreeSet::from(["s8".to_owned()]);
-        book.sync_display_only(FollowUpKind::Question, &question, at(600.0));
+        book.sync_display_only(
+            FollowUpKind::Question,
+            &question,
+            &BTreeSet::new(),
+            at(600.0),
+        );
         let due = book.tick(&[], false, at(660.0));
         assert_eq!(due[0].title, "Morrow · Question waiting");
+    }
+
+    #[test]
+    fn a_wait_handed_to_the_island_keeps_its_clock() {
+        let mut book = book();
+        let display = BTreeSet::from(["s7".to_owned()]);
+        book.sync_display_only(FollowUpKind::Approval, &display, &BTreeSet::new(), at(0.0));
+        // The island takes the request at t=30. The display-only mirror goes
+        // empty, but the entry must survive for tick's island sync to adopt it.
+        let island = BTreeSet::from(["s7".to_owned()]);
+        book.sync_display_only(FollowUpKind::Approval, &BTreeSet::new(), &island, at(30.0));
+        let due = book.tick(&[approval(1, "s7")], false, at(60.0));
+        assert_eq!(
+            due.len(),
+            1,
+            "the original 60s clock survived the handover at t=30"
+        );
+        assert_eq!(due[0].id, 1, "now a card-backed island reminder");
     }
 
     #[test]
