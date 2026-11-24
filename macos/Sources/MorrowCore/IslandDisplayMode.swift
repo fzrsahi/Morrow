@@ -1,7 +1,7 @@
 import Foundation
 
 /// Visual presentation mode for the top island surface.
-public enum IslandDisplayMode: String, CaseIterable, Identifiable, Sendable {
+public enum IslandDisplayMode: String, CaseIterable, Identifiable, Codable, Sendable {
     /// Docked top-edge notch shell with concave upper ears.
     case notch = "notch"
     /// Detached floating pill with continuous rounded corners.

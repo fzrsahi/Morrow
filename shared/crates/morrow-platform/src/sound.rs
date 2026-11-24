@@ -112,16 +112,39 @@ pub fn player(has: impl Fn(&str) -> bool) -> Option<Player> {
 pub fn player_on_path() -> Option<Player> {
     let path = std::env::var_os("PATH")?;
     let dirs: Vec<PathBuf> = std::env::split_paths(&path).collect();
-    player(|tool| dirs.iter().any(|dir| dir.join(tool).is_file()))
+    player(|tool| {
+        dirs.iter().any(|dir| {
+            let candidate = dir.join(tool);
+            let Ok(metadata) = std::fs::metadata(&candidate) else {
+                return false;
+            };
+            if !metadata.is_file() {
+                return false;
+            }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                metadata.permissions().mode() & 0o111 != 0
+            }
+            #[cfg(not(unix))]
+            true
+        })
+    })
 }
 
 /// Play a cue. A cue with no sound of its own is silent, and so is a machine
 /// with no player: neither is an error the caller has to handle.
 pub fn play(player: Player, cue: &str) -> Result<(), String> {
+    play_in(player, cue, &sound_dir())
+}
+
+/// The testable core of [`play`]: the destination is injected so no test has
+/// to write into the machine's shared sound directory.
+fn play_in(player: Player, cue: &str, dir: &Path) -> Result<(), String> {
     let Some(sound) = cue_sound(cue) else {
         return Ok(());
     };
-    let path = materialise(sound)?;
+    let path = materialise(sound, dir)?;
     match player {
         Player::Tool(program) => spawn(program, &path),
         #[cfg(windows)]
@@ -130,20 +153,44 @@ pub fn play(player: Player, cue: &str) -> Result<(), String> {
 }
 
 /// Where the copies live: the runtime dir when the session has one (per user,
-/// 0700), otherwise the temp dir. A shared `/tmp` would let the first user's
-/// copy lock out the next one.
+/// 0700), otherwise a private per-process temp dir. A shared `/tmp/morrow-sounds`
+/// would let the first user lock out the next and give an attacker a predictable
+/// symlink target, so both the name and the directory's mode are private.
 fn sound_dir() -> PathBuf {
-    std::env::var_os("XDG_RUNTIME_DIR")
-        .map_or_else(std::env::temp_dir, PathBuf::from)
-        .join("morrow-sounds")
+    if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
+        let dir = PathBuf::from(dir);
+        // A relative or missing runtime dir is not a usable per-user location.
+        if dir.is_absolute() && dir.is_dir() {
+            return dir.join("morrow-sounds");
+        }
+    }
+    std::env::temp_dir().join(format!("morrow-sounds-{}", std::process::id()))
 }
 
-/// The bundled WAV as a file the players can open. Written into the temp dir
-/// and rewritten only when the bytes differ, so an upgrade replaces the sound
+/// Create `dir` privately: 0700 from the start on Unix, and tightened again in
+/// case an older run left it with a looser mode.
+fn create_private_dir(dir: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        let mut builder = std::fs::DirBuilder::new();
+        builder.recursive(true).mode(0o700);
+        builder
+            .create(dir)
+            .map_err(|error| format!("{}: {error}", dir.display()))?;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("{}: {error}", dir.display()))?;
+    }
+    #[cfg(not(unix))]
+    std::fs::create_dir_all(dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+    Ok(())
+}
+
+/// The bundled WAV as a file the players can open. Written into `dir` and
+/// rewritten only when the bytes differ, so an upgrade replaces the sound
 /// instead of playing the old one.
-fn materialise(sound: &Cue) -> Result<PathBuf, String> {
-    let dir = sound_dir();
-    std::fs::create_dir_all(&dir).map_err(|error| format!("{}: {error}", dir.display()))?;
+fn materialise(sound: &Cue, dir: &Path) -> Result<PathBuf, String> {
+    create_private_dir(dir)?;
     let path = dir.join(sound.file);
     if std::fs::read(&path).ok().as_deref() != Some(sound.wav) {
         std::fs::write(&path, sound.wav).map_err(|error| format!("{}: {error}", path.display()))?;
@@ -168,6 +215,8 @@ fn spawn(program: &str, path: &Path) -> Result<(), String> {
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("{program}: {error}"))?;
+    // One short-lived reaper per cue: a burst of hooks means a burst of
+    // threads, but each waits only for a ~300 ms sound and then exits.
     std::thread::spawn(move || {
         let _ = child.wait();
     });
@@ -235,15 +284,39 @@ mod tests {
         assert_eq!(player(|_| false), None, "no player, no sound");
     }
 
+    /// A directory the test owns, so it never touches the machine's sound dir.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "morrow-sound-test-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
     /// The bytes reach a real file the players can open, and a second call
     /// does not rewrite it.
     #[test]
     fn the_sound_lands_in_a_file_the_player_can_open() {
         let sound = cue_sound(sound_cue::REQUEST).expect("approval sound");
-        let path = materialise(sound).expect("materialise");
+        let temp = TempDir::new();
+        let path = materialise(sound, &temp.0).expect("materialise");
         assert_eq!(std::fs::read(&path).expect("read back"), sound.wav);
         let first = std::fs::metadata(&path).expect("metadata").modified().ok();
-        materialise(sound).expect("materialise again");
+        materialise(sound, &temp.0).expect("materialise again");
         assert_eq!(
             std::fs::metadata(&path).expect("metadata").modified().ok(),
             first,
