@@ -127,6 +127,12 @@ impl ReminderBook {
             .collect()
     }
 
+    /// #341: the shell calls this when a request is answered or dropped, so
+    /// the silencing rule lives in the scheduler but actually runs in production.
+    pub fn silence_session(&mut self, session_id: &str) {
+        self.scheduler.silence_session(session_id);
+    }
+
     /// A finished turn the user has not looked at yet.
     pub fn track_completion(&mut self, session_id: &str, turn_failed: bool, now: Timestamp) {
         self.scheduler

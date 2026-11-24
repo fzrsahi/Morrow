@@ -16,6 +16,7 @@ use morrow_platform::process::Watch;
 use morrow_platform::sound;
 use morrow_protocol::HookPayload;
 use serde::Serialize;
+use serde_json::Value;
 use tauri::ipc::Channel;
 
 use crate::completion::{self, SnapshotCompletion};
@@ -134,6 +135,17 @@ fn sessions_directory(home: &Path) -> std::path::PathBuf {
         .ok()
         .or_else(|| std::env::var("CODEISLAND_SESSIONS_DIR").ok());
     morrow_core::session_store::directory(override_dir.as_deref(), home)
+}
+
+/// #341: the feature starts **off**. Only a positive stored interval arms it;
+/// 0 or a missing key leaves every timer silent.
+pub const REMINDER_INTERVAL_KEY: &str = "followUpReminderIntervalSeconds";
+
+pub fn reminder_interval(stored: Option<&Value>) -> Option<f64> {
+    stored
+        .and_then(|value| value.get(REMINDER_INTERVAL_KEY))
+        .and_then(Value::as_f64)
+        .filter(|seconds| *seconds > 0.0)
 }
 
 /// `$CODEX_HOME` (a leading `~` expanded) or `~/.codex`, where `session_index.jsonl`
@@ -349,29 +361,64 @@ impl Feed {
         (id, decision)
     }
 
+    /// Stop the reminder for a request the user just handled. The scheduler
+    /// rule existed in core but had no caller; this is it.
+    fn silence_reminder_for(&self, id: u64) {
+        let session = self
+            .lock()
+            .snapshot()
+            .permissions
+            .into_iter()
+            .find(|card| card.id == id)
+            .map(|card| card.session_id);
+        if let Some(session) = session {
+            self.reminders
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .silence_session(&session);
+        }
+    }
+
     /// The user's answer to card `id`; false if it is no longer held.
     pub fn answer(&self, id: u64, decision: Decision) -> bool {
-        self.change(|state| state.permissions.answer(id, decision))
+        let changed = self.change(|state| state.permissions.answer(id, decision));
+        if changed {
+            self.silence_reminder_for(id);
+        }
+        changed
     }
 
     /// #188: a question option was picked; its label is echoed as the answer.
     pub fn answer_question(&self, id: u64, pick: &str) -> bool {
-        self.change(|state| state.permissions.answer_question(id, pick))
+        let changed = self.change(|state| state.permissions.answer_question(id, pick));
+        if changed {
+            self.silence_reminder_for(id);
+        }
+        changed
     }
 
     /// #190: one answer per question of a wizard request, in question order.
     pub fn answer_questions(&self, id: u64, answers: Vec<String>) -> bool {
-        self.change(|state| state.permissions.answer_questions(id, answers))
+        let changed = self.change(|state| state.permissions.answer_questions(id, answers));
+        if changed {
+            self.silence_reminder_for(id);
+        }
+        changed
     }
 
     /// #188: the question card was skipped, not answered.
     pub fn skip_question(&self, id: u64) -> bool {
-        self.change(|state| state.permissions.skip_question(id))
+        let changed = self.change(|state| state.permissions.skip_question(id));
+        if changed {
+            self.silence_reminder_for(id);
+        }
+        changed
     }
 
     /// Card `id`'s hook is gone.
     pub fn drop_request(&self, id: u64) {
         self.change(|state| state.permissions.drop_request(id));
+        self.silence_reminder_for(id);
     }
 
     /// #185: the user removed a session from its card. Its held cards go too,
@@ -562,8 +609,11 @@ impl Feed {
                 let codex_index =
                     std::fs::read_to_string(codex_home(&home).join("session_index.jsonl")).ok();
                 feed.restore_sessions(&sessions_dir, codex_index.as_deref());
-                // The interval the panel has always used; 0 in the setting turns it off.
-                feed.set_reminder_interval(Some(morrow_core::follow_up::DEFAULT_INTERVAL_SECONDS));
+                // #341: off until the user chooses an interval. The old
+                // unconditional 60s default made the core's "off until set"
+                // rule true only in unit tests.
+                let stored = morrow_platform::settings::load(&sessions_dir).ok();
+                feed.set_reminder_interval(reminder_interval(stored.as_ref()));
                 let mut watcher = feed.watcher();
                 loop {
                     // A watcher that reports a change wakes the loop early; one
@@ -817,6 +867,20 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn reminders_start_off_until_an_interval_is_stored() {
+        assert_eq!(reminder_interval(None), None);
+        assert_eq!(reminder_interval(Some(&serde_json::json!({}))), None);
+        assert_eq!(
+            reminder_interval(Some(&serde_json::json!({ REMINDER_INTERVAL_KEY: 0 }))),
+            None
+        );
+        assert_eq!(
+            reminder_interval(Some(&serde_json::json!({ REMINDER_INTERVAL_KEY: 45 }))),
+            Some(45.0)
+        );
+    }
 
     /// The AC of #261, at the feed: a panel that has just appeared shows the
     /// sessions the agent already has, **before** any hook arrives.
