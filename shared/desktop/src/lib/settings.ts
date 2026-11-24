@@ -4,6 +4,7 @@
 
 import type { DisplayMode, SessionDensity, SessionFilter } from './panel';
 import type { CapabilityRow } from './types';
+import { STRINGS, translate, BASE_LANGUAGE } from './strings';
 
 /** #202 — the shell emits the settings document to both webviews after a write. */
 export const SETTINGS_CHANGED_EVENT = 'settings-changed';
@@ -26,30 +27,90 @@ export type SettingsNavItem = {
   label: string;
   icon: string;
   available: boolean;
+  /** #239 AC 3 — why a page has no controls, in the user's words. Required for
+   *  every `available: false` row and shown *on* the page: a sidebar entry that
+   *  is greyed out says "you cannot go there", not "there is nothing there
+   *  yet", and the difference is the whole point of the criterion. */
+  reason?: string;
 };
+
+/** #239 AC 4 — the label a Settings row draws.
+ *
+ *  Ten of the eleven pages have a key in the shared resource (the macOS table
+ *  calls them the same thing); `capabilities` is port-only — macOS shows that
+ *  table nowhere — so it keeps its literal. Measured: `capabilities` is the only
+ *  id missing from `en.json`, and a test pins that it stays the only one.
+ */
+export function pageLabel(item: SettingsNavItem, language: string = BASE_LANGUAGE): string {
+  if (item.id in (STRINGS[language] ?? STRINGS[BASE_LANGUAGE])) return translate(item.id, language as never);
+  return item.label;
+}
+
+/** The default global hotkey, as `hotkey.rs` registers it. One place, because the
+ *  Shortcuts page must not be the second copy of a binding. */
+export const DEFAULT_HOTKEY = 'Super+Space';
 
 export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
   {
     group: 'System',
     items: [
-      { id: 'general', label: 'General', icon: 'settings', available: false },
+      {
+        id: 'general',
+        label: 'General',
+        icon: 'settings',
+        available: false,
+        // Measured against the shell: `settings_set` stores any key, but nothing
+        // reads a language, a profile or an onboarding flag. The one general
+        // setting that *is* obeyed — start at login — is on Capabilities, next to
+        // the adapter that answers for it.
+        reason:
+          'Nothing here is obeyed yet. macOS General holds the language (no translation exists — see #239 AC 4), the profile and the onboarding reset; the shell reads none of those keys. Start at login lives on Capabilities, beside the adapter that answers for it.',
+      },
       { id: 'appearance', label: 'Appearance', icon: 'settings', available: true },
-      { id: 'mascots', label: 'Mascots', icon: 'agents', available: false },
+      {
+        id: 'mascots',
+        label: 'Mascots',
+        icon: 'agents',
+        available: false,
+        reason:
+          'The body protocol is ported (#347): 16 slots, brightness, orientation and the pairing frames. What is missing is the reader — no shell command lists the paired bodies, so a picker would draw a list that nothing could fill.',
+      },
       { id: 'sound', label: 'Sound', icon: 'volume', available: true },
-      { id: 'shortcuts', label: 'Shortcuts', icon: 'workspace', available: false },
+      { id: 'shortcuts', label: 'Shortcuts', icon: 'workspace', available: true },
     ],
   },
   {
     group: 'Features',
     items: [
-      { id: 'agents', label: 'Agents', icon: 'agents', available: false },
-      { id: 'music', label: 'Music', icon: 'music', available: false },
+      {
+        id: 'agents',
+        label: 'Agents',
+        icon: 'agents',
+        available: false,
+        reason:
+          'Per-agent switches are not a setting this shell reads: detection comes from the 13 readers in discovery, and which ones found something is on Hooks. A toggle here would write a key nothing consults.',
+      },
+      {
+        id: 'music',
+        label: 'Music',
+        icon: 'music',
+        available: false,
+        reason:
+          'The player is fixed per platform (MPRIS on Linux, SMTC on Windows) and the deck already follows it. There is no provider choice to offer, and the level is set on the island meter itself (#372) rather than here.',
+      },
     ],
   },
   {
     group: 'Morrow',
     items: [
-      { id: 'behavior', label: 'Behavior', icon: 'workspace', available: false },
+      {
+        id: 'behavior',
+        label: 'Behavior',
+        icon: 'workspace',
+        available: false,
+        reason:
+          'The follow-up interval exists in core (#342, 60 s default) but no command exposes it and nothing reads a key for it. Until one does, a field here would change a number the reminder loop never asks for.',
+      },
       { id: 'hooks', label: 'Hooks', icon: 'checkmark', available: true },
       { id: 'capabilities', label: 'Capabilities', icon: 'workspace', available: true },
       { id: 'about', label: 'About', icon: 'settings', available: true },
@@ -69,6 +130,8 @@ export const SETTINGS_KEYS = {
   expandOnHover: 'expandOnHover',
   collapseOnLeave: 'collapseOnLeave',
   /** #185: the filter choice and row density live in the same document. */
+  /** Same key as Swift `SettingsKey.appLanguage`; `system` resolves to one. */
+  language: 'appLanguage',
   sessionFilter: 'sessionFilter',
   sessionDensity: 'sessionDensity',
 } as const;
@@ -84,6 +147,8 @@ export type AppearanceSettings = {
   position: string;
   expandOnHover: boolean;
   collapseOnLeave: boolean;
+  /** #239 AC 4: a stored tag, or `system` to follow the desktop. */
+  language: string;
 };
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
@@ -97,6 +162,7 @@ export const DEFAULT_APPEARANCE: AppearanceSettings = {
   position: 'Top centre · primary monitor',
   expandOnHover: false,
   collapseOnLeave: false,
+  language: 'system',
 };
 
 const FONT_SIZES = [11, 12, 14, 16] as const;
@@ -154,6 +220,7 @@ export function appearanceFromSettings(value: unknown): AppearanceSettings {
         : DEFAULT_APPEARANCE.islandShape,
     displayMode: displayModeFromSettings(stored),
     position: text(stored[SETTINGS_KEYS.position], DEFAULT_APPEARANCE.position),
+    language: text(stored[SETTINGS_KEYS.language], DEFAULT_APPEARANCE.language),
     expandOnHover: flag(stored[SETTINGS_KEYS.expandOnHover], DEFAULT_APPEARANCE.expandOnHover),
     collapseOnLeave: flag(
       stored[SETTINGS_KEYS.collapseOnLeave],

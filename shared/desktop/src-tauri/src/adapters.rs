@@ -70,13 +70,17 @@ pub fn terminal_activate(
 
 /// Remember a session's process so a later call can tell whether it is the same
 /// one. `None` when the pid is not running.
-#[tauri::command]
+///
+/// Rust-internal: #239 AC 1 found it registered as an IPC command with no caller
+/// in the frontend. `feed.rs` is the only caller, so the registration went and the
+/// function stayed. `commands.rs` fails the build if a registration comes back
+/// without one.
 pub fn process_watch(pid: i64) -> Option<Watch> {
     Watch::new(pid)
 }
 
-/// Whether the process behind a watch is still there.
-#[tauri::command]
+/// Whether the process behind a watch is still there. Rust-internal, as
+/// `process_watch` above.
 pub fn process_alive(watch: Watch) -> bool {
     watch.alive()
 }
@@ -91,8 +95,8 @@ pub fn screen_locked() -> Option<bool> {
     return lock::locked(&morrow_platform::runner::SystemRunner);
 }
 
-/// Post a reminder through the desktop's notification service.
-#[tauri::command]
+/// Post a reminder through the desktop's notification service. Rust-internal:
+/// `reminders.rs` is the only caller, so this is not IPC surface.
 pub fn notify_send(title: String, body: String) -> Result<(), String> {
     #[cfg(windows)]
     return morrow_platform::windows::toast::notify(&title, &body);
@@ -119,13 +123,4 @@ pub fn quiet_hours() -> bool {
         == morrow_platform::windows_rules::NotificationState::QuietTime;
     #[cfg(unix)]
     return false;
-}
-
-/// The pointer, in screen pixels.
-#[tauri::command]
-pub fn pointer_position() -> Option<(i32, i32)> {
-    #[cfg(windows)]
-    return morrow_platform::windows::pointer::position();
-    #[cfg(unix)]
-    return None;
 }

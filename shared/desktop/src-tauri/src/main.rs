@@ -4,6 +4,7 @@
 
 mod adapters;
 mod cli;
+mod commands;
 mod completion;
 mod discovery;
 mod feed;
@@ -176,7 +177,6 @@ fn main() -> ExitCode {
             settings_window::open_settings,
             peek_window::close_peek,
             music::music_track,
-            music::music_position,
             music::music_play_pause,
             music::music_next,
             music::music_previous,
@@ -186,13 +186,9 @@ fn main() -> ExitCode {
             music::music_volume_mute,
             music::music_lyrics,
             adapters::terminal_activate,
-            adapters::process_watch,
-            adapters::process_alive,
             adapters::screen_locked,
             adapters::fullscreen,
             adapters::quiet_hours,
-            adapters::pointer_position,
-            adapters::notify_send,
             island::island_question_focus,
             island::anchoring
         ])

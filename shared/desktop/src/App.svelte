@@ -85,7 +85,7 @@
     type Track,
   } from './lib/music';
   import { MOTION, PALETTE, cssVariables, type Theme } from './lib/tokens';
-  import { VOLUME_HUD_MS, VolumeHudGate, volumeSupported, type Volume } from './lib/volume';
+  import { VOLUME_HUD_MS, VolumeHudGate, setVolumePlan, volumeSupported, type Volume } from './lib/volume';
   import type { CapabilityRow, Card, Completion, Decision, Session, Snapshot } from './lib/types';
 
   // The display mode mirrors Swift's IslandDisplayMode: `.dynamicIsland` is
@@ -623,6 +623,26 @@
     }
   }
 
+  // #239 AC 2: the meter sets a level. The HUD draws the level optimistically —
+  // a slow or failing read must not leave the meter where it was after a click —
+  // and the shell's answer corrects it a moment later.
+  async function onSetVolume(percent: number) {
+    if (!volumeCapable) return;
+    const plan = setVolumePlan(muted, percent);
+    const now = performance.now();
+    volumeGate.show(now);
+    hudUntil = now + VOLUME_HUD_MS;
+    volume = { percent: plan.percent, muted: plan.unmuteFirst ? false : muted };
+    muted = volume.muted;
+    try {
+      if (plan.unmuteFirst) await invoke('music_volume_mute');
+      await invoke('music_volume_set', { percent: plan.percent });
+      await readVolume();
+    } catch (error) {
+      hooksError = String(error);
+    }
+  }
+
   async function onMute() {
     if (!volumeCapable) return;
     // Show immediately: the follow-up read may be slow, or fail on a device
@@ -965,11 +985,12 @@
 >
   {#if !expanded && !closing}
     {#if hudVisible && volumeCapable}
-      <!-- #195: for ~1.5 s after a change the meter takes the bar's place;
-           clicking it toggles mute through the shell's existing command. -->
+      <!-- #195/#239: for ~1.5 s after a change the meter takes the bar's place;
+           it reads, and now also writes, through the shell's existing commands. -->
       <VolumeHud
         {volume}
         onToggle={onMute}
+        onSet={onSetVolume}
         onpointerdown={onBarPointerDown}
         onpointermove={onBarPointerMove}
         onpointerup={onBarPointerUp}
