@@ -8,11 +8,18 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
+  import PrayerPage from './lib/components/PrayerPage.svelte';
   import BehaviorPage from './lib/components/BehaviorPage.svelte';
   import AboutPage from './lib/components/AboutPage.svelte';
   import ShortcutsPage from './lib/components/ShortcutsPage.svelte';
   import UnavailablePage from './lib/components/UnavailablePage.svelte';
   import SoundPage from './lib/components/SoundPage.svelte';
+  import {
+    DEFAULT_PRAYER_SETTINGS,
+    prayerSettingsFromSettings,
+    type PrayerCity,
+    type PrayerSettings,
+  } from './lib/prayer';
   import {
     DEFAULT_APPEARANCE,
     SETTINGS_KEYS,
@@ -54,6 +61,8 @@
   let capabilities = $state<CapabilityRow[]>([]);
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
+  let prayer = $state<PrayerSettings>({ ...DEFAULT_PRAYER_SETTINGS });
+  let cities = $state<PrayerCity[]>([]);
   let cues = $state<SoundCue[]>([]);
   // #239 AC 1: shown on About so the file the user may want to back up or paste
   // into a bug report is reachable without knowing the convention.
@@ -93,11 +102,12 @@
 
   async function load() {
     try {
-      const [h, c, a, stored, sound, file] = await Promise.all([
+      const [h, c, a, stored, availableCities, sound, file] = await Promise.all([
         invoke<HooksSnapshot>('hooks_status'),
         invoke<CapabilityRow[]>('capabilities'),
         invoke<AutostartStatus>('autostart_status'),
         invoke<unknown>('settings_load'),
+        invoke<PrayerCity[]>('prayer_cities'),
         invoke<SoundCue[]>('sound_cues'),
         invoke<string>('settings_path'),
       ]);
@@ -107,6 +117,8 @@
       cues = sound;
       settingsFile = file;
       appearance = appearanceFromSettings(stored);
+      prayer = prayerSettingsFromSettings(stored);
+      cities = availableCities;
       followUpMinutes = followUpMinutesFromSettings(
         (stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
       );
@@ -219,6 +231,12 @@
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} onResetPosition={resetPosition} />
         <AppearancePage {appearance} onChange={saveSetting} />
+      {:else if page === 'prayer'}
+        <PrayerPage
+          settings={prayer}
+          {cities}
+          onChange={(key, value) => run(() => invoke('prayer_settings_set', { key, value }))}
+        />
       {:else if page === 'behavior'}
         <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
       {:else if page === 'about'}

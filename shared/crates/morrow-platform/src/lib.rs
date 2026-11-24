@@ -11,6 +11,9 @@
 //! tools a desktop already ships, injected so every adapter is testable without
 //! a desktop behind it.
 //!
+//! `quota` is #306's adapter: read the Claude Code login and fetch plan limits
+//! through that same runner, leaving the interpretation to `morrow_core::quota`.
+//!
 //! `capability` answers what each adapter can do on this machine — every
 //! feature reports `Supported`, `Degraded(reason)` or `Unsupported(reason)`, so
 //! Settings can say "no tray icon: no AppIndicator library" instead of the
@@ -34,6 +37,7 @@ pub mod panel;
 /// on the macOS tree at run time, which is the rule OpenCode's plugin already set.
 pub mod plugins;
 pub mod process;
+pub mod quota;
 pub mod runner;
 pub mod settings;
 pub mod sound;

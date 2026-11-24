@@ -17,6 +17,7 @@ export type SettingsPageId =
   | 'shortcuts'
   | 'agents'
   | 'music'
+  | 'prayer'
   | 'behavior'
   | 'hooks'
   | 'capabilities'
@@ -98,19 +99,12 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
         reason:
           'The player is fixed per platform (MPRIS on Linux, SMTC on Windows) and the deck already follows it. There is no provider choice to offer, and the level is set on the island meter itself (#372) rather than here.',
       },
+      { id: 'prayer', label: 'Prayer times', icon: 'workspace', available: true },
     ],
   },
   {
     group: 'Morrow',
     items: [
-      {
-        id: 'behavior',
-        label: 'Behavior',
-        icon: 'workspace',
-        available: false,
-        reason:
-          'The follow-up interval exists in core (#342, 60 s default) but no command exposes it and nothing reads a key for it. Until one does, a field here would change a number the reminder loop never asks for.',
-      },
       { id: 'behavior', label: 'Behavior', icon: 'workspace', available: true },
       { id: 'hooks', label: 'Hooks', icon: 'checkmark', available: true },
       { id: 'capabilities', label: 'Capabilities', icon: 'workspace', available: true },
@@ -135,6 +129,11 @@ export const SETTINGS_KEYS = {
   language: 'appLanguage',
   sessionFilter: 'sessionFilter',
   sessionDensity: 'sessionDensity',
+  /** #307 — the four keys owned by the Prayer settings page. */
+  prayerCityId: 'prayerManualCityId',
+  prayerMethod: 'prayerCalculationMethod',
+  prayerCorrectionMinutes: 'prayerCorrectionMinutes',
+  prayerHijriSource: 'prayerHijriCalendarSource',
 } as const;
 
 export type AppearanceSettings = {
