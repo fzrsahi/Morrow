@@ -475,15 +475,33 @@ impl Feed {
                 tool_name: card.tool_name.clone(),
             })
             .collect();
+        let now = morrow_core::reduce::Timestamp(now_ms as f64 / 1000.0);
+        // The island's queue, and the waits it only mirrors (#238 AC 3): a Cowork card,
+        // an in-IDE question, a Codex Desktop flag. A session the queue holds is not
+        // display-only, or every wait would chime twice.
+        let island_holds: std::collections::BTreeSet<String> =
+            cards.iter().map(|card| card.session_id.clone()).collect();
+        let (display_approvals, display_questions) = {
+            drop(held);
+            self.lock().sessions.display_only_waiting(&island_holds)
+        };
         let mut book = self
             .reminders
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        let due = book.tick(
-            &cards,
-            held_back,
-            morrow_core::reduce::Timestamp(now_ms as f64 / 1000.0),
+        book.sync_display_only(
+            morrow_core::follow_up::FollowUpKind::Approval,
+            &display_approvals,
+            &island_holds,
+            now,
         );
+        book.sync_display_only(
+            morrow_core::follow_up::FollowUpKind::Question,
+            &display_questions,
+            &island_holds,
+            now,
+        );
+        let due = book.tick(&cards, held_back, now);
         for reminder in &due {
             // The island notifies from here, not the webview: a hidden panel has no
             // timer, and the reminder is about something the user cannot see.

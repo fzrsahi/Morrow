@@ -190,6 +190,32 @@ impl Sessions {
         restored
     }
 
+    /// Sessions waiting on the user some other way than an island request: a Cowork
+    /// card, an in-IDE question, a Codex Desktop flag. Returns the two kinds, because
+    /// `sync` reconciles each on its own.
+    pub fn display_only_waiting(
+        &self,
+        island_request_session_ids: &std::collections::BTreeSet<String>,
+    ) -> (
+        std::collections::BTreeSet<String>,
+        std::collections::BTreeSet<String>,
+    ) {
+        use morrow_core::display_only_wait;
+        use morrow_core::follow_up::FollowUpKind;
+        (
+            display_only_wait::session_ids(
+                FollowUpKind::Approval,
+                &self.inner,
+                island_request_session_ids,
+            ),
+            display_only_wait::session_ids(
+                FollowUpKind::Question,
+                &self.inner,
+                island_request_session_ids,
+            ),
+        )
+    }
+
     /// The rows a save would write.
     pub fn persisted(&self) -> Vec<morrow_core::session_store::PersistedSession> {
         self.inner

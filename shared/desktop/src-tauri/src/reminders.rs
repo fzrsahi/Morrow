@@ -9,9 +9,9 @@
 //! differently, and the body starts with the session so a stack of notifications is
 //! scannable.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use morrow_core::follow_up::{FollowUpKind, FollowUpReminderScheduler};
+use morrow_core::follow_up::{FollowUpKind, FollowUpReminderScheduler, Origin};
 use morrow_core::reduce::Timestamp;
 use serde::Serialize;
 
@@ -123,6 +123,22 @@ impl ReminderBook {
             .collect()
     }
 
+    /// Reconcile the sessions waiting somewhere the island cannot answer (#238 AC 3).
+    ///
+    /// The island's own queue is reconciled by [`Self::tick`]; these are the waits it
+    /// only mirrors, and they are a separate origin on purpose: an entry that changes
+    /// hands keeps its timing instead of starting over.
+    pub fn sync_display_only(
+        &mut self,
+        kind: FollowUpKind,
+        waiting: &BTreeSet<String>,
+        held_by_island: &BTreeSet<String>,
+        now: Timestamp,
+    ) {
+        self.scheduler
+            .sync_origin_keeping(kind, Origin::DisplayOnly, waiting, held_by_island, now);
+    }
+
     /// A finished turn the user has not looked at yet.
     pub fn track_completion(&mut self, session_id: &str, turn_failed: bool, now: Timestamp) {
         self.scheduler
@@ -147,14 +163,27 @@ impl ReminderBook {
     }
 
     fn content(&self, reminder: &morrow_core::follow_up::FollowUpReminder) -> Option<Reminder> {
-        match reminder.kind {
-            FollowUpKind::Approval | FollowUpKind::Question => {
+        match (reminder.kind, reminder.origin) {
+            // The island holds the request: the reminder opens the very card it is about.
+            (FollowUpKind::Approval | FollowUpKind::Question, Origin::Island) => {
                 let id: u64 = reminder.request_id.as_deref()?.parse().ok()?;
                 self.cards.get(&id).map(WaitingCard::reminder)
             }
-            // A finished turn has no card of ours: the session's own card is the hint,
-            // and the body says which session finished.
-            FollowUpKind::Completion => Some(Reminder {
+            // A display-only wait has no card of ours — nothing here can answer it — so
+            // the reminder names the session and the session's own card says where to go.
+            (FollowUpKind::Approval | FollowUpKind::Question, Origin::DisplayOnly) => {
+                Some(Reminder {
+                    id: 0,
+                    title: if reminder.kind == FollowUpKind::Question {
+                        "Morrow · Question waiting".to_owned()
+                    } else {
+                        "Morrow · Approval waiting".to_owned()
+                    },
+                    body: reminder.session_id.clone(),
+                })
+            }
+            // A finished turn has no card either.
+            (FollowUpKind::Completion, _) => Some(Reminder {
                 id: 0,
                 title: if reminder.turn_failed {
                     "Morrow · Turn failed".to_owned()
@@ -259,6 +288,57 @@ mod tests {
             "one catch-up, not one per missed attempt"
         );
         assert_eq!(catch_up[0].id, 1);
+    }
+
+    /// #238 AC 3: a wait the island only mirrors still reminds, without a card to open.
+    #[test]
+    fn a_display_only_wait_reminds_without_a_card() {
+        let mut book = book();
+        let waiting = BTreeSet::from(["s7".to_owned()]);
+        book.sync_display_only(FollowUpKind::Approval, &waiting, &BTreeSet::new(), at(0.0));
+        assert!(book.tick(&[], false, at(30.0)).is_empty());
+        let due = book.tick(&[], false, at(60.0));
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].title, "Morrow · Approval waiting");
+        assert_eq!(due[0].body, "s7");
+        assert_eq!(due[0].id, 0, "no card to open");
+
+        // Each kind reconciles on its own, and a wait that ends takes its reminder with it.
+        book.sync_display_only(
+            FollowUpKind::Approval,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            at(70.0),
+        );
+        assert!(book.tick(&[], false, at(600.0)).is_empty());
+
+        let question = BTreeSet::from(["s8".to_owned()]);
+        book.sync_display_only(
+            FollowUpKind::Question,
+            &question,
+            &BTreeSet::new(),
+            at(600.0),
+        );
+        let due = book.tick(&[], false, at(660.0));
+        assert_eq!(due[0].title, "Morrow · Question waiting");
+    }
+
+    #[test]
+    fn a_wait_handed_to_the_island_keeps_its_clock() {
+        let mut book = book();
+        let display = BTreeSet::from(["s7".to_owned()]);
+        book.sync_display_only(FollowUpKind::Approval, &display, &BTreeSet::new(), at(0.0));
+        // The island takes the request at t=30. The display-only mirror goes
+        // empty, but the entry must survive for tick's island sync to adopt it.
+        let island = BTreeSet::from(["s7".to_owned()]);
+        book.sync_display_only(FollowUpKind::Approval, &BTreeSet::new(), &island, at(30.0));
+        let due = book.tick(&[approval(1, "s7")], false, at(60.0));
+        assert_eq!(
+            due.len(),
+            1,
+            "the original 60s clock survived the handover at t=30"
+        );
+        assert_eq!(due[0].id, 1, "now a card-backed island reminder");
     }
 
     #[test]
