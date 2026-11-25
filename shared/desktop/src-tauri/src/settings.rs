@@ -122,6 +122,42 @@ pub fn settings_path(site: State<'_, HooksSite>) -> PathBuf {
     settings::path(&site.paths.codeisland_dir)
 }
 
+/// #462: the editable bindings, with their effective chords. The Shortcuts
+/// page renders this list, so it cannot drift from what the grabber registers.
+#[tauri::command]
+pub fn shortcut_list(site: State<'_, HooksSite>) -> Result<Vec<crate::hotkey::Binding>, String> {
+    let stored = settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())?;
+    Ok(crate::hotkey::list(&stored))
+}
+
+/// #462: bind one action, or pass `null` to clear it. Conflicts are allowed and
+/// badged in Settings; rejecting them here would make the two views disagree.
+#[tauri::command]
+pub fn shortcut_set(
+    app: AppHandle,
+    site: State<'_, HooksSite>,
+    action: String,
+    chord: Option<String>,
+) -> Result<bool, String> {
+    if crate::hotkey::action(&action).is_none() {
+        return Err(format!("{action} is not a shortcut action"));
+    }
+    let chord = crate::hotkey::validate_chord(chord)?;
+    let stored = settings::load(&site.paths.codeisland_dir).map_err(|error| error.to_string())?;
+    let next = crate::hotkey::with_binding(&stored, &action, chord);
+    let changed = settings::set(
+        &site.paths.codeisland_dir,
+        crate::hotkey::SETTINGS_KEY,
+        &next[crate::hotkey::SETTINGS_KEY],
+    )
+    .map_err(|error| error.to_string())?;
+    // The new chord is live immediately, and the Capability row reports the
+    // new grab outcome rather than the one from startup.
+    crate::hotkey::install(&app, &site.paths.codeisland_dir);
+    let _ = app.emit(SETTINGS_CHANGED_EVENT, next);
+    Ok(changed)
+}
+
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;

@@ -33,7 +33,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use morrow_ipc::{Error, Server, current_endpoint};
-use tauri::State;
+use tauri::{Manager, State};
 use tauri::ipc::Channel;
 
 use crate::feed::{Feed, Snapshot};
@@ -193,6 +193,8 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
+            settings::shortcut_list,
+            settings::shortcut_set,
             prayer::prayer_settings_set,
             prayer::prayer_cities,
             prayer::prayer_next,
@@ -230,7 +232,7 @@ fn main() -> ExitCode {
             island::create(app)?;
             peek_window::maybe_show(app)?;
             tray::create(app);
-            hotkey::install(app.handle());
+            hotkey::install(app.handle(), &app.state::<HooksSite>().paths.codeisland_dir);
             Ok(())
         })
         .run(tauri::generate_context!());
