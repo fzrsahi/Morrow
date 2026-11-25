@@ -317,9 +317,9 @@ struct ModernMarqueeText: View {
             let excess = max(0, textWidth - containerWidth)
             // The Marquee class still needs text wider than its box; a title
             // that fits never scrolls, so no timeline is created for it.
-            if animationGates.allows(.marquee) && excess > 0 {
+            if animationGates.allows(.marquee) && excess > 1 {
                 scrolling(containerWidth: containerWidth, excess: excess, height: geo.size.height)
-            } else if excess > 0 && edgeFadeWidth > 0 {
+            } else if excess > 1 && edgeFadeWidth > 0 {
                 let fadeFraction = min(0.25, Double(edgeFadeWidth / max(1, containerWidth)))
                 Text(text)
                     .font(font)
@@ -346,7 +346,7 @@ struct ModernMarqueeText: View {
                     .tracking(tracking)
                     .foregroundStyle(color)
                     .lineLimit(1)
-                    .frame(width: containerWidth, height: geo.size.height, alignment: (centerShortText && excess == 0) ? .center : .leading)
+                    .frame(width: containerWidth, height: geo.size.height, alignment: (centerShortText && excess <= 1) ? .center : .leading)
                     .clipped()
             }
         }
@@ -365,18 +365,12 @@ struct ModernMarqueeText: View {
                 )
         )
         .onPreferenceChange(ModernMarqueeTextWidthKey.self) { width in
-            if abs(self.textWidth - width) > 1 {
+            if abs(self.textWidth - width) > 0.5 {
                 self.textWidth = width
             }
         }
-        .onAppear {
-            if textWidth == 0 {
-                textWidth = max(CGFloat(text.count) * 7.0, 10)
-            }
-        }
-        .onChange(of: text) { _, newText in
+        .onChange(of: text) { _, _ in
             startDate = Date()
-            textWidth = max(CGFloat(newText.count) * 7.0, 10)
         }
         .onChange(of: lineKey) { _, _ in
             startDate = Date()
@@ -433,11 +427,6 @@ struct ModernMarqueeText: View {
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                    .background(
-                        GeometryReader { textGeo in
-                            Color.clear.preference(key: ModernMarqueeTextWidthKey.self, value: textGeo.size.width)
-                        }
-                    )
                     .offset(x: -offset)
                     .frame(width: containerWidth, height: height, alignment: .leading)
                     .clipped()

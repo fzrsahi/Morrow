@@ -1993,7 +1993,7 @@ struct NotchPanelView: View {
                         var colIdx = 0
                         while x < w {
                             let nx = x / max(1.0, w)
-                            let falloff = exp(-pow(nx / (0.44 * curve.reach), 1.6)) * (1.0 - 0.28 * ny * ny)
+                            let falloff = exp(-pow(nx / (0.45 * curve.reach), 1.6)) * (1.0 - 0.12 * ny * ny)
                             let intensity = falloff * curve.intensity
                             let threshold = bayerRow[colIdx & 3] / 16.0
                             if intensity > threshold + 0.08 {
@@ -2011,31 +2011,47 @@ struct NotchPanelView: View {
                 }
                 .clipShape(shape)
             } else {
-                ZStack {
-                    shape.fill(
-                        EllipticalGradient(
-                            colors: [
-                                accent.opacity(curve.radialPeak * curve.intensity),
-                                accent.opacity(curve.radialMid * curve.intensity),
-                                .clear
-                            ],
-                            center: UnitPoint(x: 0.08, y: 0.5),
-                            startRadiusFraction: 0.0,
-                            endRadiusFraction: 0.48 * curve.reach
+                Canvas { ctx, size in
+                    let w = Double(size.width)
+                    let h = Double(size.height)
+                    ctx.opacity = curve.intensity
+                    ctx.scaleBy(x: curve.reach, y: 1.0)
+
+                    // 1. Horizontal wash (matches CSS linear-gradient(90deg, 0% -> 42% -> 82%))
+                    ctx.fill(
+                        Path(CGRect(x: 0, y: 0, width: w, height: h)),
+                        with: .linearGradient(
+                            Gradient(stops: [
+                                .init(color: accent.opacity(curve.washStart), location: 0.0),
+                                .init(color: accent.opacity(curve.washMid), location: 0.42),
+                                .init(color: .clear, location: 0.82)
+                            ]),
+                            startPoint: .zero,
+                            endPoint: CGPoint(x: w, y: 0)
                         )
                     )
-                    shape.fill(
-                        LinearGradient(
-                            stops: [
-                                .init(color: accent.opacity(curve.washStart * curve.intensity), location: 0.0),
-                                .init(color: accent.opacity(curve.washMid * curve.intensity), location: min(0.95, 0.42 * curve.reach)),
-                                .init(color: .clear, location: min(1.0, 0.82 * curve.reach))
-                            ],
-                            startPoint: .leading,
-                            endPoint: .trailing
+
+                    // 2. Left-anchored elliptical glow (matches CSS radial-gradient(145px 72px at 26px 50%))
+                    let rx = max(145.0, w * 0.45)
+                    let ry = max(72.0, h * 1.28)
+                    var radialCtx = ctx
+                    radialCtx.translateBy(x: 26.0, y: h * 0.5)
+                    radialCtx.scaleBy(x: rx / ry, y: 1.0)
+                    radialCtx.fill(
+                        Path(ellipseIn: CGRect(x: -ry, y: -ry, width: ry * 2.0, height: ry * 2.0)),
+                        with: .radialGradient(
+                            Gradient(stops: [
+                                .init(color: accent.opacity(curve.radialPeak), location: 0.0),
+                                .init(color: accent.opacity(curve.radialMid), location: 0.55),
+                                .init(color: .clear, location: 1.0)
+                            ]),
+                            center: .zero,
+                            startRadius: 0.0,
+                            endRadius: ry
                         )
                     )
                 }
+                .clipShape(shape)
             }
         }
     }

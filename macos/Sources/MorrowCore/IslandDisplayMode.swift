@@ -192,14 +192,19 @@ public enum IslandDisplayMetrics {
         scalePercent: Int = 100
     ) -> Double {
         let trimmed = displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let narrowChars: Set<Unicode.Scalar> = Set(" iltfrjI.,!':;|-()".unicodeScalars)
+        let wideChars: Set<Unicode.Scalar> = Set("WM@#%&".unicodeScalars)
         let textWidth = trimmed.unicodeScalars.reduce(0.0) { sum, scalar in
             let isWideCJK = (0x1100...0x11FF).contains(scalar.value)
                 || (0x2E80...0x9FFF).contains(scalar.value)
                 || (0xAC00...0xD7AF).contains(scalar.value)
                 || (0xF900...0xFAFF).contains(scalar.value)
-            return sum + (isWideCJK ? 11.5 : 6.2)
+            if isWideCJK { return sum + 11.5 }
+            if narrowChars.contains(scalar) { return sum + 3.4 }
+            if wideChars.contains(scalar) { return sum + 7.8 }
+            return sum + 5.7
         }
-        let chromeAllowance = 106.0
+        let chromeAllowance = 100.0
         let base = min(380.0, max(180.0, chromeAllowance + textWidth))
         let factor = scaleFactor(for: scalePercent)
         let scaled: Double
