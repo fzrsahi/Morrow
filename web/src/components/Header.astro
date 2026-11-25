@@ -1,19 +1,19 @@
 ---
-const releases = 'https://github.com/fzrsahi/Morrow/releases';
 ---
-<header class="nav" id="top">
+<header class="nav nav--centre" id="top">
   <div class="wrap nav__bar">
     <a class="skip-link" href="#main">Skip to content</a>
-    <a class="nav__logo" href="#top"><span class="mark" data-mark="stack" aria-hidden="true"></span>Morrow</a>
+    <a class="nav__logo" href="#top"><span class="mark" data-mark="dots" aria-hidden="true"></span>Morrow</a>
     <nav class="nav__links" aria-label="Main">
-      <a class="nav__link" href="#what">What it shows</a>
-      <a class="nav__link" href="#platforms">Platforms</a>
-      <a class="nav__link" href="#download">Download</a>
+      <span class="nav__item"><a class="nav__link" href="#what">What it shows</a></span>
+      <span class="nav__item"><a class="nav__link" href="#platforms">Platforms</a></span>
+      <span class="nav__item"><a class="nav__link" href="#download">Download</a></span>
     </nav>
-    <div class="theme-switch" role="group" aria-label="Island theme">
-      <button type="button" data-theme-set="pixel" aria-pressed="true">Pixel</button>
-      <button type="button" data-theme-set="modern" aria-pressed="false">Modern</button>
+    <div class="nav__actions">
+      <div class="theme-switch" role="group" aria-label="Island theme">
+        <button type="button" data-theme-set="pixel" aria-pressed="true">Pixel</button>
+        <button type="button" data-theme-set="modern" aria-pressed="false">Modern</button>
+      </div>
     </div>
-    <a class="btn btn--primary btn--sm" href={releases}>See releases</a>
   </div>
 </header>

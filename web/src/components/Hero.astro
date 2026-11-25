@@ -1,20 +1,24 @@
 ---
 const releases = 'https://github.com/fzrsahi/Morrow/releases';
+const docs = 'https://github.com/fzrsahi/Morrow#readme';
 ---
-<section class="hero" style="--h: 1" data-enter aria-labelledby="hero-h">
+<section class="hero hero--split" style="--h: 1" data-enter aria-labelledby="hero-h">
   <div class="wrap">
-    <div class="hero-text grid">
-      <div class="hero-copy span-3">
-        <h1 id="hero-h">One island for coding agents.</h1>
-        <p class="t-small">Runs on macOS, Linux and Windows.</p>
+    <div class="hero-text grid hero-split">
+      <div class="hero-copy span-5">
+        <p class="hero-notice">macOS · Linux · Windows</p>
+        <h1 id="hero-h">Notch panel for coding agents.</h1>
+        <p class="t-lead hero__lead">Morrow puts your coding agents in the notch. See Claude Code, Codex and Gemini work, approve prompts and follow playback from one panel.</p>
+        <div class="btn-row">
+          <a class="btn btn--primary" href={releases}>See releases</a>
+          <a class="btn btn--secondary" href={docs}>Read the docs</a>
+        </div>
       </div>
-      <div class="hero-island span-6 start-4">
-        <img class="main-shot" src="images/readme-hero.png" alt="The Morrow island showing an active session and music controls" width="1440" height="900" />
-        <img class="small-shot" src="images/readme-approval.png" alt="An approval card in the Morrow panel" width="1200" height="800" />
-        <img class="small-shot second" src="images/readme-question.png" alt="A question card in the Morrow panel" width="1200" height="800" />
-      </div>
-      <div class="hero-action span-3 start-10">
-        <a class="btn btn--primary" href={releases}>See releases</a>
+      <div class="hero-visual span-6 start-7">
+        <img src="shots/hero-island.svg" alt="Morrow's notch panel with three live agent sessions: Claude Code reading a file, Codex waiting for approval, Gemini writing tests, and a playback line in the right wing" width="1200" height="1360" />
+        <div class="hero-fact">
+          <p>3 sessions live · right wing tracks playback</p>
+        </div>
       </div>
     </div>
   </div>
