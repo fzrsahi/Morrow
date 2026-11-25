@@ -39,12 +39,25 @@ Checks that run without a desktop:
 ./scripts/ci/verify-local.sh
 ./linux/ci/test.sh
 bash linux/ci/gates.sh --self-check
+./linux/ci/e2e1.sh --self-check
 ./linux/ci/e2e2.sh --self-check
 ```
+
+`e2e1.sh --self-check` needs no display, frontend, binary or bridge and runs on bash 3.2. It checks the gate's own logic against fixed fixtures: the synthetic PermissionRequest bytes, the button parser, the smoke-log readers, the 300 ms boundary, and that a failed check cannot pass silently. It prints a `SELF-CHECK` Evidence block; that block is not a gate verdict and must not be pasted as one.
 
 `e2e2.sh --self-check` needs an existing app binary: run it after the `cargo build -p morrow-app` above, or point it at one with `MORROW_APP=/path/to/morrow-app`. That build is Tauri's job and requires the frontend `dist` from `bun run build`, so both build steps must come first.
 
 `gates.sh --self-check` only checks the runner's own logic. On a desktop, `bash linux/ci/gates.sh --markdown` produces the real verdict table; the headless run exits 77 because every desktop half is still blocked.
+
+### E2E-1 on a real X11 host
+
+Gate E2E-1 (#91) still needs the final judgement on the Debian host (#70). From the repo root, in the desktop X11 session:
+
+```sh
+(cd shared/desktop && bun install && bun run build) && linux/ci/e2e1.sh
+```
+
+It needs `xdotool`, `x11-utils`, `wmctrl`, and GTK3 + WebKitGTK 4.1. For about 10 s it moves the pointer over a full-screen `xev` window; keep hands off. Paste the whole `=== Evidence: linux/ci/e2e1.sh (gate E2E-1) ===` block, from `date:` through `result:`, into #91. Close the issue only if that block says `PASS (27 checks)`. A self-check template or a CI/Xvfb run is not that judgement. If click-through or focus fails, stop and report in #33 before Phase 2.
 
 For a packaged build, `linux/ci/package.sh` calls `cargo tauri build --bundles deb,rpm,appimage`.
 
