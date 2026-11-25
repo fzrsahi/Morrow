@@ -163,6 +163,10 @@ pub fn parse_windows_memory(output: &str) -> Option<Memory> {
     })
 }
 
+fn windows_battery_command() -> &'static str {
+    "$b = Get-CimInstance Win32_Battery | Select-Object -First 1; if ($b) { $charging = $b.BatteryStatus -in 6,7,8,9; $ac = $b.BatteryStatus -in 2,3,6,7,8,9,11; '{0},{1},{2}' -f $b.EstimatedChargeRemaining,$charging,$ac }"
+}
+
 fn parse_bool(raw: &str) -> Option<bool> {
     match raw.trim() {
         "True" | "true" | "1" => Some(true),
@@ -171,8 +175,9 @@ fn parse_bool(raw: &str) -> Option<bool> {
     }
 }
 
-/// `EstimatedChargeRemaining,charging,ac` from CIM. Windows reports battery
-/// status codes 7/8/9 as charging and 3 as fully charged; both are on AC.
+/// `EstimatedChargeRemaining,charging,ac` from CIM. `Win32_Battery.BatteryStatus`
+/// codes 6/7/8/9 mean charging and 2/3/6/7/8/9/11 mean on AC; codes 4/5/10 are
+/// discharging low/critical or undefined and do not claim either state.
 pub fn parse_windows_battery(output: &str) -> Option<Battery> {
     let line = output
         .lines()
@@ -287,7 +292,7 @@ impl SystemReader {
                 &[
                     "-NoProfile",
                     "-Command",
-                    "$b = Get-CimInstance Win32_Battery | Select-Object -First 1; if ($b) { $charging = $b.BatteryStatus -in 7,8,9,11; $ac = $b.BatteryStatus -in 3,7,8,9,11; '{0},{1},{2}' -f $b.EstimatedChargeRemaining,$charging,$ac }",
+                    windows_battery_command(),
                 ],
             )
             .ok()
@@ -447,6 +452,21 @@ mod tests {
         );
         assert_eq!(parse_windows_battery("72,True\n"), None);
         assert_eq!(parse_windows_battery(""), None);
+    }
+
+    #[test]
+    fn windows_battery_command_maps_charging_and_ac_codes() {
+        let command = windows_battery_command();
+        assert!(command.contains("-in 6,7,8,9"), "status 6 is Charging");
+        assert!(command.contains("-in 2,3,6,7,8,9,11"), "status 2 is AC");
+        assert_eq!(
+            parse_windows_battery("60,True,True\r\n"),
+            Some(Battery {
+                level: 60,
+                charging: true,
+                ac_connected: true
+            })
+        );
     }
 
     #[test]
