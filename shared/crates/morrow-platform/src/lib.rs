@@ -38,6 +38,7 @@ pub mod panel;
 pub mod plugins;
 pub mod process;
 pub mod quota;
+pub mod remote;
 pub mod runner;
 pub mod settings;
 pub mod sound;
@@ -46,4 +47,5 @@ pub mod terminal;
 #[cfg(windows)]
 pub mod windows;
 pub mod windows_rules;
+pub mod x11;
 pub mod yaml_hooks;

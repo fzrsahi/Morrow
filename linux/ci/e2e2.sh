@@ -182,12 +182,6 @@ if [ "$SELF_CHECK" -eq 0 ]; then
 
   # ask <name>: one prompt into a fresh tmux session; T0 is when it was typed.
   ask() {
-    local name="$1"
-    T0=$(now_ms)
-    tmux new-session -d -s "$name" -x 200 -y 50 "$CLAUDE"
-    tmux send-keys -t "$name" "$PROMPT" Enter
-    tmux pipe-pane -t "$name" -o "cat >'$WORK/$name.cli'"
-
     local name="$1" marker="$WORK/$1.marker" prompt
     rm -f "$marker"
     tmux new-session -d -s "$name" -x 200 -y 50 "$CLAUDE"
@@ -202,8 +196,6 @@ if [ "$SELF_CHECK" -eq 0 ]; then
   # answer <name> <approve|deny>: waits for the card, clicks the button, and
   # records what the CLI printed after the answer.
   answer() {
-    local name="$1" which="$2" line at id
-
     local name="$1" which="$2" line at id marker
     marker="$WORK/$name.marker"
     id=$([ "$name" = approve ] && echo 1 || echo 2)
