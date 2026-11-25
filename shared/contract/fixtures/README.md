@@ -25,8 +25,9 @@ Exported from [`CoreContractCases.swift`](../../../macos/Tests/MorrowCoreTests/C
 
 - `core/reducer.json`: per case, the initial `sessions` and ordered `steps`. Each step is a raw hook `event` (as the bridge forwards it) and what `reduceHookEvent` left: every session, the lifecycle `effects`, the `facts`, and the `AttentionPolicy.intents` for those facts with the event's session as `subject`. Case inputs: `max_history`, `reply_complete_placeholder`, `custom_sources`.
 - `core/attention.json`: `AttentionPolicyTests`' intent rows, each a `moment` and `subject` with the `intents` Swift returns.
+- `core/settle.json`: `AttentionPolicyTests`' settle rows, each an `intents` and `context` with the `decision` Swift settles.
 
-A port reproduces both. The reducer's effects never include `playSound` or `enqueueCompletion`: those are the policy's intents.
+A port reproduces all three. The reducer's effects never include `playSound` or `enqueueCompletion`: those are the policy's intents.
 
 | Rule | |
 |---|---|

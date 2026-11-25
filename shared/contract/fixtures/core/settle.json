@@ -1,0 +1,781 @@
+{
+  "cases" : [
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "PermissionRequest"
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "PermissionRequest"
+      },
+      "name" : "with everything on, the cue plays"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : false
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "PermissionRequest"
+      },
+      "name" : "the master switch silences every cue"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "UserPromptSubmit"
+      },
+      "name" : "a cue whose own switch is off stays silent"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "PreToolUse"
+      },
+      "name" : "a cue with no sound of its own never plays"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : true,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "Stop"
+      },
+      "name" : "quiet hours hold every event sound back"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : true,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "Stop"
+      },
+      "name" : "a locked screen or a screen saver holds them back while 'mute when away' is on"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : false,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : true,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "Stop"
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : "Stop"
+      },
+      "name" : "with 'mute when away' off, a locked screen still hears them"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : {
+          "presentation" : "card",
+          "turn_failed" : false
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : {
+          "turn_failed" : false
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "name" : "completion style expand pops the card"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : true,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : {
+          "presentation" : "card",
+          "turn_failed" : false
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : {
+          "turn_failed" : false
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "name" : "Smart Suppress is asked as the card shows (at once or from the queue), not when it is decided"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "glance",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : true,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : {
+          "presentation" : "glance",
+          "turn_failed" : true
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : {
+          "turn_failed" : true
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "name" : "completion style glance lights the dot instead"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "off",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : {
+          "presentation" : "status_only",
+          "turn_failed" : true
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : {
+          "turn_failed" : true
+        },
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "name" : "completion style off only updates the card (a failed turn still reads ERROR)"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "type" : "approval"
+          },
+          "smart_suppressed" : false
+        },
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "type" : "approval"
+          },
+          "smart_suppressible" : true
+        },
+        "sound" : null
+      },
+      "name" : "a push goes out when pushes are on"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : false,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "type" : "approval"
+          },
+          "smart_suppressible" : true
+        },
+        "sound" : null
+      },
+      "name" : "with pushes off nothing is pushed"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : true,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "type" : "question"
+          },
+          "smart_suppressed" : true
+        },
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "type" : "question"
+          },
+          "smart_suppressible" : true
+        },
+        "sound" : null
+      },
+      "name" : "a push carries Smart Suppress's answer for the push gate"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : true,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "type" : "question"
+          },
+          "smart_suppressed" : false
+        },
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "type" : "question"
+          },
+          "smart_suppressible" : false
+        },
+        "sound" : null
+      },
+      "name" : "a push Smart Suppress may not hold back carries no such answer"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "glance",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : {
+          "turn_failed" : false,
+          "type" : "trackCompletion"
+        },
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : {
+          "turn_failed" : false,
+          "type" : "trackCompletion"
+        },
+        "push" : null,
+        "sound" : null
+      },
+      "name" : "a finished turn is followed up while completions are announced"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "off",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : null,
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : {
+          "turn_failed" : false,
+          "type" : "trackCompletion"
+        },
+        "push" : null,
+        "sound" : null
+      },
+      "name" : "follow-ups only chase completions the user asked to hear about"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "off",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : null,
+        "follow_up" : {
+          "kind" : "approval",
+          "type" : "restartWait"
+        },
+        "push" : null,
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : null,
+        "follow_up" : {
+          "kind" : "approval",
+          "type" : "restartWait"
+        },
+        "push" : null,
+        "sound" : null
+      },
+      "name" : "a display-only wait's reminders start over whatever the completion style"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "expand",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : false,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : {
+          "presentation" : "card",
+          "turn_failed" : false
+        },
+        "follow_up" : {
+          "turn_failed" : false,
+          "type" : "trackCompletion"
+        },
+        "push" : {
+          "kind" : {
+            "interrupted" : false,
+            "is_subagent" : false,
+            "type" : "completion"
+          },
+          "smart_suppressed" : false
+        },
+        "sound" : "Stop"
+      },
+      "intents" : {
+        "completion" : {
+          "turn_failed" : false
+        },
+        "follow_up" : {
+          "turn_failed" : false,
+          "type" : "trackCompletion"
+        },
+        "push" : {
+          "kind" : {
+            "interrupted" : false,
+            "is_subagent" : false,
+            "type" : "completion"
+          },
+          "smart_suppressible" : true
+        },
+        "sound" : "Stop"
+      },
+      "name" : "a finished turn with everything on"
+    },
+    {
+      "context" : {
+        "audible_cues" : [
+          "AppLaunch",
+          "PermissionRequest",
+          "SessionStart",
+          "Stop",
+          "StopFailure",
+          "TaskRoundComplete",
+          "UserPromptSubmit"
+        ],
+        "completion_style" : "off",
+        "mute_when_away" : true,
+        "push_enabled" : true,
+        "quiet_hours" : false,
+        "scene_quiet" : true,
+        "session_in_front" : false,
+        "sound_enabled" : true
+      },
+      "decision" : {
+        "completion" : {
+          "presentation" : "status_only",
+          "turn_failed" : false
+        },
+        "follow_up" : null,
+        "push" : {
+          "kind" : {
+            "interrupted" : false,
+            "is_subagent" : false,
+            "type" : "completion"
+          },
+          "smart_suppressed" : false
+        },
+        "sound" : null
+      },
+      "intents" : {
+        "completion" : {
+          "turn_failed" : false
+        },
+        "follow_up" : {
+          "turn_failed" : false,
+          "type" : "trackCompletion"
+        },
+        "push" : {
+          "kind" : {
+            "interrupted" : false,
+            "is_subagent" : false,
+            "type" : "completion"
+          },
+          "smart_suppressible" : true
+        },
+        "sound" : "Stop"
+      },
+      "name" : "a finished turn at a locked Mac with completions off: only the push is left"
+    }
+  ],
+  "contract" : "settle"
+}

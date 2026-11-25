@@ -110,7 +110,7 @@ pub fn fullscreen() -> bool {
     #[cfg(windows)]
     return morrow_platform::windows::fullscreen::fullscreen();
     #[cfg(unix)]
-    return false;
+    return morrow_platform::x11::fullscreen(&morrow_platform::runner::SystemRunner);
 }
 
 /// Whether Windows' quiet time is active: the same notification state that

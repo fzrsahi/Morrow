@@ -98,16 +98,20 @@ final class IslandSignalsSync {
 
         // Smart priority depends on the clock, not only on the schedule: the
         // prayer manager already wakes at the window's edges, so recompute
-        // whenever its state moves.
+        // whenever its state moves, and again when music starts or stops.
         for publisher in [
             prayer.$upcomingPrayer.map { _ in () }.eraseToAnyPublisher(),
             prayer.$minutesUntilNextPrayer.map { _ in () }.eraseToAnyPublisher(),
             prayer.$testWingPrayer.map { _ in () }.eraseToAnyPublisher(),
+            nowPlaying.$isPlaying.map { _ in () }.eraseToAnyPublisher(),
         ] {
             publisher
                 .receive(on: RunLoop.main)
                 .sink { [weak self] in
-                    self?.signals.setPrayerPrioritized(prayer.isPrayerPrioritized)
+                    self?.publishPrayerPriority(
+                        isPrayerPrioritized: prayer.isPrayerPrioritized,
+                        isMusicPlaying: nowPlaying.isPlaying
+                    )
                 }
                 .store(in: &cancellables)
         }
@@ -118,8 +122,11 @@ final class IslandSignalsSync {
             .store(in: &cancellables)
 
         publishMusic()
+        publishPrayerPriority(
+            isPrayerPrioritized: prayer.isPrayerPrioritized,
+            isMusicPlaying: nowPlaying.isPlaying
+        )
         signals.setChargingBannerState(system.activeBannerState)
-        signals.setPrayerPrioritized(prayer.isPrayerPrioritized)
 
         refreshQuietHours()
         NotificationCenter.default.addObserver(
@@ -127,7 +134,10 @@ final class IslandSignalsSync {
         ) { [weak self] _ in
             Task { @MainActor in
                 self?.refreshQuietHours()
-                self?.signals.setPrayerPrioritized(PrayerTimeManager.shared.isPrayerPrioritized)
+                self?.publishPrayerPriority(
+                    isPrayerPrioritized: PrayerTimeManager.shared.isPrayerPrioritized,
+                    isMusicPlaying: NowPlayingManager.shared.isPlaying
+                )
             }
         }
     }
@@ -151,6 +161,14 @@ final class IslandSignalsSync {
             nowPlaying.albumPalette,
             hasArtwork: nowPlaying.artworkImage != nil
         )
+    }
+
+    /// The prayer wing and the music wing share one slot. Use the prayer
+    /// manager's guarded predicate rather than a raw minute count: 0 is the
+    /// default when no prayer is scheduled, which used to light a placeholder
+    /// clock over the music. A playing track always keeps the slot.
+    func publishPrayerPriority(isPrayerPrioritized: Bool, isMusicPlaying: Bool) {
+        signals.setPrayerPrioritized(isPrayerPrioritized && !isMusicPlaying)
     }
 
     // MARK: - Quiet hours

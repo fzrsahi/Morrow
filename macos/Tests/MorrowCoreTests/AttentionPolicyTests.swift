@@ -378,7 +378,7 @@ final class AttentionPolicyTests: XCTestCase {
 
     // MARK: - What the settings and the room let through
 
-    private struct SettleRow {
+    struct SettleRow {
         let rule: String
         let intents: AttentionIntents
         var context = Context()
@@ -387,7 +387,7 @@ final class AttentionPolicyTests: XCTestCase {
 
     /// The facts a context is built from, with everything on and the user
     /// nowhere near the session's terminal.
-    private struct Context {
+    struct Context {
         var soundEnabled = true
         var audibleCues: Set<String> = ["SessionStart", "UserPromptSubmit", "Stop", "TaskRoundComplete", "StopFailure", "PermissionRequest", "AppLaunch"]
         var quietHours = false
@@ -422,7 +422,7 @@ final class AttentionPolicyTests: XCTestCase {
         followUp: .trackCompletion(turnFailed: false)
     )
 
-    private static let settleRows: [SettleRow] = [
+    static let settleRows: [SettleRow] = [
         // Sounds
         SettleRow(
             rule: "with everything on, the cue plays",
