@@ -40,6 +40,27 @@ fn wayland(config_home: PathBuf) -> Environment {
     }
 }
 
+/// An X11 session whose PATH holds only the named executable tools. The probe
+/// uses the same executable check as the shell, so a stub file works without an
+/// X server or a real `xdotool` install.
+fn x11_with_tools(tag: &str, tools: &[&str]) -> Environment {
+    let root = temp(tag);
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    for tool in tools {
+        let path = bin.join(tool);
+        fs::write(&path, "#!/bin/sh\n").expect("tool");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+        }
+    }
+    let mut env = x11(root);
+    env.path_tools = vec![bin.to_string_lossy().into_owned()];
+    env
+}
+
 fn windows(config_home: PathBuf) -> Environment {
     Environment {
         os: Os::Windows,
@@ -159,6 +180,72 @@ fn x11_supports_what_wayland_cannot() {
     }
 }
 
+/// #435: the three new X11 readers follow the tools on PATH instead of
+/// hardcoding `Unsupported`. A missing tool is stated, not silently promised.
+#[test]
+fn x11_readers_follow_the_tools_on_path() {
+    let bare = x11(temp("readers-bare"));
+    for feature in [
+        Feature::TerminalVisibility,
+        Feature::PointerMonitor,
+        Feature::Fullscreen,
+    ] {
+        let capability = feature.probe(&bare);
+        assert!(
+            matches!(capability, Capability::Degraded(_)),
+            "{} without tools says {}",
+            feature.name(),
+            capability.label()
+        );
+        assert!(capability.reason().is_some_and(|reason| !reason.is_empty()));
+    }
+
+    let pointer_only = x11_with_tools("readers-pointer", &["xdotool"]);
+    assert_eq!(
+        Feature::PointerMonitor.probe(&pointer_only),
+        Capability::Supported
+    );
+    for feature in [Feature::TerminalVisibility, Feature::Fullscreen] {
+        assert!(matches!(
+            feature.probe(&pointer_only),
+            Capability::Degraded(_)
+        ));
+    }
+
+    let full = x11_with_tools("readers-full", &["xdotool", "xprop"]);
+    for feature in [
+        Feature::TerminalVisibility,
+        Feature::PointerMonitor,
+        Feature::Fullscreen,
+    ] {
+        assert_eq!(
+            feature.probe(&full),
+            Capability::Supported,
+            "{} with xdotool and xprop",
+            feature.name()
+        );
+    }
+}
+
+#[test]
+fn wayland_still_has_no_x11_readers_even_with_the_tools() {
+    let root = temp("readers-wayland");
+    let full = x11_with_tools("readers-wayland-tools", &["xdotool", "xprop"]);
+    let mut env = wayland(root);
+    env.path_tools = full.path_tools;
+    for feature in [
+        Feature::TerminalVisibility,
+        Feature::PointerMonitor,
+        Feature::Fullscreen,
+    ] {
+        assert!(
+            matches!(feature.probe(&env), Capability::Unsupported(_)),
+            "{} cannot query X11 windows on Wayland",
+            feature.name()
+        );
+    }
+}
+
 /// #235: a feature with no adapter says so on every session, and says why. The
 /// list is the audit's own: none of these has a line of code behind it yet, so
 /// none of them may borrow X11's name to look supported.
@@ -166,9 +253,6 @@ fn x11_supports_what_wayland_cannot() {
 fn adapters_that_do_not_exist_yet_are_unsupported_everywhere() {
     for environment in [x11(temp("absent-x11")), wayland(temp("absent-wayland"))] {
         for feature in [
-            Feature::TerminalVisibility,
-            Feature::PointerMonitor,
-            Feature::Fullscreen,
             Feature::SyntheticInput,
             Feature::SystemStats,
             Feature::Geolocation,
