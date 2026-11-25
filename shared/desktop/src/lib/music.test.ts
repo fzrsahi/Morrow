@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   COLLAPSED_MUSIC_WIDTH,
   COLLAPSED_NO_MUSIC_WIDTH,
+  LYRIC_CACHE_LIMIT,
   REFRESH_MS,
   LyricCache,
   collapsedWidth,
@@ -191,6 +192,17 @@ describe('lyrics are cached per track', () => {
     cache.put(other, null);
     expect(cache.get(playing)).toEqual(lyrics);
     expect(cache.get(other)).toBeNull();
+  });
+
+  test('the cache is bounded and drops the oldest track first', () => {
+    const cache = new LyricCache();
+    const tracks = Array.from({ length: LYRIC_CACHE_LIMIT + 1 }, (_, i) => ({
+      ...playing,
+      title: `Track ${i}`,
+    }));
+    for (const track of tracks) cache.put(track, lyrics);
+    expect(cache.get(tracks[0])).toBeUndefined();
+    for (const track of tracks.slice(1)) expect(cache.get(track)).toEqual(lyrics);
   });
 });
 

@@ -98,6 +98,11 @@ export function lyricKey(track: Track): string {
   return [track.artist, track.title, track.album, track.length_us ?? ''].join('\u0000');
 }
 
+/** A listening session can play more tracks than it will ever revisit. Keep
+ *  the newest few answers so a long session cannot grow this cache without a
+ *  bound; an evicted track is simply asked about once more if it returns. */
+export const LYRIC_CACHE_LIMIT = 32;
+
 /** `undefined` means "never asked"; `null` is a real answer: no lyrics exist.
  *  Both the lines and the absence are kept so re-opening the tab never reasks
  *  the service, and returning to an earlier track gets its lines straight back. */
@@ -109,7 +114,12 @@ export class LyricCache {
   }
 
   put(track: Track, lines: LyricLine[] | null): void {
-    this.answers.set(lyricKey(track), lines);
+    const key = lyricKey(track);
+    if (!this.answers.has(key) && this.answers.size >= LYRIC_CACHE_LIMIT) {
+      const oldest = this.answers.keys().next();
+      if (!oldest.done) this.answers.delete(oldest.value);
+    }
+    this.answers.set(key, lines);
   }
 }
 
