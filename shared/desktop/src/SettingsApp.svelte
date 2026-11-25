@@ -4,8 +4,10 @@
   // mapping controls onto keys in the existing settings file.
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
+  import { listen } from '@tauri-apps/api/event';
   import PixelIcon from './lib/components/PixelIcon.svelte';
   import HooksPage from './lib/components/HooksPage.svelte';
+  import RemotePage from './lib/components/RemotePage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
   import PrayerPage from './lib/components/PrayerPage.svelte';
@@ -30,7 +32,8 @@
     type SettingsPageId,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
-  import { resolveLanguage, type Language } from './lib/strings';
+  import { REMOTE_STATUS_EVENT, type RemoteStatuses } from './lib/remote';
+  import { resolveLanguage, translator, type Language } from './lib/strings';
   import {
     followUpMinutesFromSettings,
     SETTINGS_KEY_FOLLOW_UP_MINUTES,
@@ -42,6 +45,7 @@
     HooksSnapshot,
     KimiStatus,
     OpencodeStatus,
+    RemoteHost,
     SoundCue,
     TargetStatus,
     YamlStatus,
@@ -64,6 +68,10 @@
   let prayer = $state<PrayerSettings>({ ...DEFAULT_PRAYER_SETTINGS });
   let cities = $state<PrayerCity[]>([]);
   let cues = $state<SoundCue[]>([]);
+  // #448: hosts and their tunnel status. Status arrives as an event from the
+  // shell's pump, so the card never polls ssh or reaches the network itself.
+  let hosts = $state<RemoteHost[]>([]);
+  let statuses = $state<RemoteStatuses>({});
   // #239 AC 1: shown on About so the file the user may want to back up or paste
   // into a bug report is reachable without knowing the convention.
   let settingsFile = $state('');
@@ -79,6 +87,7 @@
   let pendingPage = $derived(
     SETTINGS_NAV.flatMap((group) => group.items).find((item) => item.id === page && !item.available),
   );
+  let t = $derived(translator(language));
   let hotkeySupported = $derived(isSupported(capabilities, 'Global hotkey'));
   // The same row the Capability table prints, so the reason a key did not
   // register is not retyped here.
@@ -102,15 +111,18 @@
 
   async function load() {
     try {
-      const [h, c, a, stored, availableCities, sound, file] = await Promise.all([
-        invoke<HooksSnapshot>('hooks_status'),
-        invoke<CapabilityRow[]>('capabilities'),
-        invoke<AutostartStatus>('autostart_status'),
-        invoke<unknown>('settings_load'),
-        invoke<PrayerCity[]>('prayer_cities'),
-        invoke<SoundCue[]>('sound_cues'),
-        invoke<string>('settings_path'),
-      ]);
+      const [h, c, a, stored, availableCities, sound, file, remoteHosts, remoteStatuses] =
+        await Promise.all([
+          invoke<HooksSnapshot>('hooks_status'),
+          invoke<CapabilityRow[]>('capabilities'),
+          invoke<AutostartStatus>('autostart_status'),
+          invoke<unknown>('settings_load'),
+          invoke<PrayerCity[]>('prayer_cities'),
+          invoke<SoundCue[]>('sound_cues'),
+          invoke<string>('settings_path'),
+          invoke<RemoteHost[]>('remote_hosts'),
+          invoke<RemoteStatuses>('remote_status'),
+        ]);
       hooks = h;
       capabilities = c;
       autostart = a;
@@ -119,6 +131,8 @@
       appearance = appearanceFromSettings(stored);
       prayer = prayerSettingsFromSettings(stored);
       cities = availableCities;
+      hosts = remoteHosts;
+      statuses = remoteStatuses;
       followUpMinutes = followUpMinutesFromSettings(
         (stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES],
       );
@@ -129,13 +143,15 @@
     }
   }
 
-  async function run(action: () => Promise<unknown>, reload = true) {
+  async function run(action: () => Promise<unknown>, reload = true): Promise<boolean> {
     busy = true;
     try {
       await action();
       if (reload) await load();
+      return true;
     } catch (cause) {
       error = String(cause);
+      return false;
     } finally {
       busy = false;
     }
@@ -167,6 +183,15 @@
 
   onMount(() => {
     void load();
+    // #448: the shell publishes a full status snapshot on every engine change;
+    // replace ours rather than asking again on a timer.
+    let unlisten: (() => void) | undefined;
+    void listen<RemoteStatuses>(REMOTE_STATUS_EVENT, (event) => {
+      statuses = event.payload;
+    })
+      .then((off) => (unlisten = off))
+      .catch(() => {});
+    return () => unlisten?.();
   });
 </script>
 
@@ -210,6 +235,17 @@
             run(() =>
               invoke(row.installed ? 'yaml_uninstall' : 'yaml_install', { source: row.source }),
             )}
+        />
+      {:else if page === 'remote'}
+        <RemotePage
+          {hosts}
+          {statuses}
+          {busy}
+          {t}
+          onSaveHost={(host) => run(() => invoke('remote_host_save', { host }))}
+          onRemoveHost={(id) => run(() => invoke('remote_host_remove', { id }))}
+          onConnect={(id) => run(() => invoke('remote_connect', { id }), false)}
+          onDisconnect={(id) => run(() => invoke('remote_disconnect', { id }), false)}
         />
       {:else if page === 'capabilities'}
         <CapabilitiesPage

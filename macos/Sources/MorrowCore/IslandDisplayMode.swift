@@ -61,15 +61,32 @@ public enum IslandDisplayMetrics {
 
     /// Vertical distance below the top screen edge where the panel sits.
     /// Notch mode always stays docked flush at 0pt (including in fullscreen) so concave
-    /// upper ears remain flush with the top bezel/hardware notch; Dynamic Island floats.
+    /// upper ears remain flush with the top bezel/hardware notch; Dynamic Island floats
+    /// below any physical hardware notch (`physicalNotchHeight + customTopOffset`).
     public static func floatingYOffset(
         displayMode: IslandDisplayMode,
         isFullscreenMode: Bool,
-        customTopOffset: Double = floatingPillTopGap
+        customTopOffset: Double = floatingPillTopGap,
+        physicalNotchHeight: Double = 0.0
     ) -> Double {
-        displayMode == .dynamicIsland
-            ? DynamicIslandTopOffset.clamp(customTopOffset)
-            : 0.0
+        guard displayMode == .dynamicIsland else { return 0.0 }
+        return max(0.0, physicalNotchHeight) + DynamicIslandTopOffset.clamp(customTopOffset)
+    }
+
+    /// Whether a floating Dynamic Island vertically intersects the physical hardware notch cutout.
+    /// Once `topOffset >= physicalNotchHeight`, the pill sits completely below the camera housing
+    /// and uses the compact single-row Dynamic Island layout (Balanced Twin + centered Inline Lyrics).
+    public static func intersectsHardwareNotch(
+        displayMode: IslandDisplayMode,
+        hasNotch: Bool,
+        topOffset: Double,
+        physicalNotchHeight: Double
+    ) -> Bool {
+        guard hasNotch else { return false }
+        guard displayMode == .dynamicIsland else { return true }
+        let effectiveOffset = DynamicIslandTopOffset.clamp(topOffset)
+        let notchH = max(0.0, physicalNotchHeight)
+        return effectiveOffset < notchH
     }
 
     /// Center cutout / gap width reserved between left and right collapsed wings.
@@ -93,7 +110,7 @@ public enum IslandDisplayMetrics {
         leftWidth: Double,
         rightWidth: Double,
         outerPadding: Double = 13.0,
-        dividerGap: Double = 11.0,
+        dividerGap: Double = 10.0,
         hasDivider: Bool = true,
         scalePercent: Int = 100,
         maxAllowedWidth: Double = 400.0
@@ -167,7 +184,7 @@ public enum IslandDisplayMetrics {
             && !isToastOnly
     }
 
-    /// Adaptive Inline Lyrics pill width (180–320 pt at 100%, hard-capped at min(340, screenWidth * 0.35)),
+    /// Adaptive Inline Lyrics pill width (180–380 pt at 100%, hard-capped at min(400, screenWidth * 0.35)),
     /// measured strictly from the currently displayed lyric text.
     public static func inlineLyricsWidth(
         displayedText: String,
@@ -175,15 +192,20 @@ public enum IslandDisplayMetrics {
         scalePercent: Int = 100
     ) -> Double {
         let trimmed = displayedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let narrowChars: Set<Unicode.Scalar> = Set(" iltfrjI.,!':;|-()".unicodeScalars)
+        let wideChars: Set<Unicode.Scalar> = Set("WM@#%&".unicodeScalars)
         let textWidth = trimmed.unicodeScalars.reduce(0.0) { sum, scalar in
             let isWideCJK = (0x1100...0x11FF).contains(scalar.value)
                 || (0x2E80...0x9FFF).contains(scalar.value)
                 || (0xAC00...0xD7AF).contains(scalar.value)
                 || (0xF900...0xFAFF).contains(scalar.value)
-            return sum + (isWideCJK ? 11.5 : 6.2)
+            if isWideCJK { return sum + 11.5 }
+            if narrowChars.contains(scalar) { return sum + 3.4 }
+            if wideChars.contains(scalar) { return sum + 7.8 }
+            return sum + 5.7
         }
-        let chromeAllowance = 106.0
-        let base = min(320.0, max(180.0, chromeAllowance + textWidth))
+        let chromeAllowance = 100.0
+        let base = min(380.0, max(180.0, chromeAllowance + textWidth))
         let factor = scaleFactor(for: scalePercent)
         let scaled: Double
         if factor >= 1.0 {
@@ -191,7 +213,7 @@ public enum IslandDisplayMetrics {
         } else {
             scaled = max(180.0, base - (1.0 - factor) * 20.0)
         }
-        let hardCap = min(340.0, screenWidth * 0.35)
+        let hardCap = min(400.0, screenWidth * 0.35)
         return min(scaled, hardCap)
     }
 
@@ -200,11 +222,13 @@ public enum IslandDisplayMetrics {
         isHoveringRightWing: Bool,
         hasActiveOrWaitingAgent: Bool,
         isMusicPlaying: Bool,
-        hasPriorityAccessory: Bool
+        hasPriorityAccessory: Bool,
+        hasQuotaChip: Bool = false
     ) -> Double {
         if isHoveringRightWing { return 320.0 }
         if hasActiveOrWaitingAgent && isMusicPlaying { return 280.0 }
         if hasActiveOrWaitingAgent { return 260.0 }
+        if hasQuotaChip { return isMusicPlaying ? 280.0 : 260.0 }
         if hasPriorityAccessory { return 180.0 }
         if isMusicPlaying { return 160.0 }
         return 180.0
@@ -213,7 +237,7 @@ public enum IslandDisplayMetrics {
     /// Continuous corner radius used in Dynamic Island mode for each visual state.
     public static func pillCornerRadius(height: Double, isExpanded: Bool, isExtendedPill: Bool) -> Double {
         if isExpanded {
-            return isExtendedPill ? 18.0 : 24.0
+            return 24.0
         }
         if isExtendedPill {
             return 18.0
@@ -228,6 +252,7 @@ public enum IslandDisplayMetrics {
         bilateral: Bool,
         displayMode: IslandDisplayMode
     ) -> Double {
+        if expanded && displayMode == .dynamicIsland { return 14.0 }
         if expanded || bilateral { return 12.0 }
         if displayMode == .dynamicIsland { return 13.0 }
         if wingWidth < 48.0 { return 6.0 }

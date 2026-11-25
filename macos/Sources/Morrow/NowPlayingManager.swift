@@ -725,6 +725,24 @@ final class NowPlayingManager: ObservableObject {
         return ""
     }
 
+    /// Duration in seconds of the active synced lyric line (distance to the next timestamp),
+    /// or `nil` when on the final line / untimed fallback.
+    var currentLyricDuration: Double? {
+        guard !lyrics.isEmpty else { return nil }
+        let currentIndex: Int? = {
+            if let idx = lyrics.firstIndex(where: { $0.id == currentLyricIndex }) {
+                return idx
+            }
+            if currentLyricIndex >= 0 && currentLyricIndex < lyrics.count {
+                return currentLyricIndex
+            }
+            return nil
+        }()
+        guard let currentIndex, currentIndex + 1 < lyrics.count else { return nil }
+        let delta = lyrics[currentIndex + 1].timestamp - lyrics[currentIndex].timestamp
+        return (delta > 0.5 && delta < 30.0) ? delta : nil
+    }
+
     private func updateCurrentLyricIndex() {
         guard !lyrics.isEmpty else { return }
         let offset = UserDefaults.standard.double(forKey: SettingsKey.lyricSyncOffset)

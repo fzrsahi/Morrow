@@ -1905,6 +1905,39 @@ private struct AppearancePage: View {
         }
     }
 
+    @MainActor
+    private func triggerQuestionPreview(on state: AppState) {
+        let sid = "preview-question"
+        var s = SessionSnapshot()
+        s.status = .waitingQuestion
+        s.cwd = "/Users/dev/CodeIsland"
+        s.model = "claude-opus-4-20250514"
+        s.source = "claude"
+        s.termApp = "iTerm.app"
+
+        state.sessions[sid] = s
+        state.activeSessionId = sid
+        state.previewQuestionPayload = QuestionPayload(
+            question: "Which Dynamic Island visual theme do you prefer?",
+            options: ["Modern Clean", "Pixel 16-Bit", "Auto (Sync Album Art)"]
+        )
+        state.surface = .questionCard(sessionId: sid)
+    }
+
+    @MainActor
+    private func triggerInlineLyricsPreview() {
+        let lrc = "[00:00.00]Yeah\n[00:04.00]Midnight neon rain falling on the glass"
+        NowPlayingManager.shared.startSimulatedPlayback(
+            title: "Midnight City",
+            artist: "M83",
+            album: "Hurry Up, We're Dreaming",
+            duration: 240,
+            lrc: lrc,
+            artwork: nil
+        )
+        IslandSignalsSync.shared.publishMusic()
+    }
+
     var body: some View {
         Form {
             Section {
@@ -2212,6 +2245,42 @@ private struct AppearancePage: View {
                         }
 
                         GridRow {
+                            notificationPreviewButton(
+                                icon: "envelope.badge.fill",
+                                color: Color(red: 0.96, green: 0.35, blue: 0.42),
+                                title: "Test Mail Arrival"
+                            ) {
+                                MailManager.shared.triggerTestMailArrival()
+                            }
+
+                            notificationPreviewButton(
+                                icon: "sun.horizon.fill",
+                                color: Color(red: 1.0, green: 0.65, blue: 0.30),
+                                title: "Test Prayer Wing (Idle)"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestCompactWing(thinking: false)
+                            }
+                        }
+
+                        GridRow {
+                            notificationPreviewButton(
+                                icon: "sparkles",
+                                color: Color(red: 0.35, green: 0.78, blue: 1.0),
+                                title: "Test Prayer Wing (Thinking)"
+                            ) {
+                                PrayerTimeManager.shared.triggerTestCompactWing(thinking: true)
+                            }
+
+                            notificationPreviewButton(
+                                icon: "quote.bubble.fill",
+                                color: Color(red: 0.18, green: 0.83, blue: 0.75),
+                                title: "Test Inline Lyrics"
+                            ) {
+                                triggerInlineLyricsPreview()
+                            }
+                        }
+
+                        GridRow {
                             Button(action: {
                                 if let appState {
                                     triggerApprovalPreview(on: appState)
@@ -2222,6 +2291,46 @@ private struct AppearancePage: View {
                                         .font(.system(size: 11, weight: .bold))
                                         .foregroundStyle(Color(red: 1.0, green: 0.72, blue: 0.20))
                                     Text("Test Approval Modal")
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3.5)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(appState == nil)
+
+                            Button(action: {
+                                if let appState {
+                                    triggerQuestionPreview(on: appState)
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "questionmark.bubble.fill")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(Color(red: 0.45, green: 0.75, blue: 1.0))
+                                    Text("Test Question Modal")
+                                        .font(.system(size: 11, weight: .medium))
+                                }
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3.5)
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(appState == nil)
+                        }
+
+                        GridRow {
+                            Button(action: {
+                                if let appState {
+                                    withAnimation(NotchAnimation.open) {
+                                        appState.surface = .quickPrompt
+                                    }
+                                }
+                            }) {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "terminal.fill")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundStyle(Color(red: 0.0, green: 0.96, blue: 0.83))
+                                    Text("Test Quick Prompt")
                                         .font(.system(size: 11, weight: .medium))
                                 }
                                 .padding(.horizontal, 6)
@@ -4910,6 +5019,12 @@ private struct MailSettingsPage: View {
                         .help("Preview Mail Sound")
                         Toggle("", isOn: $mailSoundEnabled)
                             .labelsHidden()
+                    }
+
+                    Button {
+                        MailManager.shared.triggerTestMailArrival()
+                    } label: {
+                        Label("Test Mail Arrival Animation", systemImage: "envelope.badge.fill")
                     }
                 }
 

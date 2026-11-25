@@ -304,6 +304,9 @@ struct ModernMarqueeText: View {
     var tracking: CGFloat = 0
     var maxWidth: CGFloat? = nil
     var centerShortText: Bool = false
+    var lineDuration: Double? = nil
+    var lineKey: Int = 0
+    var edgeFadeWidth: CGFloat = 0
     @Environment(\.animationGates) private var animationGates
     @State private var textWidth: CGFloat = 0
     @State private var startDate = Date()
@@ -314,15 +317,36 @@ struct ModernMarqueeText: View {
             let excess = max(0, textWidth - containerWidth)
             // The Marquee class still needs text wider than its box; a title
             // that fits never scrolls, so no timeline is created for it.
-            if animationGates.allows(.marquee) && excess > 0 {
+            if animationGates.allows(.marquee) && excess > 1 {
                 scrolling(containerWidth: containerWidth, excess: excess, height: geo.size.height)
+            } else if excess > 1 && edgeFadeWidth > 0 {
+                let fadeFraction = min(0.25, Double(edgeFadeWidth / max(1, containerWidth)))
+                Text(text)
+                    .font(font)
+                    .tracking(tracking)
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: containerWidth, height: geo.size.height, alignment: .leading)
+                    .clipped()
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0.0),
+                                .init(color: .black, location: max(0.0, 1.0 - fadeFraction)),
+                                .init(color: .clear, location: 1.0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
             } else {
                 Text(text)
                     .font(font)
                     .tracking(tracking)
                     .foregroundStyle(color)
                     .lineLimit(1)
-                    .frame(width: containerWidth, height: geo.size.height, alignment: (centerShortText && excess == 0) ? .center : .leading)
+                    .frame(width: containerWidth, height: geo.size.height, alignment: (centerShortText && excess <= 1) ? .center : .leading)
                     .clipped()
             }
         }
@@ -341,33 +365,46 @@ struct ModernMarqueeText: View {
                 )
         )
         .onPreferenceChange(ModernMarqueeTextWidthKey.self) { width in
-            if abs(self.textWidth - width) > 1 {
+            if abs(self.textWidth - width) > 0.5 {
                 self.textWidth = width
             }
         }
-        .onAppear {
-            if textWidth == 0 {
-                textWidth = max(CGFloat(text.count) * 7.0, 10)
-            }
-        }
-        .onChange(of: text) { _, newText in
+        .onChange(of: text) { _, _ in
             startDate = Date()
-            textWidth = max(CGFloat(newText.count) * 7.0, 10)
+        }
+        .onChange(of: lineKey) { _, _ in
+            startDate = Date()
         }
     }
 
     private func scrolling(containerWidth: CGFloat, excess: CGFloat, height: CGFloat) -> some View {
         TimelineView(.animation(minimumInterval: 0.03)) { timeline in
+                let elapsed = max(0, timeline.date.timeIntervalSince(startDate))
                 let offset: CGFloat = {
                     guard excess > 0 else { return 0 }
-                    let scrollDuration = max(2.5, Double(excess) / 22.0)
-                    let pauseStart = 1.2
-                    let pauseEnd = 1.2
+                    if let lineDuration {
+                        let dur = max(1.8, lineDuration)
+                        let leadHold = min(0.65, dur * 0.16)
+                        let tailHold = min(0.65, dur * 0.16)
+                        let moveDur = max(0.8, dur - leadHold - tailHold)
+                        if elapsed < leadHold {
+                            return 0
+                        } else if elapsed < leadHold + moveDur {
+                            let progress = (elapsed - leadHold) / moveDur
+                            let smooth = (1.0 - cos(progress * .pi)) / 2.0
+                            return CGFloat(smooth) * excess
+                        } else {
+                            return excess
+                        }
+                    }
+
+                    let scrollDuration = max(2.0, Double(excess) / 26.0)
+                    let pauseStart = 0.9
+                    let pauseEnd = 0.9
                     let resetDuration = 1.0
                     let totalCycle = pauseStart + scrollDuration + pauseEnd + resetDuration
 
-                    let time = max(0, timeline.date.timeIntervalSince(startDate))
-                    let t = time.truncatingRemainder(dividingBy: totalCycle)
+                    let t = elapsed.truncatingRemainder(dividingBy: totalCycle)
 
                     if t < pauseStart {
                         return 0
@@ -384,20 +421,35 @@ struct ModernMarqueeText: View {
                     }
                 }()
 
-                Text(text)
+                let textView = Text(text)
                     .font(font)
                     .tracking(tracking)
                     .foregroundStyle(color)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                    .background(
-                        GeometryReader { textGeo in
-                            Color.clear.preference(key: ModernMarqueeTextWidthKey.self, value: textGeo.size.width)
-                        }
-                    )
                     .offset(x: -offset)
                     .frame(width: containerWidth, height: height, alignment: .leading)
                     .clipped()
+
+                if edgeFadeWidth > 0 {
+                    let leftFade = min(1.0, Double(offset) / 12.0)
+                    let rightFade = min(1.0, Double(excess - offset) / 12.0)
+                    let fadeFraction = min(0.25, Double(edgeFadeWidth / max(1, containerWidth)))
+                    textView.mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black.opacity(1.0 - leftFade), location: 0.0),
+                                .init(color: .black, location: fadeFraction),
+                                .init(color: .black, location: 1.0 - fadeFraction),
+                                .init(color: .black.opacity(1.0 - rightFade), location: 1.0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                } else {
+                    textView
+                }
         }
     }
 }
@@ -1276,15 +1328,25 @@ struct IntegratedNotchChinLyricView: View {
                         removal: .opacity.combined(with: .offset(y: -3))
                     ))
 
-                CyberAudioSpectrumView(
-                    barCount: 4,
-                    isPlaying: nowPlaying.isPlaying,
-                    barWidth: 1.8,
-                    segmentHeight: 1.5,
-                    segmentSpacing: 0.7,
-                    palette: RetroSpectrumPalette.forThemeKey(musicHUDProgressColor)
-                )
-                .frame(width: 14)
+                if isPixel {
+                    CyberAudioSpectrumView(
+                        barCount: 4,
+                        isPlaying: nowPlaying.isPlaying,
+                        barWidth: 1.8,
+                        segmentHeight: 1.5,
+                        segmentSpacing: 0.7,
+                        palette: RetroSpectrumPalette.forThemeKey(musicHUDProgressColor)
+                    )
+                    .frame(width: 14)
+                } else {
+                    ModernAudioSpectrumView(
+                        barCount: 3,
+                        isPlaying: nowPlaying.isPlaying,
+                        barWidth: 2.0,
+                        maxHeight: 11.0,
+                        color: themeAccentColor
+                    )
+                }
             }
             .padding(.horizontal, 12)
             .frame(width: max(120, width), height: 26)
@@ -1313,6 +1375,11 @@ struct DynamicIslandInlineLyricPillView: View {
     @AppStorage(SettingsKey.floatingLyricTextColor) private var floatingLyricTextColor = SettingsDefaults.floatingLyricTextColor
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
     @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
+    @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
+
+    private var isPixel: Bool {
+        islandUITheme == IslandUITheme.pixel.rawValue
+    }
 
     private var accentColor: Color {
         if AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor)
@@ -1322,10 +1389,24 @@ struct DynamicIslandInlineLyricPillView: View {
         let pc = MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme
         if pc != .theme && pc != .album {
             return AppColorTheme.readableOnDark(
-                AppColorTheme.accent(for: musicHUDProgressColor, isModern: true)
+                AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
             )
         }
-        return Color(red: 0.18, green: 0.83, blue: 0.75) // Native Dynamic Island Cyan (#2DD4BF)
+        return isPixel
+            ? Color(red: 0.0, green: 0.96, blue: 0.83)
+            : Color(red: 0.18, green: 0.83, blue: 0.75) // Native Dynamic Island Cyan (#2DD4BF)
+    }
+
+    private var resolvedTextColor: Color {
+        if (syncThemeWithAlbumArt || floatingLyricTextColor == "album" || musicHUDProgressColor == "album")
+            && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
+        }
+        if let custom = FloatingLyricTextColor(rawValue: floatingLyricTextColor),
+           floatingLyricTextColor != SettingsDefaults.floatingLyricTextColor {
+            return custom.color
+        }
+        return Color.white.opacity(0.95)
     }
 
     private var activeFontDesign: Font.Design {
@@ -1381,15 +1462,41 @@ struct DynamicIslandInlineLyricPillView: View {
                     .fixedSize()
 
                 Rectangle()
-                    .fill(Color.white.opacity(0.18))
-                    .frame(width: 1, height: 14)
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.26), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 1, height: 16)
 
-                Text(displayText)
-                    .font(.system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign))
-                    .foregroundStyle(Color.white.opacity(0.95))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                if isPixel {
+                    ModernMarqueeText(
+                        text: displayText.uppercased(),
+                        font: .system(size: min(10.5, max(9.5, CGFloat(floatingLyricFontSize) - 0.5)), weight: .bold, design: .monospaced),
+                        color: resolvedTextColor,
+                        tracking: 0.5,
+                        centerShortText: true,
+                        lineDuration: nowPlaying.currentLyricDuration,
+                        lineKey: nowPlaying.currentLyricIndex,
+                        edgeFadeWidth: 16
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 18)
+                } else {
+                    ModernMarqueeText(
+                        text: displayText,
+                        font: .system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign),
+                        color: resolvedTextColor,
+                        centerShortText: true,
+                        lineDuration: nowPlaying.currentLyricDuration,
+                        lineKey: nowPlaying.currentLyricIndex,
+                        edgeFadeWidth: 16
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 18)
+                }
 
                 ZStack {
                     CompactAlbumArtworkThumbnail(
@@ -1397,11 +1504,12 @@ struct DynamicIslandInlineLyricPillView: View {
                         size: 18,
                         cornerRadius: 4.5,
                         accentColor: accentColor,
-                        borderOpacity: 0.24
+                        borderOpacity: 0
                     )
                     RoundedRectangle(cornerRadius: 5.5, style: .continuous)
                         .trim(from: 0, to: progressFraction)
-                        .stroke(accentColor.opacity(0.75), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                        .stroke(accentColor.opacity(0.82), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
                         .frame(width: 20, height: 20)
                 }
                 .frame(width: 20, height: 20)
