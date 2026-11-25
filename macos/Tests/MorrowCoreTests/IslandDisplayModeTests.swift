@@ -252,6 +252,16 @@ final class IslandDisplayModeTests: XCTestCase {
             ),
             320
         )
+        XCTAssertEqual(
+            IslandDisplayMetrics.balancedTwinHardCap(
+                isHoveringRightWing: false,
+                hasActiveOrWaitingAgent: false,
+                isMusicPlaying: false,
+                hasPriorityAccessory: false,
+                hasQuotaChip: true
+            ),
+            260
+        )
     }
 
     func testDynamicIslandPillCornerRadiiMatchCollapsedExtendedAndExpandedStates() {
@@ -260,7 +270,7 @@ final class IslandDisplayModeTests: XCTestCase {
         XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 44, isExpanded: false, isExtendedPill: false), 22)
         XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 58, isExpanded: false, isExtendedPill: true), 18)
         XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 320, isExpanded: true, isExtendedPill: false), 24)
-        XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 80, isExpanded: true, isExtendedPill: true), 18)
+        XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 80, isExpanded: true, isExtendedPill: true), 24)
     }
 
     func testPillOuterPaddingProtectsRoundedCapsInDynamicIslandMode() {
@@ -278,7 +288,7 @@ final class IslandDisplayModeTests: XCTestCase {
         )
         XCTAssertEqual(
             IslandDisplayMetrics.outerPadding(wingWidth: 80, expanded: true, bilateral: false, displayMode: .dynamicIsland),
-            12
+            14
         )
     }
 
@@ -287,22 +297,28 @@ final class IslandDisplayModeTests: XCTestCase {
             leftWidth: 26,
             rightWidth: 38,
             outerPadding: 13,
-            dividerGap: 11,
+            dividerGap: 10,
             hasDivider: true,
             scalePercent: 100,
             maxAllowedWidth: 400
         )
-        XCTAssertEqual(idleMusicW, 113, accuracy: 0.5)
+        XCTAssertEqual(idleMusicW, 111, accuracy: 0.5)
+
+        let defaultGapW = IslandDisplayMetrics.balancedTwinWidth(
+            leftWidth: 26,
+            rightWidth: 38
+        )
+        XCTAssertEqual(defaultGapW, 111, accuracy: 0.5)
 
         let thinkingW = IslandDisplayMetrics.balancedTwinWidth(
             leftWidth: 86,
             rightWidth: 44,
             outerPadding: 13,
-            dividerGap: 11,
+            dividerGap: 10,
             hasDivider: true,
             scalePercent: 100,
             maxAllowedWidth: 400
         )
-        XCTAssertEqual(thinkingW, 179, accuracy: 0.5)
+        XCTAssertEqual(thinkingW, 177, accuracy: 0.5)
     }
 }

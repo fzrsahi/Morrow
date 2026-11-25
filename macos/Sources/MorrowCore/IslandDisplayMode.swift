@@ -93,7 +93,7 @@ public enum IslandDisplayMetrics {
         leftWidth: Double,
         rightWidth: Double,
         outerPadding: Double = 13.0,
-        dividerGap: Double = 11.0,
+        dividerGap: Double = 10.0,
         hasDivider: Bool = true,
         scalePercent: Int = 100,
         maxAllowedWidth: Double = 400.0
@@ -200,11 +200,13 @@ public enum IslandDisplayMetrics {
         isHoveringRightWing: Bool,
         hasActiveOrWaitingAgent: Bool,
         isMusicPlaying: Bool,
-        hasPriorityAccessory: Bool
+        hasPriorityAccessory: Bool,
+        hasQuotaChip: Bool = false
     ) -> Double {
         if isHoveringRightWing { return 320.0 }
         if hasActiveOrWaitingAgent && isMusicPlaying { return 280.0 }
         if hasActiveOrWaitingAgent { return 260.0 }
+        if hasQuotaChip { return isMusicPlaying ? 280.0 : 260.0 }
         if hasPriorityAccessory { return 180.0 }
         if isMusicPlaying { return 160.0 }
         return 180.0
@@ -213,7 +215,7 @@ public enum IslandDisplayMetrics {
     /// Continuous corner radius used in Dynamic Island mode for each visual state.
     public static func pillCornerRadius(height: Double, isExpanded: Bool, isExtendedPill: Bool) -> Double {
         if isExpanded {
-            return isExtendedPill ? 18.0 : 24.0
+            return 24.0
         }
         if isExtendedPill {
             return 18.0
@@ -228,6 +230,7 @@ public enum IslandDisplayMetrics {
         bilateral: Bool,
         displayMode: IslandDisplayMode
     ) -> Double {
+        if expanded && displayMode == .dynamicIsland { return 14.0 }
         if expanded || bilateral { return 12.0 }
         if displayMode == .dynamicIsland { return 13.0 }
         if wingWidth < 48.0 { return 6.0 }

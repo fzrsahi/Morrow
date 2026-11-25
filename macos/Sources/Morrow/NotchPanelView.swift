@@ -290,9 +290,24 @@ struct NotchPanelView: View {
             isToastOnly: isToastOnly
         )
     }
+    private var isPrayerPrioritized: Bool {
+        signals.isPrayerPrioritized || prayerManager.isPrayerPrioritized
+    }
+    private var effectiveLyricText: String {
+        signals.currentLyricText.isEmpty && !nowPlaying.currentLyricText.isEmpty
+            ? nowPlaying.currentLyricText
+            : signals.currentLyricText
+    }
+    private var effectiveLyricIndex: Int {
+        signals.currentLyricIndex != 0 ? signals.currentLyricIndex : nowPlaying.currentLyricIndex
+    }
+    private var effectiveLyricsLoading: Bool {
+        signals.lyricsLoading || nowPlaying.lyricsLoading
+    }
     private var isConnectedChinLyricActive: Bool {
         IslandDisplayMetrics.allowsNotchLyricLayout(displayMode: displayMode, hasNotch: hasNotch)
             && shouldShowSubNotchLyrics
+            && !isToastOnly
             && !isBilateralWingsLyricActive
             && (activeFloatingPreset == .connectedChin || (displayMode == .dynamicIsland && hasNotch))
     }
@@ -607,14 +622,6 @@ struct NotchPanelView: View {
         )
     }
 
-    private var dynamicIslandCornerRadius: CGFloat {
-        CGFloat(IslandDisplayMetrics.pillCornerRadius(
-            height: Double(effectiveNotchHeight),
-            isExpanded: shouldShowExpanded,
-            isExtendedPill: isConnectedChinLyricActive || isToastOnly
-        ))
-    }
-
     private var dynamicIslandShape: AnyShape {
         switch IslandDisplayMetrics.pillShapeKind(
             isExpanded: shouldShowExpanded,
@@ -625,6 +632,23 @@ struct NotchPanelView: View {
             return AnyShape(Capsule(style: .circular))
         case .roundedRectangle(let radius):
             return AnyShape(RoundedRectangle(cornerRadius: CGFloat(radius), style: .continuous))
+        }
+    }
+
+    @ViewBuilder
+    private var dynamicIslandStrokeOverlay: some View {
+        if displayMode == .dynamicIsland && !isToastOnly {
+            switch IslandDisplayMetrics.pillShapeKind(
+                isExpanded: shouldShowExpanded,
+                isExtendedPill: isConnectedChinLyricActive || isToastOnly
+            ) {
+            case .capsule:
+                Capsule(style: .circular)
+                    .strokeBorder(Color.white.opacity(0.24), lineWidth: 1.2)
+            case .roundedRectangle(let radius):
+                RoundedRectangle(cornerRadius: CGFloat(radius), style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.24), lineWidth: 1.2)
+            }
         }
     }
 
@@ -703,7 +727,7 @@ struct NotchPanelView: View {
         if mailManager.showMailArrivalAnimation {
             return isThinking ? 118 : 52
         }
-        if prayerManager.isPrayerPrioritized {
+        if isPrayerPrioritized {
             if isThinking {
                 return effectiveNaturalLeftWidth
             }
@@ -714,8 +738,8 @@ struct NotchPanelView: View {
                 // Keep Thinking + Music locked to the exact same left/right wing width as Thinking without Music.
                 return effectiveNaturalLeftWidth
             }
-            let baseMusic: CGFloat = isThinking ? 148 : 50
-            let cap: CGFloat = isThinking ? 176 : 56
+            let baseMusic: CGFloat = isThinking ? 148 : (displayMode == .dynamicIsland && hasNotch ? 54 : 50)
+            let cap: CGFloat = isThinking ? 176 : (displayMode == .dynamicIsland && hasNotch ? 58 : 56)
             if rightWingWidth > 0 {
                 return max(baseMusic, min(rightWingWidth + 8, cap))
             }
@@ -759,7 +783,7 @@ struct NotchPanelView: View {
 
     private var bilateralLyricWingWidth: CGFloat {
         let factor = collapsedWidthScaleFactor
-        let curLyric = nowPlaying.currentLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let curLyric = effectiveLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
         let nextLyric = nowPlaying.nextLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
         let maxLyricLen = max(curLyric.count, nextLyric.count, nowPlaying.title.count)
 
@@ -792,7 +816,7 @@ struct NotchPanelView: View {
 
         let naturalPhaseWidth: CGFloat = {
             if isConnectedChinLyricActive {
-                let lyric = nowPlaying.currentLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
+                let lyric = effectiveLyricText.trimmingCharacters(in: .whitespacesAndNewlines)
                 let textLen = max(lyric.count, nowPlaying.title.count)
                 let targetWide: CGFloat = {
                     if textLen >= 30 { return 440 }
@@ -855,7 +879,7 @@ struct NotchPanelView: View {
     /// Idle-indicator wing width that scales across 0%–200% Island Width when no sessions are active.
     private var idleIndicatorWingWidth: CGFloat {
         let minFloor: CGFloat = 32
-        let withPrayer = prayerManager.isPrayerPrioritized ? max(idleBaseMascotWingWidth, IdleIndicatorBar.idlePrayerWingMinWidth) : idleBaseMascotWingWidth
+        let withPrayer = isPrayerPrioritized ? max(idleBaseMascotWingWidth, IdleIndicatorBar.idlePrayerWingMinWidth) : idleBaseMascotWingWidth
         let desired = mailManager.showMailArrivalAnimation ? max(withPrayer, 52) : withPrayer
         let maxWing = max(minFloor, (maxSafeCollapsedBarWidth - collapsedMinCenterGap) / 2)
         return min(desired, maxWing)
@@ -940,22 +964,22 @@ struct NotchPanelView: View {
 
     private var balancedTwinRightEstimate: CGFloat {
         let raw: CGFloat = {
-            if mailManager.showMailArrivalAnimation { return max(rightWingWidth, 56) }
+            if mailManager.showMailArrivalAnimation { return 42 }
+            if isHoveringRightWing && (signals.isPlaying || nowPlaying.isPlaying) {
+                return min(max(rightWingWidth, 148), 156)
+            }
             if rightWingWidth > 0 { return rightWingWidth }
-            if isHoveringRightWing { return 108 }
-            if prayerManager.isPrayerPrioritized { return 76 }
+            if isPrayerPrioritized { return 62 }
             if signals.isPlaying || nowPlaying.isPlaying {
                 return 42
             }
             return 48
         }()
-        return min(raw, isHoveringRightWing ? 150 : 88)
+        return min(raw, isHoveringRightWing ? 156 : 88)
     }
 
     private var nonNotchPriorityIdleWidth: CGFloat {
-        let rightPriority: Double = mailManager.showMailArrivalAnimation
-            ? Double(max(rightWingWidth, 56))
-            : Double(max(rightWingWidth, 76))
+        let rightPriority: Double = mailManager.showMailArrivalAnimation ? 46.0 : 62.0
         let width = IslandDisplayMetrics.balancedTwinWidth(
             leftWidth: Double(effectiveMascotSize + 2),
             rightWidth: rightPriority,
@@ -990,7 +1014,7 @@ struct NotchPanelView: View {
         }
         if showIdleIndicator {
             if displayMode == .dynamicIsland && !hasNotch {
-                if mailManager.showMailArrivalAnimation || prayerManager.isPrayerPrioritized {
+                if mailManager.showMailArrivalAnimation || isPrayerPrioritized {
                     return nonNotchPriorityIdleWidth
                 }
                 return CGFloat(IslandDisplayMetrics.restingWidth(
@@ -1020,9 +1044,9 @@ struct NotchPanelView: View {
         }
         if isDynamicIslandInlineLyrics {
             let displayedText = DynamicIslandInlineLyricPillView.resolvedDisplayText(
-                currentLyric: nowPlaying.currentLyricText,
-                lyricsLoading: nowPlaying.lyricsLoading,
-                currentLyricIndex: nowPlaying.currentLyricIndex,
+                currentLyric: effectiveLyricText,
+                lyricsLoading: effectiveLyricsLoading,
+                currentLyricIndex: effectiveLyricIndex,
                 title: nowPlaying.title,
                 artist: nowPlaying.artist
             )
@@ -1038,7 +1062,8 @@ struct NotchPanelView: View {
                 isHoveringRightWing: isHoveringRightWing,
                 hasActiveOrWaitingAgent: hasActiveOrWaitingAgent,
                 isMusicPlaying: signals.isPlaying || nowPlaying.isPlaying,
-                hasPriorityAccessory: mailManager.showMailArrivalAnimation || prayerManager.isPrayerPrioritized
+                hasPriorityAccessory: mailManager.showMailArrivalAnimation || isPrayerPrioritized,
+                hasQuotaChip: hasQuotaChip
             ))
             let maxSafe = min(screenWidth * 0.44, hardCap)
             let width = IslandDisplayMetrics.balancedTwinWidth(
@@ -1050,7 +1075,13 @@ struct NotchPanelView: View {
                 scalePercent: collapsedWidthScale,
                 maxAllowedWidth: Double(maxSafe)
             )
-            return min(CGFloat(width) + prehoverExtra, maxSafe)
+            let restingFloor = CGFloat(IslandDisplayMetrics.restingWidth(
+                notchWidth: Double(notchW),
+                scalePercent: collapsedWidthScale,
+                hasNotch: false,
+                displayMode: .dynamicIsland
+            ))
+            return min(max(CGFloat(width), restingFloor) + prehoverExtra, maxSafe)
         }
         let requiredActiveBarWidth = collapsedNotchGapWidth + collapsedLeftWingWidth + collapsedRightWingWidth
         let maxSafeCollapsed = maxSafeCollapsedBarWidth
@@ -1194,6 +1225,167 @@ struct NotchPanelView: View {
         }
     }
 
+    private func handlePanelHover(_ hovering: Bool) {
+        if let onHoverChanged {
+            onHoverChanged(hovering)
+        } else {
+            appState.followUps.pointerOverIsland = hovering
+        }
+        if isToastOnly {
+            hoverTimer?.invalidate()
+            hoverTimer = nil
+            isHovered = hovering
+            return
+        }
+        if showIdleIndicator && !appState.surface.isExpanded {
+            isHovered = hovering
+            if hovering {
+                hoverTimer?.invalidate()
+                hoverTimer = nil
+                withAnimation(NotchAnimation.micro) { idleHovered = true }
+                hoverTimer = Timer.scheduledTimer(
+                    withTimeInterval: NotchHoverInteraction.expandDelay(forSetting: hoverExpandDelay),
+                    repeats: false
+                ) { _ in
+                    Task { @MainActor in
+                        guard isHovered else { return }
+                        if hapticOnHover {
+                            NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                        }
+                        withAnimation(NotchAnimation.open) {
+                            if signals.isPlaying {
+                                expandedTab = .music
+                            }
+                            appState.surface = .sessionList
+                        }
+                    }
+                }
+            } else {
+                hoverTimer?.invalidate()
+                hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
+                    Task { @MainActor in
+                        withAnimation(NotchAnimation.micro) { idleHovered = false }
+                    }
+                }
+            }
+            return
+        }
+        switch appState.surface {
+        case .approvalCard, .questionCard: return
+        case .completionCard:
+            if hovering {
+                appState.completionHasBeenEntered = true
+            } else if appState.completionHasBeenEntered || appState.deferCollapseOnMouseLeave {
+                hoverTimer?.invalidate()
+                hoverTimer = nil
+                appState.deferCollapseOnMouseLeave = false
+                appState.cancelCompletionQueue()
+                withAnimation(NotchAnimation.close) {
+                    appState.surface = .collapsed
+                }
+            }
+            return
+        default: break
+        }
+        if !hovering && !SettingsManager.shared.collapseOnMouseLeave { return }
+        if hovering && smartSuppress {
+            if let delegate = NSApp.delegate as? AppDelegate,
+               let pc = delegate.panelController,
+               pc.isActiveTerminalForeground() {
+                return
+            }
+        }
+
+        isHovered = hovering
+        if !hovering && musicDeferCollapseOnMouseLeave {
+            musicDeferCollapseOnMouseLeave = false
+            musicAutoCollapseWorkItem?.cancel()
+            musicAutoCollapseWorkItem = nil
+            musicAutoCollapseTimer?.invalidate()
+            musicAutoCollapseTimer = nil
+            withAnimation(NotchAnimation.close) {
+                if appState.surface == .sessionList && expandedTab == .music {
+                    appState.surface = .collapsed
+                }
+            }
+            return
+        }
+        if !hovering && mailDeferCollapseOnMouseLeave {
+            mailDeferCollapseOnMouseLeave = false
+            mailAutoCollapseTimer?.invalidate()
+            mailAutoCollapseTimer = nil
+            withAnimation(NotchAnimation.close) {
+                if appState.surface == .sessionList && expandedTab == .mail {
+                    appState.surface = .collapsed
+                }
+            }
+            return
+        }
+        if hovering {
+            if musicAutoCollapseWorkItem != nil || musicAutoCollapseTimer != nil {
+                musicAutoCollapseWorkItem?.cancel()
+                musicAutoCollapseWorkItem = nil
+                musicAutoCollapseTimer?.invalidate()
+                musicAutoCollapseTimer = nil
+                musicDeferCollapseOnMouseLeave = true
+            }
+            if mailAutoCollapseTimer != nil {
+                mailAutoCollapseTimer?.invalidate()
+                mailAutoCollapseTimer = nil
+                mailDeferCollapseOnMouseLeave = true
+            }
+            withAnimation(NotchAnimation.hoverPrehover) {
+                hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .mouseEntered)
+            }
+            hoverTimer?.invalidate()
+            hoverTimer = Timer.scheduledTimer(
+                withTimeInterval: NotchHoverInteraction.expandDelay(forSetting: hoverExpandDelay),
+                repeats: false
+            ) { _ in
+                Task { @MainActor in
+                    guard isHovered else { return }
+                    guard NotchHoverInteraction.hoverExpansionMayReplace(appState.surface) else { return }
+                    if hapticOnHover {
+                        let performer = NSHapticFeedbackManager.defaultPerformer
+                        switch hapticIntensity {
+                        case 3:
+                            performer.perform(.levelChange, performanceTime: .now)
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                                performer.perform(.levelChange, performanceTime: .now)
+                            }
+                        case 2:
+                            performer.perform(.levelChange, performanceTime: .default)
+                        default:
+                            performer.perform(.alignment, performanceTime: .default)
+                        }
+                    }
+                    hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .expandDelayElapsed)
+                    withAnimation(NotchAnimation.open) {
+                        appState.surface = .sessionList
+                        appState.cancelCompletionQueue()
+                        if appState.activeSessionId == nil {
+                            appState.activeSessionId = appState.sessions.keys.sorted().first
+                        }
+                    }
+                }
+            }
+        } else {
+            withAnimation(NotchAnimation.hoverPrehover) {
+                hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .mouseExited)
+            }
+            hoverTimer?.invalidate()
+            hoverTimer = Timer.scheduledTimer(withTimeInterval: NotchHoverInteraction.collapseDelay, repeats: false) { _ in
+                Task { @MainActor in
+                    guard !isHovered && !appState.followUps.pointerOverIsland && !appState.isGameInteractionLocked else { return }
+                    hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .collapseDelayElapsed)
+                    withAnimation(NotchAnimation.close) {
+                        appState.surface = .collapsed
+                    }
+                }
+            }
+        }
+    }
+
     @ViewBuilder
     private func compactLeftWingSlot(
         expanded: Bool,
@@ -1211,7 +1403,8 @@ struct NotchPanelView: View {
             workspaceManager: workspaceManager,
             wingWidth: wingWidth,
             isBilateralWingsLyricActive: isBilateral,
-            isDynamicIslandCompact: isDynamicIslandCompact
+            isDynamicIslandCompact: isDynamicIslandCompact,
+            displayMode: displayMode
         )
         .contentShape(Rectangle())
         .onTapGesture { handleLeftWingTap() }
@@ -1238,6 +1431,7 @@ struct NotchPanelView: View {
             isEnlarged: isEnlarged,
             isBilateralWingsLyricActive: isBilateral,
             isDynamicIslandCompact: isDynamicIslandCompact,
+            displayMode: displayMode,
             wingWidth: wingWidth
         )
         .contentShape(Rectangle())
@@ -1373,7 +1567,9 @@ struct NotchPanelView: View {
                 }
             }
         }
-        .frame(height: shouldShowExpanded ? notchHeight : effectiveNotchHeight)
+        .frame(height: shouldShowExpanded
+            ? (displayMode == .dynamicIsland && !hasNotch ? max(notchHeight, 32) : notchHeight)
+            : effectiveNotchHeight)
         // Recap on hover while collapsed — shows whenever hover
         // doesn't expand the panel (smart suppress with the
         // terminal frontmost); expanded cards show it inline.
@@ -1411,17 +1607,9 @@ struct NotchPanelView: View {
                                 )
                             )
                     )
-                    .clipShape(dynamicIslandShape)
-                    .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             } else {
                 dynamicIslandShape
                     .fill(Color.black)
-                    .overlay(
-                        dynamicIslandShape
-                            .stroke(isToastOnly ? Color.clear : Color.white.opacity(0.24), lineWidth: isToastOnly ? 0 : 1.2)
-                    )
-                    .clipShape(dynamicIslandShape)
-                    .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             }
         } else {
             let shape = NotchPanelShape(
@@ -1800,6 +1988,12 @@ struct NotchPanelView: View {
                         minHeight: effectiveNotchHeight
                     ))
             )
+            .overlay(dynamicIslandStrokeOverlay)
+            .shadow(
+                color: displayMode == .dynamicIsland ? Color.black.opacity(0.45) : .clear,
+                radius: displayMode == .dynamicIsland ? 10 : 0,
+                y: displayMode == .dynamicIsland ? 4 : 0
+            )
             .animation(.spring(response: 0.38, dampingFraction: 0.86), value: panelWidth)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: shouldShowExpanded)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: displayMode)
@@ -1862,183 +2056,7 @@ struct NotchPanelView: View {
             .scaleEffect(shouldShowPrehover ? NotchHoverInteraction.prehoverScale : 1, anchor: .top)
             .contentShape(Rectangle())
             .onHover { hovering in
-                // The pointer is on the island itself — what follow-up
-                // reminders count as "reading this card" — whatever the
-                // hover then does to the surface below.
-                if let onHoverChanged {
-                    onHoverChanged(hovering)
-                } else {
-                    appState.followUps.pointerOverIsland = hovering
-                }
-                // Toast banners (charging / prayer mini-peek) own their own hover-hold;
-                // never auto-expand into the full session list while a toast is visible.
-                if isToastOnly {
-                    hoverTimer?.invalidate()
-                    hoverTimer = nil
-                    isHovered = hovering
-                    return
-                }
-                // Idle indicator hover — delay un-hover to prevent oscillation when
-                // the animated width change crosses the mouse position (#52).
-                if showIdleIndicator && !appState.surface.isExpanded {
-                    isHovered = hovering
-                    if hovering {
-                        hoverTimer?.invalidate()
-                        hoverTimer = nil
-                        withAnimation(NotchAnimation.micro) { idleHovered = true }
-                        // Allow smooth auto-expansion to 3 tabs on sustained hover
-                        hoverTimer = Timer.scheduledTimer(
-                            withTimeInterval: NotchHoverInteraction.expandDelay(forSetting: hoverExpandDelay),
-                            repeats: false
-                        ) { _ in
-                            Task { @MainActor in
-                                guard isHovered else { return }
-                                if hapticOnHover {
-                                    NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
-                                }
-                                withAnimation(NotchAnimation.open) {
-                                    if signals.isPlaying {
-                                        expandedTab = .music
-                                    }
-                                    appState.surface = .sessionList
-                                }
-                            }
-                        }
-                    } else {
-                        hoverTimer?.invalidate()
-                        hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: false) { _ in
-                            Task { @MainActor in
-                                withAnimation(NotchAnimation.micro) { idleHovered = false }
-                            }
-                        }
-                    }
-                    return
-                }
-                switch appState.surface {
-                case .approvalCard, .questionCard: return
-                case .completionCard:
-                    // Completion card: mark entered on hover-in, block collapse until entered
-                    if hovering {
-                        appState.completionHasBeenEntered = true
-                    } else if appState.completionHasBeenEntered || appState.deferCollapseOnMouseLeave {
-                        // Mouse entered then left — allow collapse (immediate or deferred)
-                        hoverTimer?.invalidate()
-                        hoverTimer = nil
-                        appState.deferCollapseOnMouseLeave = false
-                        appState.cancelCompletionQueue()
-                        withAnimation(NotchAnimation.close) {
-                            appState.surface = .collapsed
-                        }
-                    }
-                    return
-                default: break
-                }
-                // Respect collapseOnMouseLeave setting
-                if !hovering && !SettingsManager.shared.collapseOnMouseLeave { return }
-                // Smart suppress: don't auto-expand when active session's terminal is foreground
-                if hovering && smartSuppress {
-                    if let delegate = NSApp.delegate as? AppDelegate,
-                       let pc = delegate.panelController,
-                       pc.isActiveTerminalForeground() {
-                        return
-                    }
-                }
-
-                isHovered = hovering
-                if !hovering && musicDeferCollapseOnMouseLeave {
-                    musicDeferCollapseOnMouseLeave = false
-                    musicAutoCollapseWorkItem?.cancel()
-                    musicAutoCollapseWorkItem = nil
-                    musicAutoCollapseTimer?.invalidate()
-                    musicAutoCollapseTimer = nil
-                    withAnimation(NotchAnimation.close) {
-                        if appState.surface == .sessionList && expandedTab == .music {
-                            appState.surface = .collapsed
-                        }
-                    }
-                    return
-                }
-                if !hovering && mailDeferCollapseOnMouseLeave {
-                    mailDeferCollapseOnMouseLeave = false
-                    mailAutoCollapseTimer?.invalidate()
-                    mailAutoCollapseTimer = nil
-                    withAnimation(NotchAnimation.close) {
-                        if appState.surface == .sessionList && expandedTab == .mail {
-                            appState.surface = .collapsed
-                        }
-                    }
-                    return
-                }
-                if hovering {
-                    if musicAutoCollapseWorkItem != nil || musicAutoCollapseTimer != nil {
-                        musicAutoCollapseWorkItem?.cancel()
-                        musicAutoCollapseWorkItem = nil
-                        musicAutoCollapseTimer?.invalidate()
-                        musicAutoCollapseTimer = nil
-                        musicDeferCollapseOnMouseLeave = true
-                    }
-                    if mailAutoCollapseTimer != nil {
-                        mailAutoCollapseTimer?.invalidate()
-                        mailAutoCollapseTimer = nil
-                        mailDeferCollapseOnMouseLeave = true
-                    }
-                    // Immediate lightweight acknowledgement; a quick pass-through
-                    // only ever plays this first stage and reverses.
-                    withAnimation(NotchAnimation.hoverPrehover) {
-                        hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .mouseEntered)
-                    }
-                    // Delay full expansion to avoid accidental triggers
-                    hoverTimer?.invalidate()
-                    hoverTimer = Timer.scheduledTimer(
-                        withTimeInterval: NotchHoverInteraction.expandDelay(forSetting: hoverExpandDelay),
-                        repeats: false
-                    ) { _ in
-                        Task { @MainActor in
-                            // Guard: mouse may have left during the delay
-                            guard isHovered else { return }
-                            guard NotchHoverInteraction.hoverExpansionMayReplace(appState.surface) else { return }
-                            if hapticOnHover {
-                                let performer = NSHapticFeedbackManager.defaultPerformer
-                                switch hapticIntensity {
-                                case 3: // strong: two taps
-                                    performer.perform(.levelChange, performanceTime: .now)
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                                        performer.perform(.levelChange, performanceTime: .now)
-                                    }
-                                case 2: // medium
-                                    performer.perform(.levelChange, performanceTime: .default)
-                                default: // light
-                                    performer.perform(.alignment, performanceTime: .default)
-                                }
-                            }
-                            hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .expandDelayElapsed)
-                            withAnimation(NotchAnimation.open) {
-                                appState.surface = .sessionList
-                                appState.cancelCompletionQueue()
-                                if appState.activeSessionId == nil {
-                                    appState.activeSessionId = appState.sessions.keys.sorted().first
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Reverse the prehover acknowledgement right away…
-                    withAnimation(NotchAnimation.hoverPrehover) {
-                        hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .mouseExited)
-                    }
-                    // …and collapse an expanded panel after a grace delay so an
-                    // accidental mouse-out doesn't flicker it shut.
-                    hoverTimer?.invalidate()
-                    hoverTimer = Timer.scheduledTimer(withTimeInterval: NotchHoverInteraction.collapseDelay, repeats: false) { _ in
-                        Task { @MainActor in
-                            guard !isHovered && !appState.followUps.pointerOverIsland && !appState.isGameInteractionLocked else { return }
-                            hoverPhase = NotchHoverInteraction.nextPhase(from: hoverPhase, event: .collapseDelayElapsed)
-                            withAnimation(NotchAnimation.close) {
-                                appState.surface = .collapsed
-                            }
-                        }
-                    }
-                }
+                handlePanelHover(hovering)
             }
             .onChange(of: appState.surface) { _, newSurface in
                 handleSurfaceChange(newSurface)
@@ -2276,6 +2294,7 @@ private struct CompactLeftWing: View {
     var wingWidth: CGFloat = 0
     var isBilateralWingsLyricActive: Bool = false
     var isDynamicIslandCompact: Bool = false
+    var displayMode: IslandDisplayMode = .notch
     @ObservedObject private var l10n = L10n.shared
     private let nowPlaying = NowPlayingManager.shared
     private let signals = IslandSignals.shared
@@ -2536,8 +2555,8 @@ private struct CompactLeftWing: View {
                 }
             }
         }
-        .padding(.leading, expanded ? 10 : (isDynamicIslandCompact ? 0 : ((!isBilateralWingsLyricActive && wingWidth > 0 && wingWidth < 50) ? 1 : 3)))
-        .padding(.trailing, expanded ? 10 : ((isDynamicIslandCompact && !hasNotch) ? 0 : ((!isBilateralWingsLyricActive && wingWidth > 0 && wingWidth < 50) ? 1 : 3)))
+        .padding(.leading, (expanded && displayMode == .dynamicIsland) ? 0 : (expanded ? 10 : (isDynamicIslandCompact ? 0 : ((!isBilateralWingsLyricActive && wingWidth > 0 && wingWidth < 50) ? 1 : 3))))
+        .padding(.trailing, (expanded && displayMode == .dynamicIsland) ? 0 : (expanded ? 10 : ((isDynamicIslandCompact && !hasNotch) ? 0 : ((!isBilateralWingsLyricActive && wingWidth > 0 && wingWidth < 50) ? 1 : 3))))
         .fixedSize(horizontal: true, vertical: false)
         .background(GeometryReader { geo in
             Color.clear.preference(key: CompactLeftWingWidthKey.self, value: expanded ? 0 : geo.size.width)
@@ -2549,6 +2568,11 @@ private struct CompactLeftWing: View {
             alignment: .leading
         )
         .clipped()
+        .onAppear {
+            if shownTool == nil, let liveTool {
+                shownTool = liveTool
+            }
+        }
         .onChange(of: liveTool) { _, newTool in
             lingerTimer?.invalidate()
             if let newTool {
@@ -2570,7 +2594,13 @@ private struct CompactLeftWing: View {
     }
 
     private var leftInnerBudget: CGFloat {
-        NotchWidthMetrics.collapsedInnerBudget(
+        if isDynamicIslandCompact && !hasNotch {
+            return wingWidth
+        }
+        if isDynamicIslandCompact && hasNotch {
+            return max(0, wingWidth - 13 - 4)
+        }
+        return NotchWidthMetrics.collapsedInnerBudget(
             wingWidth: wingWidth,
             expanded: expanded,
             bilateral: isBilateralWingsLyricActive,
@@ -2671,6 +2701,7 @@ private struct CompactRightWing: View {
     var isEnlarged: Bool = false
     var isBilateralWingsLyricActive: Bool = false
     var isDynamicIslandCompact: Bool = false
+    var displayMode: IslandDisplayMode = .notch
     var wingWidth: CGFloat = 0
     @Environment(\.animationGates) private var animationGates
     @ObservedObject private var l10n = L10n.shared
@@ -2784,13 +2815,20 @@ private struct CompactRightWing: View {
     }
 
     private var showsInlineStatusBadge: Bool {
-        !mailManager.showMailArrivalAnimation
-            && NotchWidthMetrics.fitsInlineStatusBadge(
-                isThinking: isThinking,
-                isBilateral: isBilateralWingsLyricActive,
-                availableInnerWidth: availableInnerWidthBeforeBadge,
-                badgeReserve: rawBadgeReserve
-            )
+        guard !mailManager.showMailArrivalAnimation else { return false }
+        if isDynamicIslandCompact && !hasNotch {
+            return activeStatusBadge != nil
+                && (isThinking
+                    || appState.status == .waitingApproval
+                    || appState.status == .waitingQuestion
+                    || appState.hiddenPendingQuestionSessionId != nil)
+        }
+        return NotchWidthMetrics.fitsInlineStatusBadge(
+            isThinking: isThinking,
+            isBilateral: isBilateralWingsLyricActive,
+            availableInnerWidth: availableInnerWidthBeforeBadge,
+            badgeReserve: rawBadgeReserve
+        )
     }
 
     private var showsOverlayStatusBadge: Bool {
@@ -2812,7 +2850,13 @@ private struct CompactRightWing: View {
     }
 
     private var collapsedMaxInnerWidth: CGFloat {
-        NotchWidthMetrics.collapsedInnerBudget(
+        if isDynamicIslandCompact && !hasNotch {
+            return wingWidth
+        }
+        if isDynamicIslandCompact && hasNotch {
+            return max(0, wingWidth - 13 - 4)
+        }
+        return NotchWidthMetrics.collapsedInnerBudget(
             wingWidth: wingWidth,
             expanded: expanded,
             bilateral: isBilateralWingsLyricActive,
@@ -2825,12 +2869,15 @@ private struct CompactRightWing: View {
     }
 
     private var rightInnerLeadingPadding: CGFloat {
+        if isDynamicIslandCompact && !hasNotch { return 0 }
         if !isThinking && signals.isPrayerPrioritized { return 0 }
         return (isNarrowCollapsedWing || (!isThinking && (signals.isPlaying || nowPlaying.isPlaying))) ? 2 : ((signals.isPlaying || nowPlaying.isPlaying) ? 3 : 6)
     }
 
     private var rightInnerTrailingPadding: CGFloat {
+        if expanded && displayMode == .dynamicIsland { return 0 }
         if expanded { return 10 }
+        if isDynamicIslandCompact && !hasNotch { return 0 }
         if isNarrowCollapsedWing || mailManager.showMailArrivalAnimation || (!isThinking && (signals.isPlaying || nowPlaying.isPlaying || signals.isPrayerPrioritized)) { return 2 }
         return (signals.isPlaying || nowPlaying.isPlaying) ? 4 : 8
     }
@@ -2882,7 +2929,7 @@ private struct CompactRightWing: View {
             // System controls (Mute, Settings, Quit)
             ExpandedHeaderControls(soundEnabled: $soundEnabled)
         }
-        .padding(.horizontal, 4)
+        .padding(.horizontal, (expanded && displayMode == .dynamicIsland) ? 0 : 4)
     }
 
     @ViewBuilder
@@ -2890,11 +2937,12 @@ private struct CompactRightWing: View {
         if workspaceManager.testWingPreview == .nonGitIdle || workspaceManager.testWingPreview == .nonGitThinking {
             standbyPill
         } else if mailManager.showMailArrivalAnimation {
-            // MAIL ARRIVAL MICRO-INTERACTION: compact sealed envelope (52pt) when idle, roller-coaster mailbox (118pt) when thinking
+            // MAIL ARRIVAL MICRO-INTERACTION: compact sealed envelope (42–52pt) when idle or Balanced Twin, roller-coaster mailbox (118pt) when thinking
+            let useCompactMail = !isThinking || (isDynamicIslandCompact && !hasNotch)
             MailArrivalWingView(
                 isRetro: isPixel,
                 accentColor: mailAccentColor,
-                isCompact: !isThinking,
+                isCompact: useCompactMail,
                 onTap: {
                     withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
                         mailManager.dismissMailArrival()
@@ -2903,9 +2951,16 @@ private struct CompactRightWing: View {
                     }
                 }
             )
-            .frame(maxWidth: .infinity, alignment: .trailing)
+            .frame(
+                width: (isDynamicIslandCompact && !hasNotch) ? 42 : nil,
+                alignment: .trailing
+            )
+            .frame(
+                maxWidth: (isDynamicIslandCompact && !hasNotch) ? 42 : .infinity,
+                alignment: .trailing
+            )
             .transition(.opacity)
-        } else if signals.isPrayerPrioritized {
+        } else if signals.isPrayerPrioritized || PrayerTimeManager.shared.isPrayerPrioritized {
             // SMART PRIORITY: Prayer countdown takes active priority at T <= 30m (frameless, strict budget)
             PrayerCompactWingView(
                 isHovered: shouldExpandRightWing,
@@ -2927,7 +2982,7 @@ private struct CompactRightWing: View {
                 isBilateralWingsLyricActive: isBilateralWingsLyricActive,
                 isDynamicIslandCompact: isDynamicIslandCompact,
                 wingWidth: wingWidth,
-                maxContentWidth: (isDynamicIslandCompact && !hasNotch) ? nil : musicMaxContentWidth,
+                maxContentWidth: (isDynamicIslandCompact && !hasNotch) ? (shouldExpandRightWing ? 156 : nil) : musicMaxContentWidth,
                 mascotSize: mascotSize
             )
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
@@ -2943,7 +2998,7 @@ private struct CompactRightWing: View {
             .overlay(alignment: .topTrailing) {
                 if showsOverlayStatusBadge, let badge = activeStatusBadge {
                     compactOverlayStatusBadge(for: badge)
-                        .offset(x: 1, y: -1)
+                        .offset(x: 0, y: 0)
                 }
             }
 
@@ -3484,6 +3539,12 @@ private struct CompactToolStatus: View {
         .animation(.easeInOut(duration: 0.25), value: shownTool)
         .animation(.easeInOut(duration: 0.15), value: shownDesc)
         .animation(.easeInOut(duration: 0.3), value: appState.rotatingSessionId)
+        .onAppear {
+            if shownTool == nil, let liveTool {
+                shownTool = liveTool
+                shownDesc = liveDesc
+            }
+        }
         .onChange(of: liveTool) { _, newTool in
             lingerTimer?.invalidate()
             if let newTool {
@@ -4392,9 +4453,13 @@ private struct IdleIndicatorBar: View {
         return prayerEnabled ? max(base, idlePrayerWingMinWidth) : base
     }
 
+    private var isPrayerPrioritized: Bool {
+        signals.isPrayerPrioritized || PrayerTimeManager.shared.isPrayerPrioritized
+    }
+
     private var effectiveWingWidth: CGFloat {
         let baseRight = rightWingWidth ?? wingWidth
-        let withPrayer = PrayerTimeManager.shared.isPrayerPrioritized ? max(baseRight, Self.idlePrayerWingMinWidth) : baseRight
+        let withPrayer = isPrayerPrioritized ? max(baseRight, Self.idlePrayerWingMinWidth) : baseRight
         return mailManager.showMailArrivalAnimation ? max(withPrayer, 52) : withPrayer
     }
 
@@ -4414,6 +4479,8 @@ private struct IdleIndicatorBar: View {
             if displayMode == .dynamicIsland && !hasNotch {
                 HStack(spacing: 10) {
                     MascotView(source: defaultSource, status: .idle, size: mascotSize)
+                        .frame(width: mascotSize, height: mascotSize)
+                        .fixedSize()
                         .opacity(hovered ? 0.95 : 0.72)
 
                     Rectangle()
@@ -4432,7 +4499,8 @@ private struct IdleIndicatorBar: View {
                                 }
                             }
                         )
-                    } else if !forceEmptyIdle && prayerManager.isPrayerPrioritized {
+                        .frame(width: 42)
+                    } else if !forceEmptyIdle && isPrayerPrioritized {
                         PrayerCompactWingView(isHovered: hovered, isWideMode: false, onExpand: onExpand)
                     } else if islandUITheme == IslandUITheme.pixel.rawValue {
                         PixelText(
@@ -4468,6 +4536,7 @@ private struct IdleIndicatorBar: View {
                             .opacity(hovered ? 0.95 : 0.65)
                         Spacer(minLength: 0)
                     }
+                    .padding(.leading, displayMode == .dynamicIsland ? trailingOuterPadding : 0)
                     .frame(width: wingWidth, alignment: .center)
                     .contentShape(Rectangle())
                     .onTapGesture { onExpand?() }
@@ -4497,7 +4566,7 @@ private struct IdleIndicatorBar: View {
                             .transition(.opacity)
                         } else {
                             Spacer(minLength: 0)
-                            if !forceEmptyIdle && prayerManager.isPrayerPrioritized {
+                            if !forceEmptyIdle && isPrayerPrioritized {
                                 PrayerCompactWingView(isHovered: hovered, isWideMode: false, onExpand: onExpand)
                                     .padding(.trailing, trailingOuterPadding)
                             } else {

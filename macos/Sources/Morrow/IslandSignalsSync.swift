@@ -41,6 +41,7 @@ final class IslandSignalsSync {
             nowPlaying.$title.map { _ in () }.eraseToAnyPublisher(),
             nowPlaying.$artist.map { _ in () }.eraseToAnyPublisher(),
             nowPlaying.$lyrics.map { _ in () }.eraseToAnyPublisher(),
+            nowPlaying.$currentLyricIndex.map { _ in () }.eraseToAnyPublisher(),
             nowPlaying.$lyricsLoading.map { _ in () }.eraseToAnyPublisher(),
         ] {
             publisher
@@ -101,12 +102,12 @@ final class IslandSignalsSync {
         for publisher in [
             prayer.$upcomingPrayer.map { _ in () }.eraseToAnyPublisher(),
             prayer.$minutesUntilNextPrayer.map { _ in () }.eraseToAnyPublisher(),
+            prayer.$testWingPrayer.map { _ in () }.eraseToAnyPublisher(),
         ] {
             publisher
                 .receive(on: RunLoop.main)
                 .sink { [weak self] in
-                    let minutes = prayer.minutesUntilNextPrayer
-                    self?.signals.setPrayerPrioritized(minutes <= 15 && minutes >= -5)
+                    self?.signals.setPrayerPrioritized(prayer.isPrayerPrioritized)
                 }
                 .store(in: &cancellables)
         }
@@ -118,12 +119,16 @@ final class IslandSignalsSync {
 
         publishMusic()
         signals.setChargingBannerState(system.activeBannerState)
+        signals.setPrayerPrioritized(prayer.isPrayerPrioritized)
 
         refreshQuietHours()
         NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refreshQuietHours() }
+            Task { @MainActor in
+                self?.refreshQuietHours()
+                self?.signals.setPrayerPrioritized(PrayerTimeManager.shared.isPrayerPrioritized)
+            }
         }
     }
 
@@ -136,6 +141,11 @@ final class IslandSignalsSync {
             hasLyrics: !nowPlaying.lyrics.isEmpty || nowPlaying.lyricsLoading,
             title: nowPlaying.title,
             artist: nowPlaying.artist
+        )
+        signals.setLyricState(
+            text: nowPlaying.currentLyricText,
+            index: nowPlaying.currentLyricIndex,
+            loading: nowPlaying.lyricsLoading
         )
         signals.setAlbumPalette(
             nowPlaying.albumPalette,

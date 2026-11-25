@@ -152,6 +152,7 @@ final class DynamicIslandModeTests: XCTestCase {
             "non-notch Dynamic Island must collapse simulated 185pt notch dead space"
         )
         XCTAssertTrue(pillRender.hasBlueArtworkPixel, "album cover missing inside Dynamic Island pill")
+        XCTAssertGreaterThanOrEqual(pillRender.blueArtworkWidthPt, 15, "18pt album cover must not be clipped by double outer padding")
         XCTAssertTrue(pillRender.hasAmberVisualizerPixel, "visualizer missing inside Dynamic Island pill")
     }
 
@@ -359,17 +360,21 @@ final class DynamicIslandModeTests: XCTestCase {
             canvasHeight: 72,
             saveName: "after-balanced-twin-idle-music"
         )
-        XCTAssertGreaterThanOrEqual(idleMusic.midRowWidthPt, 96)
+        XCTAssertGreaterThanOrEqual(idleMusic.midRowWidthPt, 115)
         XCTAssertLessThanOrEqual(
             idleMusic.midRowWidthPt,
             152,
             "Option 2 Balanced Twin must avoid wide hollow gap between Mascot and Album+EQ"
         )
         XCTAssertTrue(idleMusic.hasBlueArtworkPixel)
+        XCTAssertGreaterThanOrEqual(idleMusic.blueArtworkWidthPt, 15)
         XCTAssertTrue(idleMusic.hasAmberVisualizerPixel)
 
         // Native Lyrics inside Dynamic Island Mode: single unified capsule (no detached sub-notch pill below)
-        NowPlayingManager.shared.lyrics = [LyricLine(id: 0, timestamp: 0, text: "Midnight neon rain on the glass")]
+        NowPlayingManager.shared.lyrics = [
+            LyricLine(id: 0, timestamp: 0, text: "Yeah"),
+            LyricLine(id: 1, timestamp: 5, text: "Midnight neon rain falling on the glass")
+        ]
         NowPlayingManager.shared.currentLyricIndex = 0
         IslandSignals.shared.setMusic(
             isPlaying: true,
@@ -379,8 +384,28 @@ final class DynamicIslandModeTests: XCTestCase {
             title: "Midnight City",
             artist: "M83"
         )
+        IslandSignals.shared.setLyricState(text: "Yeah", index: 0, loading: false)
 
-        let lyricPill = try renderScene(
+        let shortLyricPill = try renderScene(
+            displayMode: .dynamicIsland,
+            hasNotch: false,
+            state: makeAgentState(status: .idle),
+            canvasWidth: 620,
+            canvasHeight: 112,
+            showCompactLyrics: true,
+            saveName: "after-balanced-twin-lyrics-short"
+        )
+        XCTAssertLessThanOrEqual(
+            shortLyricPill.renderedHeightPt,
+            40,
+            "Dynamic Island lyrics must live inside the unified top pill without a detached sub-notch bar"
+        )
+        XCTAssertLessThanOrEqual(shortLyricPill.midRowWidthPt, 200)
+        XCTAssertTrue(shortLyricPill.hasBlueArtworkPixel)
+
+        NowPlayingManager.shared.currentLyricIndex = 1
+        IslandSignals.shared.setLyricState(text: "Midnight neon rain falling on the glass", index: 1, loading: false)
+        let longLyricPill = try renderScene(
             displayMode: .dynamicIsland,
             hasNotch: false,
             state: makeAgentState(status: .idle),
@@ -389,12 +414,9 @@ final class DynamicIslandModeTests: XCTestCase {
             showCompactLyrics: true,
             saveName: "after-balanced-twin-lyrics"
         )
-        XCTAssertLessThanOrEqual(
-            lyricPill.renderedHeightPt,
-            40,
-            "Dynamic Island lyrics must live inside the unified top pill without a detached sub-notch bar"
-        )
-        XCTAssertTrue(lyricPill.hasBlueArtworkPixel)
+        XCTAssertGreaterThan(longLyricPill.midRowWidthPt, shortLyricPill.midRowWidthPt + 60)
+        XCTAssertLessThanOrEqual(longLyricPill.midRowWidthPt, 330)
+        XCTAssertTrue(longLyricPill.hasBlueArtworkPixel)
     }
 
     func testSettingsAppearanceRendersDisplayModePicker() throws {
