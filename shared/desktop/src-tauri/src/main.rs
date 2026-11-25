@@ -197,6 +197,8 @@ fn main() -> ExitCode {
             prayer::prayer_cities,
             prayer::prayer_next,
             prayer::prayer_tick,
+            prayer::prayer_preview_chime,
+            prayer::prayer_test_banner,
             remote::remote_hosts,
             remote::remote_status,
             remote::remote_host_save,

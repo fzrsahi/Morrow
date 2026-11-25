@@ -10,7 +10,13 @@
     onToggle,
   }: { prayer: PrayerSnapshot | null | undefined; onToggle?: () => void } = $props();
   let model = $derived(prayerCardModel(prayer));
+  // #462: Settings' layout choice is the starting state. Depend on the mode
+  // alone so a fresh countdown snapshot does not undo a user's own toggle.
+  let startExpanded = $derived(model?.cardMode === 'panoramic');
   let expanded = $state(false);
+  $effect(() => {
+    expanded = startExpanded;
+  });
 
   function toggle() {
     expanded = !expanded;

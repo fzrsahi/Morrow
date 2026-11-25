@@ -270,7 +270,11 @@
         <PrayerPage
           settings={prayer}
           {cities}
+          {busy}
+          {error}
           onChange={(key, value) => run(() => invoke('prayer_settings_set', { key, value }))}
+          onPreviewChime={() => run(() => invoke('prayer_preview_chime'), false)}
+          onTestBanner={() => run(() => invoke('prayer_test_banner'), false)}
         />
       {:else if page === 'behavior'}
         <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />

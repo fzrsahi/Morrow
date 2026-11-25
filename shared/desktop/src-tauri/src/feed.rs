@@ -1350,6 +1350,7 @@ mod tests {
             city_name: "Jakarta".to_owned(),
             method: "kemenag".to_owned(),
             correction_minutes: 0,
+            card_mode: "compact".to_owned(),
             hijri: "1 Ramadan 1447".to_owned(),
             times: Vec::new(),
             next: None,
