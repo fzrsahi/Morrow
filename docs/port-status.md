@@ -2,7 +2,7 @@
 
 This is the status source of truth for the Swift-to-Rust gap in #399. It replaces the plan and progress documents deleted in PR #406. Background lives in the [memory index](../.agents/memory/memory.md), [fork differences](fork-differences.md) and the [build guide](build-windows-linux.md). Paths in the table are from the repository root.
 
-A row is `ported` only under the #240 definition: the module exists, is callable from the shell, and has a test. `library-only` means Rust code with no UI consumer; an IPC command may exist without a UI that uses it. `proposed (open PR)` means the work lives on an unmerged branch: at this head the module, probe and `ADAPTERS` row do not exist, so the row is not even `library-only` yet. `host gate pending` means no real Linux or Windows run has happened.
+A row is `ported` only under the #240 definition: the module exists, is callable from the shell, and has a test. `library-only` means Rust code with no UI consumer; an IPC command may exist without a UI that uses it. `host gate pending` means no real Linux or Windows run has happened.
 
 | Area | Status | Evidence | Ticket/decision |
 |---|---|---|---|
@@ -17,14 +17,14 @@ A row is `ported` only under the #240 definition: the module exists, is callable
 | Fullscreen | ported | PR #436 landed `src/x11.rs` with `_NET_WM_STATE` parsing, a live reader, the probe at `capability.rs:232` and the Linux `ADAPTERS` row at `:398`. `adapters.rs:113` calls the X11 reader on Unix, and the Windows adapter still uses `windows/fullscreen.rs`. No UI exposes the state, and a real X11 host run is still pending | #235, #240, PR #436 (merged) |
 | Ble | decision pending | `capability.rs:277-279`; #240 §11 excludes Apple Companion BLE only | #240 |
 | Updater / Sparkle | out-of-scope | `capability.rs:287,478`; `shared/crates/morrow-core/README.md:318`; macOS keeps Sparkle, the port uses `tauri-plugin-updater` | #337, #240 |
-| RemoteInstaller + SSHForwarder + reconnect policy | proposed (open PR) | At this head neither `morrow_core::remote` nor `morrow_platform::remote` exists. PR #429 (open) proposes both modules; no Settings card or IPC caller | #233, PR #429 (open) |
+| RemoteInstaller + SSHForwarder + reconnect policy | library-only | PR #429 (merged) added `morrow-core/src/remote/` and `morrow-platform/src/remote/` with conformance tests and a host script; no Settings card or IPC caller yet, tracked in #449 | #233, PR #429 (merged) |
 | NotchHoopsEngine | decision pending | Swift only: `macos/Sources/MorrowCore/NotchHoopsEngine.swift` (~415 LOC, #238); no Rust module and no triage decision | #433 |
 | Power banner rules | library-only | PR #418 adds `morrow-core/src/power_banner.rs` with conformance fixtures; no shell caller | #399, PR #418 |
-| Full `AttentionPolicy::settle` | proposed (open PR) | At this head no `tests/settle_conformance.rs` exists. PR #431 (open) proposes the decision and that conformance test; the shell still calls `settle_completion` at `shared/desktop/src-tauri/src/completion.rs:153` | #430, PR #431 (open) |
+| Full `AttentionPolicy::settle` | ported | PR #431 (merged) added `tests/settle_conformance.rs` and the full decision port; the shell still calls `settle_completion` at `shared/desktop/src-tauri/src/completion.rs:153` | #430, PR #431 (merged) |
 | `morrow-watch` real directory run | host gate pending | `shared/crates/morrow-watch/` compiles; [fork differences](fork-differences.md) `:68` records no host run | #399, #400 |
 | E2E-2 and L/W host gates | host gate pending | [build guide](build-windows-linux.md) `:13,47,83`; `linux/ci/gates.sh`, `windows/ci/e2e2.ps1` | #400 |
 | Wayland layer-shell | host gate pending | `shared/crates/morrow-platform/src/compositor.rs:4-19` reports anchoring; [build guide](build-windows-linux.md) `:53` says no layer surface, input region or portal is behind it | #400 |
-| `pointer_position` | decision pending | Command removed in #374, but a stale guard test and comment are still live at this head: `shared/desktop/src-tauri/src/commands.rs:208` and `capability.rs:217-219`. PR #428 (open) proposes removing them; nothing is removed yet | #399, PR #428 (open) |
+| `pointer_position` | removed | PR #428 (merged) removed the stale guard test and comment; workspace grep returns 0 matches | #399, PR #428 (merged) |
 | Apple-only surfaces (companion, haptics, Apple Mail, audio capture) and line-by-line Swift port | out-of-scope | `shared/crates/morrow-core/README.md:348`; #240 §11 lists the exclusions | #240 |
 | One Rust core with FFI into macOS | out-of-scope | `docs/adr/0001-two-cores-one-contract.md:11` rejects FFI; the IPC seam already exists | #240, ADR-0001 |
 | Flatpak packaging | decision pending | Named in #399; no scope decision in current docs or memory | none yet |

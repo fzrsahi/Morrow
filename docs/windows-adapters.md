@@ -16,7 +16,7 @@ adapters that exist, and the ones that do not are listed at the end.
 | Now Playing | `playerctl` (MPRIS over D-Bus) | `GlobalSystemMediaTransportControlsSessionManager` (WinRT SMTC) | W-006 |
 | Volume | `wpctl` / `pactl` | `IAudioEndpointVolume` (Core Audio) | W-006 |
 | Screen lock | `loginctl … LockedHint` | `WTSSessionInfoEx` → `SessionFlags` | W-007 |
-| Fullscreen | — no reader yet (see below) | `SHQueryUserNotificationState` | W-007 |
+| Fullscreen | `_NET_WM_STATE` via `xprop`, X11 only (see below) | `SHQueryUserNotificationState` | W-007 |
 | Reminders | `notify-send` | `ToastNotificationManager` | W-009 (installed app) |
 | Start at login | `~/.config/autostart/*.desktop` | `HKCU\…\CurrentVersion\Run` via `reg.exe` | W-009 |
 | Jump to terminal | `swaymsg`/`hyprctl`/`wmctrl` by app id | the session's process chain, then `SetForegroundWindow` | W-005 |
