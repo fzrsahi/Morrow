@@ -516,6 +516,37 @@ pub struct SoundHold {
     pub scene_quiet: bool,
 }
 
+/// The Sound page's quiet-hours window — Swift `SoundManager.quietHoursActive`.
+/// `now_minutes` is minutes since midnight, supplied by the shell: the core
+/// owns the overnight window rule, not the clock or the time zone.
+pub fn quiet_hours_active(settings: &Value, now_minutes: i64) -> bool {
+    let enabled = settings
+        .get("quietHoursEnabled")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    if !enabled {
+        return false;
+    }
+    let number = |key: &str, default: i64| {
+        settings
+            .get(key)
+            .and_then(Value::as_i64)
+            .unwrap_or(default)
+            .clamp(0, 24 * 60 - 1)
+    };
+    let start = number("quietHoursStart", 22 * 60);
+    let end = number("quietHoursEnd", 8 * 60);
+    if start == end {
+        return false;
+    }
+    // A start later than the end spans midnight.
+    if start < end {
+        now_minutes >= start && now_minutes < end
+    } else {
+        now_minutes >= start || now_minutes < end
+    }
+}
+
 /// The user's settings and the room's facts [`settle`] reads —
 /// `AttentionContext` in Swift.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -606,4 +637,44 @@ pub fn settle(intents: &AttentionIntents, context: &AttentionContext) -> Attenti
         follow_up => follow_up,
     };
     decision
+}
+
+#[cfg(test)]
+mod quiet_hours_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn quiet_hours_are_off_unless_the_switch_is_on() {
+        assert!(!quiet_hours_active(&json!({}), 23 * 60));
+        assert!(!quiet_hours_active(&json!({ "quietHoursEnabled": false }), 23 * 60));
+    }
+
+    #[test]
+    fn an_overnight_window_spans_midnight() {
+        let settings = json!({
+            "quietHoursEnabled": true,
+            "quietHoursStart": 22 * 60,
+            "quietHoursEnd": 8 * 60,
+        });
+        assert!(quiet_hours_active(&settings, 23 * 60));
+        assert!(quiet_hours_active(&settings, 2 * 60));
+        assert!(!quiet_hours_active(&settings, 12 * 60));
+    }
+
+    #[test]
+    fn a_same_day_window_does_not_wrap() {
+        let settings = json!({
+            "quietHoursEnabled": true,
+            "quietHoursStart": 9 * 60,
+            "quietHoursEnd": 17 * 60,
+        });
+        assert!(quiet_hours_active(&settings, 10 * 60));
+        assert!(!quiet_hours_active(&settings, 20 * 60));
+        assert!(!quiet_hours_active(&json!({
+            "quietHoursEnabled": true,
+            "quietHoursStart": 480,
+            "quietHoursEnd": 480,
+        }), 12 * 60));
+    }
 }

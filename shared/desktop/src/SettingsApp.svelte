@@ -61,6 +61,13 @@
   import { cssVariables } from './lib/tokens';
   import { APP_VERSION } from './lib/version';
   import { displaySummary, type DisplaySnapshot } from './lib/display';
+  import { soundControlsFromSettings, type SoundControls } from './lib/sound-controls';
+  import { mascotFromSettings } from './lib/mascot-gallery';
+  import MascotsPage from './lib/components/MascotsPage.svelte';
+  import { buddyFromSettings, type BuddySettings } from './lib/buddy-settings';
+  import BuddyPage from './lib/components/BuddyPage.svelte';
+  import { floatingLyricsFromSettings, type FloatingLyrics } from './lib/floating-lyrics';
+  import FloatingLyricsPage from './lib/components/FloatingLyricsPage.svelte';
   import type {
     AutostartStatus,
     CapabilityRow,
@@ -91,6 +98,7 @@
   let prayer = $state<PrayerSettings>({ ...DEFAULT_PRAYER_SETTINGS });
   let cities = $state<PrayerCity[]>([]);
   let cues = $state<SoundCue[]>([]);
+  let soundControls = $state<SoundControls>(soundControlsFromSettings({}));
   // #462: the editable chords, read from the same settings document the
   // grabber uses. A write reloads them so the badge reflects the saved state.
   let shortcuts = $state<ShortcutBinding[]>([]);
@@ -142,6 +150,9 @@
   let behavior = $state<BehaviorSettings>({ ...DEFAULT_BEHAVIOR });
   // #465: the Agents page and the panel read the same Swift settings keys.
   let agents = $state<AgentsSettings>({ ...DEFAULT_AGENTS });
+  let mascots = $state(mascotFromSettings({}));
+  let buddy = $state<BuddySettings>(buddyFromSettings({}));
+  let floatingLyrics = $state<FloatingLyrics>(floatingLyricsFromSettings({}));
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -171,6 +182,10 @@
       capabilities = c;
       autostart = a;
       cues = sound;
+      soundControls = soundControlsFromSettings(stored);
+      mascots = mascotFromSettings(stored);
+      buddy = buddyFromSettings(stored);
+      floatingLyrics = floatingLyricsFromSettings(stored);
       shortcuts = shortcutRows;
       displays = displayRows;
       settingsFile = file;
@@ -358,10 +373,12 @@
       {:else if page === 'sound'}
         <SoundPage
           {cues}
+          controls={soundControls}
           supported={soundSupported}
           {busy}
           {t}
           onPreview={(cue) => run(() => invoke('sound_preview', { cue }), false)}
+          onChange={(key, value) => run(() => invoke('settings_set', { key, value }))}
         />
       {:else if page === 'shortcuts'}
         <ShortcutsPage
@@ -381,6 +398,14 @@
           onDisplaySet={saveDisplay}
           onDisplayActivate={activateDisplay}
           onIslandEnabled={setIslandEnabled}
+          onPreview={(id) => run(() => invoke('notification_preview', { id }), false)}
+          onPowerPreview={() => run(() => invoke('power_banner_preview'), false)}
+        />
+      {:else if page === 'floating-lyrics'}
+        <FloatingLyricsPage
+          settings={floatingLyrics}
+          {t}
+          onChange={(key, value) => run(() => invoke('settings_set', { key, value }))}
         />
       {:else if page === 'prayer'}
         <PrayerPage
@@ -405,6 +430,20 @@
         />
       {:else if page === 'agents'}
         <AgentsPage settings={agents} {t} onChange={saveAgentSetting} />
+      {:else if page === 'mascots'}
+        <MascotsPage
+          {mascots}
+          {t}
+          onChange={(key, value) => run(() => invoke('settings_set', { key, value }))}
+        />
+      {:else if page === 'buddy'}
+        <BuddyPage
+          settings={buddy}
+          {t}
+          onChange={(key, value) => run(() => invoke('settings_set', { key, value }))}
+          onPreview={(source, status, brightness, orientation) =>
+            invoke<string[]>('buddy_frame_preview', { source, status, brightness, orientation })}
+        />
       {:else if page === 'workspace'}
         <WorkspacePage settings={workspace} onChange={saveWorkspace} />
       {:else if page === 'about'}

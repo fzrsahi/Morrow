@@ -596,5 +596,6 @@
   "music_player_hud": "音乐播放器 HUD",
   "floating_synced_lyrics": "浮动同步歌词（刘海下方）",
   "retro_sound_pack": "复古音效包",
-  "unavailable_platform_notice": "此平台尚不可用。"
+  "unavailable_platform_notice": "此平台尚不可用。",
+  "floating-lyrics": "浮动歌词"
 }

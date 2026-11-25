@@ -600,5 +600,6 @@
   "music_player_hud": "음악 플레이어 HUD",
   "floating_synced_lyrics": "플로팅 동기화 가사 (노치 아래)",
   "retro_sound_pack": "레트로 사운드 팩",
-  "unavailable_platform_notice": "이 플랫폼에서는 아직 사용할 수 없습니다."
+  "unavailable_platform_notice": "이 플랫폼에서는 아직 사용할 수 없습니다.",
+  "floating-lyrics": "플로팅 가사"
 }

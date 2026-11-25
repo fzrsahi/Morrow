@@ -612,6 +612,7 @@ extension L10n {
         "floating_synced_lyrics": "Floating Synced Lyrics (Below Notch)",
         "retro_sound_pack": "Retro Sound Pack",
         "unavailable_platform_notice": "Not available on this platform yet.",
+        "floating-lyrics": "Floating Lyrics",
     ]
 
     static let zh: [String: String] = [
@@ -1213,6 +1214,7 @@ extension L10n {
         "floating_synced_lyrics": "浮动同步歌词（刘海下方）",
         "retro_sound_pack": "复古音效包",
         "unavailable_platform_notice": "此平台尚不可用。",
+        "floating-lyrics": "浮动歌词",
     ]
 
     static let zhHant: [String: String] = [
@@ -1814,6 +1816,7 @@ extension L10n {
         "floating_synced_lyrics": "浮動同步歌詞（劉海下方）",
         "retro_sound_pack": "復古音效包",
         "unavailable_platform_notice": "此平台尚不可用。",
+        "floating-lyrics": "浮動歌詞",
     ]
 
     static let de: [String: String] = [
@@ -2419,6 +2422,7 @@ extension L10n {
         "floating_synced_lyrics": "Schwebende synchronisierte Lyrics (unter dem Notch)",
         "retro_sound_pack": "Retro-Sound-Paket",
         "unavailable_platform_notice": "Auf dieser Plattform noch nicht verfügbar.",
+        "floating-lyrics": "Schwebende Lyrics",
     ]
 
     static let ja: [String: String] = [
@@ -3024,6 +3028,7 @@ extension L10n {
         "floating_synced_lyrics": "フローティング同期歌詞 (ノッチ下)",
         "retro_sound_pack": "レトロサウンドパック",
         "unavailable_platform_notice": "このプラットフォームではまだ利用できません。",
+        "floating-lyrics": "フローティング歌詞",
     ]
 
     static let ko: [String: String] = [
@@ -3629,6 +3634,7 @@ extension L10n {
         "floating_synced_lyrics": "플로팅 동기화 가사 (노치 아래)",
         "retro_sound_pack": "레트로 사운드 팩",
         "unavailable_platform_notice": "이 플랫폼에서는 아직 사용할 수 없습니다.",
+        "floating-lyrics": "플로팅 가사",
     ]
 
     static let tr: [String: String] = [
@@ -4234,5 +4240,6 @@ extension L10n {
         "floating_synced_lyrics": "Yüzen Eşitlenmiş Şarkı Sözleri (Notch altında)",
         "retro_sound_pack": "Retro Ses Paketi",
         "unavailable_platform_notice": "Bu platformda henüz kullanılamıyor.",
+        "floating-lyrics": "Yüzen Şarkı Sözleri",
     ]
 }

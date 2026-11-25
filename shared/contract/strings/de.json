@@ -600,5 +600,6 @@
   "music_player_hud": "Musikplayer-HUD",
   "floating_synced_lyrics": "Schwebende synchronisierte Lyrics (unter dem Notch)",
   "retro_sound_pack": "Retro-Sound-Paket",
-  "unavailable_platform_notice": "Auf dieser Plattform noch nicht verfügbar."
+  "unavailable_platform_notice": "Auf dieser Plattform noch nicht verfügbar.",
+  "floating-lyrics": "Schwebende Lyrics"
 }

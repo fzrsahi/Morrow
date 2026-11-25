@@ -214,6 +214,10 @@
   let prehover = $state(false);
   let openHeight = $state<number | null>(null);
   let tab = $state<PanelTab>('agents');
+  // #465: the Settings preview buttons ask the shell to emit this, so the
+  // preview is drawn by the same island surface as a real banner.
+  let previewBanner = $state<{ id: string; title: string } | null>(null);
+  let previewTimer: ReturnType<typeof setTimeout> | undefined;
   // Parity #3: wheel-over-island volume and horizontal swipe tabs, both
   // switchable in Settings → Behavior. Defaults are read from settings.json.
   let gestures = $state<GestureSettings>({ ...DEFAULT_GESTURES });
@@ -1176,6 +1180,14 @@
     })
       .then((off) => (unlisten = off))
       .catch(() => {});
+    let unlistenPreview: (() => void) | undefined;
+    void listen<{ id: string; title: string }>('notification-preview', (event) => {
+      previewBanner = event.payload;
+      if (previewTimer !== undefined) clearTimeout(previewTimer);
+      previewTimer = setTimeout(() => (previewBanner = null), 3000);
+    })
+      .then((off) => (unlistenPreview = off))
+      .catch(() => {});
     loadCapabilities();
     // One seed read so the collapsed wing can show a track; the tab effect
     // owns every read after this, so a closed tab never polls.
@@ -1187,6 +1199,8 @@
 
     return () => {
       unlisten?.();
+      unlistenPreview?.();
+      if (previewTimer !== undefined) clearTimeout(previewTimer);
       releaseQuestionFocus();
       clearTimeout(hoverTimer);
       clearTimeout(collapseTimer);
@@ -1279,6 +1293,11 @@
   onwheel={onWheel}
   role="presentation"
 >
+  {#if previewBanner}
+    <div class="preview-banner" role="status" aria-live="polite">
+      <i></i><span>{previewBanner.title}</span>
+    </div>
+  {/if}
   {#if !expanded && !closing}
     {#if hudVisible && volumeCapable}
       <!-- #195/#239: for ~1.5 s after a change the meter takes the bar's place;
@@ -1367,6 +1386,14 @@
         settings={workspaceSettings}
         onRefresh={readWorkspace}
       />
+    {:else if tab === 'prayer'}
+      <div class="padded">
+        {#if prayerCardModel(prayer)}
+          <PrayerCard {prayer} onToggle={() => (prayerLayout += 1)} />
+        {:else}
+          <p class="note">No prayer is due in the current window.</p>
+        {/if}
+      </div>
     {:else}
       <MusicDeck
         {theme}
@@ -1565,6 +1592,30 @@
   .cards {
     border-top: 1px solid rgba(255, 255, 255, 0.08);
     margin-top: 4px;
+  }
+  .preview-banner {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 100%;
+    margin-top: 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 10px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    background: rgba(20, 20, 20, 0.94);
+    color: #fff;
+    font-size: 12px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+    z-index: 5;
+  }
+  .preview-banner i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--cyan);
   }
   :focus-visible {
     outline: 2px solid var(--cyan);

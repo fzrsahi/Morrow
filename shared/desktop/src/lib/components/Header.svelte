@@ -50,6 +50,7 @@
   }> = [
     { id: 'agents', label: 'AGENTS', icon: 'agents', line: 'cpu', modern: 'Agents' },
     { id: 'workspace', label: 'WORKSPACE', icon: 'workspace', line: 'branch', modern: 'Workspace' },
+    { id: 'prayer', label: 'PRAYER', icon: 'workspace', line: 'note', modern: 'Prayer' },
     { id: 'music', label: 'MUSIC', icon: 'music', line: 'note', modern: 'Music' },
   ];
   const visible = $derived(new Set(visiblePanelTabs(agentsEnabled)));

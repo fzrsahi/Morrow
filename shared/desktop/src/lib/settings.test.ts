@@ -158,7 +158,9 @@ describe('appearance settings', () => {
       'workspace',
       'music',
       'prayer',
+      'floating-lyrics',
       'behavior',
+      'buddy',
       'hooks',
       'remote',
       'capabilities',
@@ -207,12 +209,11 @@ describe('the pages that have no controls say why', () => {
     }
   });
 
-  test('two pages are still empty and twelve are built', () => {
-    expect(items.filter((entry) => !entry.available).map((entry) => entry.id)).toEqual([
-      'mascots',
-      'music',
-    ]);
-    expect(items.filter((entry) => entry.available).length).toBe(12);
+  test('one page is still empty and fifteen are built', () => {
+    // #465 restored Mascots, added Buddy and Floating Lyrics; only Music has
+    // no provider choice left to offer on this shell.
+    expect(items.filter((entry) => !entry.available).map((entry) => entry.id)).toEqual(['music']);
+    expect(items.filter((entry) => entry.available).length).toBe(15);
   });
 
   test('the shortcut the page prints is the one the shell registers', () => {

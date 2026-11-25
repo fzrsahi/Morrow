@@ -600,5 +600,6 @@
   "music_player_hud": "ミュージックプレーヤー HUD",
   "floating_synced_lyrics": "フローティング同期歌詞 (ノッチ下)",
   "retro_sound_pack": "レトロサウンドパック",
-  "unavailable_platform_notice": "このプラットフォームではまだ利用できません。"
+  "unavailable_platform_notice": "このプラットフォームではまだ利用できません。",
+  "floating-lyrics": "フローティング歌詞"
 }

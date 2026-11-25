@@ -7,7 +7,8 @@ import { MOTION } from './tokens';
 export type PanelVariant = 'A' | 'B' | 'C';
 /** The two Swift `IslandDisplayMode` raw values, and nothing else. */
 export type DisplayMode = 'notch' | 'dynamicIsland';
-export type PanelTab = 'agents' | 'workspace' | 'music';
+/** #465: the shell now exposes the prayer card as its own tab as well. */
+export type PanelTab = 'agents' | 'workspace' | 'prayer' | 'music';
 export type SessionFilter = 'all' | 'sta' | 'agt';
 /** #185 keeps #183's comfortable cards reachable; compact is the default. */
 export type SessionDensity = 'compact' | 'comfortable';

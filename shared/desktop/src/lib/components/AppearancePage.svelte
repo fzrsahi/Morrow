@@ -4,6 +4,7 @@
   // values survive an app upgrade.
   import { SETTINGS_KEYS, type AppearanceSettings } from '../settings';
   import { ACCENTS, isAccent } from '../tokens';
+  import { NOTIFICATION_PREVIEWS } from '../notification-previews';
   import {
     TOP_OFFSET_DEFAULT,
     TOP_OFFSET_MAX,
@@ -28,6 +29,8 @@
     onDisplaySet: (id: string, enabled: boolean, mode: string, offset: number) => void;
     onDisplayActivate: (id: string) => void;
     onIslandEnabled: (enabled: boolean) => void;
+    onPreview: (id: string) => void;
+    onPowerPreview: () => void;
   };
   let {
     appearance,
@@ -38,6 +41,8 @@
     onDisplaySet,
     onDisplayActivate,
     onIslandEnabled,
+    onPreview,
+    onPowerPreview,
   }: Props = $props();
 
   const sizes = [11, 12, 14, 16] as const;
@@ -249,7 +254,25 @@
   <div class="grp"><div><span class="s">{displays.readerReason ?? t('active_displays')}</span></div></div>
 {/each}
 
+<h3>{t('dynamic_island_notification_previews')}</h3>
+<div class="grp">
+  <div>
+    <span class="s">Each button posts a three-second preview to the island. Charging previews use the same pure banner rules as a real battery reading.</span>
+    <button class="b" onclick={onPowerPreview}>Live charging state</button>
+  </div>
+</div>
+<div class="previews">
+  {#each NOTIFICATION_PREVIEWS as preview (preview.id)}
+    <button class="b" onclick={() => onPreview(preview.id)}>{preview.title}</button>
+  {/each}
+</div>
+
 <style>
+  .previews {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
   h3 {
     margin: 14px 0 8px;
     font-size: 13px;

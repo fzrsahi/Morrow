@@ -3,6 +3,7 @@
 //! tight-fit, nonactivating panel, which answers permission requests.
 
 mod adapters;
+mod buddy;
 mod cli;
 mod commands;
 mod completion;
@@ -15,6 +16,7 @@ mod hotkey;
 mod island;
 mod listener;
 mod music;
+mod notifications;
 mod peek_window;
 mod permissions;
 mod position;
@@ -204,6 +206,9 @@ fn main() -> ExitCode {
             display::display_set,
             display::display_island_enabled,
             display::display_activate,
+            buddy::buddy_frame_preview,
+            notifications::notification_preview,
+            notifications::power_banner_preview,
             prayer::prayer_settings_set,
             prayer::prayer_cities,
             prayer::prayer_next,

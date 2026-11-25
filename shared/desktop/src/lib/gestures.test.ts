@@ -14,10 +14,10 @@ import {
 } from './gestures';
 
 describe('visible tabs (#465)', () => {
-  test('disabling the Agents feature leaves only the Music tab to cycle', () => {
-    expect(visiblePanelTabs(true)).toEqual(['agents', 'music']);
-    expect(visiblePanelTabs(false)).toEqual(['music']);
-    expect(cycleTab('music', 1, visiblePanelTabs(false))).toBe('music');
+  test('the four shell tabs stay reachable when Agents is off', () => {
+    expect(visiblePanelTabs(true)).toEqual(['agents', 'workspace', 'prayer', 'music']);
+    expect(visiblePanelTabs(false)).toEqual(['workspace', 'prayer', 'music']);
+    expect(cycleTab('music', 1, visiblePanelTabs(false))).toBe('workspace');
   });
 });
 
@@ -49,17 +49,17 @@ describe('wheel volume', () => {
 });
 
 describe('tab cycle', () => {
-  test('the list is the two tabs the header draws, in header order', () => {
-    expect(PANEL_TABS).toEqual(['agents', 'music']);
+  test('the list is the four tabs the header draws, in header order', () => {
+    expect(PANEL_TABS).toEqual(['agents', 'workspace', 'prayer', 'music']);
   });
 
   test('a forward swipe visits the next tab and wraps at the end', () => {
-    expect(cycleTab('agents', 1)).toBe('music');
+    expect(cycleTab('agents', 1)).toBe('workspace');
     expect(cycleTab('music', 1)).toBe('agents');
   });
 
   test('a backward swipe reverses the same cycle', () => {
-    expect(cycleTab('music', -1)).toBe('agents');
+    expect(cycleTab('music', -1)).toBe('prayer');
     expect(cycleTab('agents', -1)).toBe('music');
   });
 

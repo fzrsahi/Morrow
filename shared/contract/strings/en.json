@@ -600,5 +600,6 @@
   "music_player_hud": "Music Player HUD",
   "floating_synced_lyrics": "Floating Synced Lyrics (Below Notch)",
   "retro_sound_pack": "Retro Sound Pack",
-  "unavailable_platform_notice": "Not available on this platform yet."
+  "unavailable_platform_notice": "Not available on this platform yet.",
+  "floating-lyrics": "Floating Lyrics"
 }

@@ -18,8 +18,10 @@ export type SettingsPageId =
   | 'agents'
   | 'workspace'
   | 'music'
+  | 'floating-lyrics'
   | 'prayer'
   | 'behavior'
+  | 'buddy'
   | 'hooks'
   | 'remote'
   | 'capabilities'
@@ -162,14 +164,9 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
       // language. The profile and onboarding reset are still macOS only.
       { id: 'general', label: 'General', icon: 'settings', available: true },
       { id: 'appearance', label: 'Appearance', icon: 'settings', available: true },
-      {
-        id: 'mascots',
-        label: 'Mascots',
-        icon: 'agents',
-        available: false,
-        reason:
-          'The body protocol is ported (#347): 16 slots, brightness, orientation and the pairing frames. What is missing is the reader — no shell command lists the paired bodies, so a picker would draw a list that nothing could fill.',
-      },
+      // #465: the 33-entry gallery, preview status, speed and default source
+      // are settings only — they need no paired-body reader.
+      { id: 'mascots', label: 'Mascots', icon: 'agents', available: true },
       { id: 'sound', label: 'Sound', icon: 'volume', available: true },
       { id: 'shortcuts', label: 'Shortcuts', icon: 'workspace', available: true },
     ],
@@ -190,12 +187,14 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
           'The player is fixed per platform (MPRIS on Linux, SMTC on Windows) and the deck already follows it. There is no provider choice to offer, and the level is set on the island meter itself (#372) rather than here.',
       },
       { id: 'prayer', label: 'Prayer times', icon: 'workspace', available: true },
+      { id: 'floating-lyrics', label: 'Floating lyrics', icon: 'music', available: true },
     ],
   },
   {
     group: 'Morrow',
     items: [
       { id: 'behavior', label: 'Behavior', icon: 'workspace', available: true },
+      { id: 'buddy', label: 'Buddy / ESP32', icon: 'agents', available: true },
       { id: 'hooks', label: 'Hooks', icon: 'checkmark', available: true },
       { id: 'remote', label: 'Remote', icon: 'workspace', available: true },
       { id: 'capabilities', label: 'Capabilities', icon: 'workspace', available: true },

@@ -230,15 +230,34 @@ impl Feed {
     /// so a toggle in Settings takes effect without a restart (#202). A file
     /// that is absent or cannot be read is the same as one with no keys: play
     /// as before.
-    fn sound_settings(&self) -> (attention::SoundPreferences, u8) {
+    fn sound_settings(&self) -> (attention::SoundPreferences, u8, SoundHold) {
         let stored = self
             .settings_dir
             .as_ref()
             .and_then(|dir| morrow_platform::settings::load(dir).ok())
             .unwrap_or_default();
+        let now_minutes = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64
+            / 60
+            % (24 * 60);
+        // Swift's SoundHold: the clock from UTC minutes (no local-time crate in
+        // the pure workspace), the away switch from Settings, and the shell's
+        // own lock probe. Quiet hours need no host permission, so Linux obeys
+        // them too rather than following Windows' notification-only state.
+        let hold = SoundHold {
+            quiet_hours: attention::quiet_hours_active(&stored, now_minutes),
+            mute_when_away: stored
+                .get("autoMuteWhenAway")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(true),
+            scene_quiet: crate::adapters::screen_locked() == Some(true),
+        };
         (
             attention::sound_preferences(&stored),
             attention::sound_volume_percent(&stored),
+            hold,
         )
     }
 
@@ -246,8 +265,14 @@ impl Feed {
     /// the platform's player. A missing or failing player is a Capability the
     /// Settings table already states; the feed has nowhere to show it and must
     /// not stop.
-    fn emit_sound(&self, cue: &str, sounds: &attention::SoundPreferences, volume: u8) {
-        if attention::audible_sound(Some(cue), sounds, &SoundHold::default()).is_none() {
+    fn emit_sound(
+        &self,
+        cue: &str,
+        sounds: &attention::SoundPreferences,
+        volume: u8,
+        hold: &SoundHold,
+    ) {
+        if attention::audible_sound(Some(cue), sounds, hold).is_none() {
             return;
         }
         if let Some(outlet) = &self.sound {
@@ -262,8 +287,8 @@ impl Feed {
     /// The launch chime has no hook to carry it: the shell's own start is the
     /// event. The same Sound page switches apply as to a hook cue.
     pub fn play_launch(&self) {
-        let (sounds, volume) = self.sound_settings();
-        self.emit_sound(morrow_core::attention::sound_cue::LAUNCH, &sounds, volume);
+        let (sounds, volume, hold) = self.sound_settings();
+        self.emit_sound(morrow_core::attention::sound_cue::LAUNCH, &sounds, volume, &hold);
     }
 
     /// Reduces one hook into the sessions.
@@ -334,9 +359,9 @@ impl Feed {
         }
         state.dirty = true;
         drop(state);
-        let (sounds, volume) = self.sound_settings();
+        let (sounds, volume, hold) = self.sound_settings();
         for cue in &cues {
-            self.emit_sound(cue, &sounds, volume);
+            self.emit_sound(cue, &sounds, volume, &hold);
         }
         self.changed.notify_one();
         self.prune_changed.notify_one();

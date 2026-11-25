@@ -600,5 +600,6 @@
   "music_player_hud": "Müzik Oynatıcı HUD",
   "floating_synced_lyrics": "Yüzen Eşitlenmiş Şarkı Sözleri (Notch altında)",
   "retro_sound_pack": "Retro Ses Paketi",
-  "unavailable_platform_notice": "Bu platformda henüz kullanılamıyor."
+  "unavailable_platform_notice": "Bu platformda henüz kullanılamıyor.",
+  "floating-lyrics": "Yüzen Şarkı Sözleri"
 }
