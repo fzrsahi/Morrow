@@ -624,6 +624,47 @@ final class DynamicIslandModeTests: XCTestCase {
         }
     }
 
+    func testDynamicIslandMagSafeToastHeightAndVolumeHUDAndPixelInlineLyrics() throws {
+        // 1. MagSafeChargingBanner in Dynamic Island mode stays <= 56pt
+        let bannerHosting = NSHostingView(
+            rootView: MagSafeChargingBanner(batteryLevel: 82, displayMode: .dynamicIsland)
+                .frame(width: 360)
+        )
+        XCTAssertLessThanOrEqual(bannerHosting.fittingSize.height, 56.5)
+
+        // 2. NotchVolumeHUDView renders at 26pt height in both Modern and Pixel modes
+        suite.set(IslandUITheme.modern.rawValue, forKey: SettingsKey.islandUITheme)
+        let modernVol = NSHostingView(
+            rootView: NotchVolumeHUDView(displayMode: .dynamicIsland).defaultAppStorage(suite)
+        )
+        XCTAssertEqual(modernVol.fittingSize.height, 26, accuracy: 0.5)
+
+        suite.set(IslandUITheme.pixel.rawValue, forKey: SettingsKey.islandUITheme)
+        let pixelVol = NSHostingView(
+            rootView: NotchVolumeHUDView(displayMode: .dynamicIsland).defaultAppStorage(suite)
+        )
+        XCTAssertEqual(pixelVol.fittingSize.height, 26, accuracy: 0.5)
+
+        // 3. DynamicIslandInlineLyricPillView renders cleanly in both Pixel and Modern modes
+        configureMusic(artworkColor: NSColor(srgbRed: 0.0, green: 0.35, blue: 1.0, alpha: 1.0))
+        NowPlayingManager.shared.lyrics = [LyricLine(id: 0, timestamp: 0, text: "Pixel neon sky")]
+        NowPlayingManager.shared.currentLyricIndex = 0
+        for theme in [IslandUITheme.modern.rawValue, IslandUITheme.pixel.rawValue] {
+            suite.set(theme, forKey: SettingsKey.islandUITheme)
+            let pill = DynamicIslandInlineLyricPillView(
+                nowPlaying: NowPlayingManager.shared,
+                mascotSource: "claude",
+                mascotStatus: .idle,
+                mascotSize: 20,
+                width: 240
+            )
+            .environment(\.mascotStaticTime, 5.2)
+            .defaultAppStorage(suite)
+            let img = try OffscreenRender.hosted(pill, size: CGSize(width: 240, height: 34), scale: 2, passes: 3)
+            XCTAssertGreaterThan(img.width, 0)
+        }
+    }
+
     // MARK: - Helpers
 
     private func configureMusic(artworkColor: NSColor) {

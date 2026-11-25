@@ -13,13 +13,16 @@ struct CyberQuickPromptView: View {
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     private let signals = IslandSignals.shared
 
+    private var isPixel: Bool {
+        islandUITheme == IslandUITheme.pixel.rawValue
+    }
+
     private var accentColor: Color {
         _ = signals.isPlaying
         _ = signals.albumPaletteRevision
         _ = syncThemeWithAlbumArt
-        let isModern = islandUITheme != IslandUITheme.pixel.rawValue
         return AppColorTheme.readableOnDark(
-            AppColorTheme.accent(for: musicHUDProgressColor, isModern: isModern)
+            AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
         )
     }
 
@@ -50,12 +53,20 @@ struct CyberQuickPromptView: View {
                         .fill(accentColor)
                         .frame(width: 4.5, height: 4.5)
                     Text("DISPATCH TO: \(targetAgentName)")
-                        .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                        .font(.system(size: 7.5, weight: .bold, design: isPixel ? .monospaced : .rounded))
                         .foregroundStyle(accentColor)
                 }
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1.5)
-                .background(RoundedRectangle(cornerRadius: 3).fill(accentColor.opacity(0.12)))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    Group {
+                        if isPixel {
+                            RoundedRectangle(cornerRadius: 3).fill(accentColor.opacity(0.12))
+                        } else {
+                            Capsule().fill(accentColor.opacity(0.14))
+                        }
+                    }
+                )
 
                 Spacer()
 
@@ -81,7 +92,7 @@ struct CyberQuickPromptView: View {
 
                 TextField("Type instruction or prompt for active agent...", text: $promptText)
                     .textFieldStyle(.plain)
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                    .font(.system(size: 10.5, weight: .medium, design: isPixel ? .monospaced : .rounded))
                     .foregroundStyle(Color.white)
                     .focused($isFieldFocused)
                     .onSubmit {
@@ -93,33 +104,52 @@ struct CyberQuickPromptView: View {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 9))
                         Text("RUN")
-                            .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                            .font(.system(size: 7.5, weight: .bold, design: isPixel ? .monospaced : .rounded))
                     }
                     .foregroundStyle(AppColorTheme.contrastingForeground(on: accentColor))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(RoundedRectangle(cornerRadius: 3.5).fill(accentColor))
+                    .padding(.horizontal, isPixel ? 7 : 9)
+                    .padding(.vertical, 3.5)
+                    .background(
+                        Group {
+                            if isPixel {
+                                RoundedRectangle(cornerRadius: 3.5).fill(accentColor)
+                            } else {
+                                Capsule().fill(accentColor)
+                            }
+                        }
+                    )
                 }
                 .buttonStyle(.plain)
                 .disabled(promptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isSubmitting)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 5)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
             .background(
-                RoundedRectangle(cornerRadius: 4.5)
-                    .fill(Pixel16Palette.slot)
-                    .pixel16Bevel(raised: false, fillColor: Pixel16Palette.slot)
+                Group {
+                    if isPixel {
+                        RoundedRectangle(cornerRadius: 4.5)
+                            .fill(Pixel16Palette.slot)
+                            .pixel16Bevel(raised: false, fillColor: Pixel16Palette.slot)
+                    } else {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.black.opacity(0.45))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                    .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.8)
+                            )
+                    }
+                }
             )
 
             // Bottom Hints & Status Feedback
             HStack {
                 if let feedback = statusFeedback {
                     Text(feedback)
-                        .font(.system(size: 7.5, weight: .bold, design: .monospaced))
+                        .font(.system(size: 7.5, weight: .bold, design: isPixel ? .monospaced : .rounded))
                         .foregroundStyle(accentColor)
                 } else {
                     Text("Press Enter to send · Esc to cancel")
-                        .font(.system(size: 7, design: .monospaced))
+                        .font(.system(size: 7, design: isPixel ? .monospaced : .rounded))
                         .foregroundStyle(Color.white.opacity(0.45))
                 }
                 Spacer()
@@ -128,12 +158,23 @@ struct CyberQuickPromptView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
         .background(
-            RoundedRectangle(cornerRadius: 5)
-                .fill(Pixel16Palette.chassis)
-                .pixel16Bevel(raised: false, fillColor: Pixel16Palette.chassis)
+            Group {
+                if isPixel {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(Pixel16Palette.chassis)
+                        .pixel16Bevel(raised: false, fillColor: Pixel16Palette.chassis)
+                } else {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.05))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.10), lineWidth: 0.8)
+                        )
+                }
+            }
         )
-        .padding(.horizontal, 6)
-        .padding(.bottom, 6)
+        .padding(.horizontal, isPixel ? 6 : 12)
+        .padding(.bottom, isPixel ? 6 : 10)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 isFieldFocused = true

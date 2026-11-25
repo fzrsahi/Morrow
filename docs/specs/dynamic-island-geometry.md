@@ -20,10 +20,10 @@ This specification is normative when creating or modifying Dynamic Island UI in 
 | **3. Idle + Music (No Lyrics)** | `116 – 148 pt` | `160 pt` | `34 pt` | `Capsule` | `[20pt Mascot] \| [18pt Art + Spectrum]` |
 | **4. Agent Active (No Music)** | `180 – 250 pt` | `260 pt` | `34 pt` | `Capsule` | `[Mascot + Thinking/Tool/Quota <= 110pt] \| [Standby <= 76pt]` |
 | **5. Agent Active + Music (No Lyrics)** | `210 – 270 pt` | `280 pt` | `34 pt` | `Capsule` | `[Mascot + Thinking/Tool <= 110pt] \| [Art + Spectrum + 1 Badge <= 88pt]` |
-| **6. Right-Wing Hover (Music Controls)** | `220 – 300 pt` | `320 pt` | `34 pt` | `Capsule` | `[Mascot] \| [Art + Controls + Track]` |
+| **6. Right-Wing Hover (Music Controls)** | `220 – 300 pt` | `320 pt` | `34 pt` | `Capsule` | `[Mascot] \| [Art + Track Marquee + Spectrum]` |
 | **7. Inline Lyrics (Idle + Music + Lyrics)** | `180 – 320 pt` | `min(340 pt, screenWidth * 0.35)` | `34 pt` | `Capsule` | `[19pt Mascot] \| [Displayed Lyric] [18pt Art]` |
 | **8. Toast — MagSafe Charging** | `360 pt` | `380 pt` | `48 – 56 pt` | `RoundedRectangle(18)` | Flush charging banner |
-| **9. Toast — Prayer Mini Peek** | `460 pt` | `500 pt` | `60 – 76 pt` | `RoundedRectangle(18)` | Flush Sun-Arc banner |
+| **9. Toast — Prayer Mini Peek** | `460 pt` | `500 pt` | `140 – 156 pt` | `RoundedRectangle(18)` | Flush Sun-Arc banner |
 | **10. Volume HUD Overlay** | `172 pt` | `188 pt` | `26 pt` | `Capsule` | Separate pill `4 pt` below main island |
 | **11. Expanded HUD / Prompt Cards** | `680 – 720 pt` | `min(740 pt, screenWidth - 40 pt)` | Clamped to `screen.visibleFrame.height` | `RoundedRectangle(24)` | Unified continuous header (`H = 32 pt`, `14 pt` horizontal pad, no center cutout) |
 

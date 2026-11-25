@@ -1592,25 +1592,10 @@ struct NotchPanelView: View {
     @ViewBuilder
     private var panelChromeBackground: some View {
         if displayMode == .dynamicIsland {
-            let isFlushMagSafeToast = isToastOnly && signals.showChargingBanner && !shouldShowExpanded
-            if isFlushMagSafeToast {
-                let accent = chargingAmbientColor
-                dynamicIslandShape
-                    .fill(Color.black)
-                    .overlay(
-                        dynamicIslandShape
-                            .fill(
-                                LinearGradient(
-                                    colors: [.clear, accent.opacity(0.11), accent.opacity(0.20)],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                    )
-            } else {
-                dynamicIslandShape
-                    .fill(Color.black)
-            }
+            dynamicIslandShape
+                .fill(Color.black)
+                .overlay(chargingAmbientLayer(for: dynamicIslandShape))
+                .overlay(prayerAmbientLayer(for: dynamicIslandShape))
         } else {
             let shape = NotchPanelShape(
                 topExtension: currentTopExt,
@@ -2116,7 +2101,7 @@ struct NotchPanelView: View {
 
             // NOTCH VOLUME HUD: Sleek dynamic island pill when scrolling volume
             if signals.isVolumeHUDVisible {
-                NotchVolumeHUDView(volumeManager: volumeManager)
+                NotchVolumeHUDView(volumeManager: volumeManager, displayMode: displayMode)
                     .padding(.top, 4)
                     .transition(.asymmetric(
                         insertion: .scale(scale: 0.88, anchor: .top).combined(with: .opacity).combined(with: .move(edge: .top)),

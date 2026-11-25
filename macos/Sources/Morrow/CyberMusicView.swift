@@ -1276,15 +1276,25 @@ struct IntegratedNotchChinLyricView: View {
                         removal: .opacity.combined(with: .offset(y: -3))
                     ))
 
-                CyberAudioSpectrumView(
-                    barCount: 4,
-                    isPlaying: nowPlaying.isPlaying,
-                    barWidth: 1.8,
-                    segmentHeight: 1.5,
-                    segmentSpacing: 0.7,
-                    palette: RetroSpectrumPalette.forThemeKey(musicHUDProgressColor)
-                )
-                .frame(width: 14)
+                if isPixel {
+                    CyberAudioSpectrumView(
+                        barCount: 4,
+                        isPlaying: nowPlaying.isPlaying,
+                        barWidth: 1.8,
+                        segmentHeight: 1.5,
+                        segmentSpacing: 0.7,
+                        palette: RetroSpectrumPalette.forThemeKey(musicHUDProgressColor)
+                    )
+                    .frame(width: 14)
+                } else {
+                    ModernAudioSpectrumView(
+                        barCount: 3,
+                        isPlaying: nowPlaying.isPlaying,
+                        barWidth: 2.0,
+                        maxHeight: 11.0,
+                        color: themeAccentColor
+                    )
+                }
             }
             .padding(.horizontal, 12)
             .frame(width: max(120, width), height: 26)
@@ -1313,6 +1323,11 @@ struct DynamicIslandInlineLyricPillView: View {
     @AppStorage(SettingsKey.floatingLyricTextColor) private var floatingLyricTextColor = SettingsDefaults.floatingLyricTextColor
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
     @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
+    @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
+
+    private var isPixel: Bool {
+        islandUITheme == IslandUITheme.pixel.rawValue
+    }
 
     private var accentColor: Color {
         if AppColorTheme.isAlbumSyncActive(for: musicHUDProgressColor)
@@ -1322,10 +1337,24 @@ struct DynamicIslandInlineLyricPillView: View {
         let pc = MusicProgressColor(rawValue: musicHUDProgressColor) ?? .theme
         if pc != .theme && pc != .album {
             return AppColorTheme.readableOnDark(
-                AppColorTheme.accent(for: musicHUDProgressColor, isModern: true)
+                AppColorTheme.accent(for: musicHUDProgressColor, isModern: !isPixel)
             )
         }
-        return Color(red: 0.18, green: 0.83, blue: 0.75) // Native Dynamic Island Cyan (#2DD4BF)
+        return isPixel
+            ? Color(red: 0.0, green: 0.96, blue: 0.83)
+            : Color(red: 0.18, green: 0.83, blue: 0.75) // Native Dynamic Island Cyan (#2DD4BF)
+    }
+
+    private var resolvedTextColor: Color {
+        if (syncThemeWithAlbumArt || floatingLyricTextColor == "album" || musicHUDProgressColor == "album")
+            && nowPlaying.isPlaying && nowPlaying.artworkImage != nil {
+            return AppColorTheme.readableOnDark(nowPlaying.albumPalette.primary)
+        }
+        if let custom = FloatingLyricTextColor(rawValue: floatingLyricTextColor),
+           floatingLyricTextColor != SettingsDefaults.floatingLyricTextColor {
+            return custom.color
+        }
+        return Color.white.opacity(0.95)
     }
 
     private var activeFontDesign: Font.Design {
@@ -1384,12 +1413,22 @@ struct DynamicIslandInlineLyricPillView: View {
                     .fill(Color.white.opacity(0.18))
                     .frame(width: 1, height: 14)
 
-                Text(displayText)
-                    .font(.system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign))
-                    .foregroundStyle(Color.white.opacity(0.95))
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                if isPixel {
+                    Text(displayText.uppercased())
+                        .font(.system(size: min(10.5, max(9.5, CGFloat(floatingLyricFontSize) - 0.5)), weight: .bold, design: .monospaced))
+                        .tracking(0.5)
+                        .foregroundStyle(resolvedTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                } else {
+                    Text(displayText)
+                        .font(.system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign))
+                        .foregroundStyle(resolvedTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
 
                 ZStack {
                     CompactAlbumArtworkThumbnail(
@@ -1397,11 +1436,12 @@ struct DynamicIslandInlineLyricPillView: View {
                         size: 18,
                         cornerRadius: 4.5,
                         accentColor: accentColor,
-                        borderOpacity: 0.24
+                        borderOpacity: 0
                     )
                     RoundedRectangle(cornerRadius: 5.5, style: .continuous)
                         .trim(from: 0, to: progressFraction)
-                        .stroke(accentColor.opacity(0.75), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                        .stroke(accentColor.opacity(0.82), style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
                         .frame(width: 20, height: 20)
                 }
                 .frame(width: 20, height: 20)
