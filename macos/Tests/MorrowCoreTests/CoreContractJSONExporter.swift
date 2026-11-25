@@ -2,9 +2,10 @@ import Foundation
 @testable import MorrowCore
 
 /// Exports ``CoreContractCases`` into `fixtures/core/reducer.json` and
-/// `fixtures/core/attention.json`: the core contract a port must reproduce,
-/// `reduce(sessions, event) -> (sessions', effects, facts)` and
-/// `attention(moment, subject) -> intents`.
+/// `fixtures/core/attention.json` and `fixtures/core/settle.json`: the core
+/// contract a port must reproduce, `reduce(sessions, event) -> (sessions',
+/// effects, facts)`, `attention(moment, subject) -> intents` and
+/// `settle(intents, context) -> decision`.
 ///
 /// Every case is run through the Swift code at export (and again by
 /// ``CoreContractTests``), so the files record what Swift does, not what a
@@ -20,6 +21,7 @@ import Foundation
 enum CoreContractJSONExporter {
     static let reducerFilename = "reducer.json"
     static let attentionFilename = "attention.json"
+    static let settleFilename = "settle.json"
 
     /// `SessionSnapshot` state the projection leaves out: set outside the
     /// reducer (git, harness, transcript tailing, AppState), identities
@@ -263,21 +265,23 @@ enum CoreContractJSONExporter {
     }
 
     static func intentsDocument(_ intents: AttentionIntents) -> [String: Any] {
-        var followUp: Any = NSNull()
-        switch intents.followUp {
-        case .trackCompletion(let turnFailed)?:
-            followUp = ["type": "trackCompletion", "turn_failed": turnFailed]
-        case .restartWait(let kind)?:
-            followUp = ["type": "restartWait", "kind": kind.rawValue]
-        case nil:
-            break
-        }
         return [
             "sound": orNull(intents.sound),
             "completion": intents.completion.map { ["turn_failed": $0.turnFailed] } ?? NSNull(),
             "push": intents.push.map { ["kind": pushKindDocument($0.kind), "smart_suppressible": $0.smartSuppressible] } ?? NSNull(),
-            "follow_up": followUp,
+            "follow_up": followUpDocument(intents.followUp),
         ]
+    }
+
+    static func followUpDocument(_ followUp: FollowUpIntent?) -> Any {
+        switch followUp {
+        case .trackCompletion(let turnFailed)?:
+            return ["type": "trackCompletion", "turn_failed": turnFailed]
+        case .restartWait(let kind)?:
+            return ["type": "restartWait", "kind": kind.rawValue]
+        case nil:
+            return NSNull()
+        }
     }
 
     static func pushKindDocument(_ kind: AttentionPushKind) -> [String: Any] {
@@ -320,6 +324,39 @@ enum CoreContractJSONExporter {
         }
     }
 
+    static func settleContextDocument(_ context: AttentionPolicyTests.Context) -> [String: Any] {
+        [
+            "sound_enabled": context.soundEnabled,
+            "audible_cues": context.audibleCues.sorted(),
+            "quiet_hours": context.quietHours,
+            "mute_when_away": context.muteWhenAway,
+            "scene_quiet": context.sceneQuiet,
+            "completion_style": context.completionStyle.rawValue,
+            "push_enabled": context.pushEnabled,
+            "session_in_front": context.sessionInFront,
+        ]
+    }
+
+    static func decisionDocument(_ decision: AttentionDecision) -> [String: Any] {
+        return [
+            "sound": orNull(decision.sound),
+            "completion": decision.completion.map { completion -> [String: Any] in
+                let presentation: String
+                switch completion.presentation {
+                case .statusOnly: presentation = "status_only"
+                case .glance: presentation = "glance"
+                case .card: presentation = "card"
+                }
+                return ["turn_failed": completion.turnFailed, "presentation": presentation]
+            } ?? NSNull(),
+            "push": decision.push.map { [
+                "kind": pushKindDocument($0.kind),
+                "smart_suppressed": $0.smartSuppressed,
+            ] } ?? NSNull(),
+            "follow_up": followUpDocument(decision.followUp),
+        ]
+    }
+
     // MARK: - Bundles
 
     static func reducerDocument() throws -> [String: Any] {
@@ -344,8 +381,26 @@ enum CoreContractJSONExporter {
         ]
     }
 
+    static func settleDocument() -> [String: Any] {
+        [
+            "contract": "settle",
+            "cases": AttentionPolicyTests.settleRows.map { row in
+                [
+                    "name": row.rule,
+                    "intents": intentsDocument(row.intents),
+                    "context": settleContextDocument(row.context),
+                    "decision": decisionDocument(AttentionPolicy.settle(row.intents, context: row.context.make())),
+                ] as [String: Any]
+            },
+        ]
+    }
+
     static func documents() throws -> [(String, [String: Any])] {
-        [(reducerFilename, try reducerDocument()), (attentionFilename, attentionDocument())]
+        [
+            (reducerFilename, try reducerDocument()),
+            (attentionFilename, attentionDocument()),
+            (settleFilename, settleDocument()),
+        ]
     }
 
     static func exportAll(to fixturesRoot: URL) throws {
