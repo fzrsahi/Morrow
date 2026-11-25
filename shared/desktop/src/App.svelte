@@ -55,9 +55,7 @@
   } from './lib/completion';
   import {
     COLLAPSED_SIZE,
-    CLOSE_TRANSITION,
     COLLAPSE_DELAY_MS,
-    OPEN_TRANSITION,
     OPEN_WIDTH,
     CollapseGate,
     DragGate,
@@ -65,6 +63,7 @@
     QuitGate,
     islandShape,
     resolveVariant,
+    springTransition,
     snapOffset,
     type DisplayMode,
     type Offset,
@@ -118,7 +117,14 @@
     type LyricLine,
     type Track,
   } from './lib/music';
-  import { PALETTE, cssVariables, type Theme } from './lib/tokens';
+  import {
+    MOTION,
+    PALETTE,
+    cssVariables,
+    isAccent,
+    type Accent,
+    type Theme,
+  } from './lib/tokens';
   import { VOLUME_HUD_MS, VolumeHudGate, setVolumePlan, volumeSupported, type Volume } from './lib/volume';
   import type {
     CapabilityRow,
@@ -139,6 +145,15 @@
   // #202: the theme is a view state, not a URL flag. It loads from the same
   // settings document as the filter and changes live when Settings writes it.
   let theme = $state<Theme>('pixel');
+  // #465: the Appearance page's accent and speed are view state like the theme.
+  let accent = $state<Accent>('cyan');
+  let animationSpeed = $state(1);
+  let openTransition = $derived(
+    springTransition(MOTION.open.response, MOTION.open.damping, animationSpeed),
+  );
+  let closeTransition = $derived(
+    springTransition(MOTION.close.response, MOTION.close.damping, animationSpeed),
+  );
   let agents = $state<AgentsSettings>({ ...DEFAULT_AGENTS });
   let cardDetails = $derived({
     showDetails: agents.showAgentDetails,
@@ -150,11 +165,11 @@
   });
   let cardTheme = $derived(agentsTheme(agents.agentsHUDTheme));
   const style = $derived([
-    ...Object.entries(cssVariables(agents.contentFontSize, theme)).map(([key, value]) => `${key}:${value}`),
-    `--open-dur:${OPEN_TRANSITION.durationMs}ms`,
-    `--open-ease:${OPEN_TRANSITION.css}`,
-    `--close-dur:${CLOSE_TRANSITION.durationMs}ms`,
-    `--close-ease:${CLOSE_TRANSITION.css}`,
+    ...Object.entries(cssVariables(agents.contentFontSize, theme, accent)).map(([key, value]) => `${key}:${value}`),
+    `--open-dur:${openTransition.durationMs}ms`,
+    `--open-ease:${openTransition.css}`,
+    `--close-dur:${closeTransition.durationMs}ms`,
+    `--close-ease:${closeTransition.css}`,
     `--panel-w:${OPEN_WIDTH}px`,
   ].join(';'));
 
@@ -582,7 +597,7 @@
     // Plan §6: the OS window is at its final size before the animation.
     for (const size of fit.open(final)) reportFit(size, true);
     expanded = true;
-    openTimer = setTimeout(settleOpen, OPEN_TRANSITION.durationMs + 40);
+    openTimer = setTimeout(settleOpen, untrack(() => openTransition.durationMs) + 40);
   }
 
   function closePanel() {
@@ -601,7 +616,7 @@
       closing = false;
       openHeight = null;
       for (const size of fit.closed(collapsed)) reportFit(size, false);
-    }, CLOSE_TRANSITION.durationMs + 40);
+    }, untrack(() => closeTransition.durationMs) + 40);
   }
 
   function onPointerEnter() {
@@ -1060,6 +1075,8 @@
         const appearance = appearanceFromSettings(stored);
         theme = appearance.theme;
         displayMode = appearance.displayMode;
+        accent = isAccent(appearance.accent) ? appearance.accent : 'cyan';
+        animationSpeed = appearance.animationSpeed;
         reminders.configure(
           followUpMinutesFromSettings((stored as Record<string, unknown>)[SETTINGS_KEY_FOLLOW_UP_MINUTES]),
           performance.now(),
@@ -1078,6 +1095,8 @@
       agents = agentsFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
+      accent = isAccent(appearance.accent) ? appearance.accent : 'cyan';
+      animationSpeed = appearance.animationSpeed;
       // City/method/correction changes invalidate the card's schedule.
       void readPrayer();
       reminders.configure(

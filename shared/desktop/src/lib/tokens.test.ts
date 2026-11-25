@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test';
-import { COLLAPSED, MODERN_PALETTE, MOTION, PALETTE, cssVariables, typeScale } from './tokens';
+import {
+  ACCENTS,
+  COLLAPSED,
+  MODERN_PALETTE,
+  MOTION,
+  PALETTE,
+  cssVariables,
+  isAccent,
+  typeScale,
+} from './tokens';
 
 describe('Pixel16 design tokens', () => {
   test('palette is copied 1:1 from the canvas reference', () => {
@@ -86,5 +95,15 @@ describe('Pixel16 design tokens', () => {
     // Both themes keep the shared #180 type scale and palette.
     expect(modern['--f']).toBe(pixel['--f']);
     expect(modern['--cyan']).toBe(PALETTE.cyan);
+  });
+
+  test('the accent picker recolours the shared accent variable only (#465)', () => {
+    expect(ACCENTS.cyan).toBe(PALETTE.cyan);
+    expect(isAccent('violet')).toBe(true);
+    expect(isAccent('neon')).toBe(false);
+    const violet = cssVariables(11, 'pixel', 'violet');
+    expect(violet['--cyan']).toBe('#A68CF2');
+    expect(violet['--amber']).toBe(PALETTE.amber);
+    expect(violet['--f']).toBe(cssVariables(11)['--f']);
   });
 });
