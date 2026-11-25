@@ -143,13 +143,15 @@
     }
   }
 
-  async function run(action: () => Promise<unknown>, reload = true) {
+  async function run(action: () => Promise<unknown>, reload = true): Promise<boolean> {
     busy = true;
     try {
       await action();
       if (reload) await load();
+      return true;
     } catch (cause) {
       error = String(cause);
+      return false;
     } finally {
       busy = false;
     }

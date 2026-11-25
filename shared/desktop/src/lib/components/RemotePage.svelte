@@ -10,7 +10,7 @@
     statuses: RemoteStatuses;
     busy: boolean;
     t: (key: string) => string;
-    onSaveHost: (host: RemoteHost) => void;
+    onSaveHost: (host: RemoteHost) => Promise<boolean>;
     onRemoveHost: (id: string) => void;
     onConnect: (id: string) => void;
     onDisconnect: (id: string) => void;
@@ -46,10 +46,11 @@
     draft.port = Number.isFinite(value) && value > 0 ? Math.trunc(value) : null;
   }
 
-  function save() {
+  async function save() {
     if (!draft.name.trim() || !draft.host.trim()) return;
-    onSaveHost({ ...draft });
-    draft = blankHost();
+    // Clear only on success: a rejected host must keep the user's entry so
+    // the error shown by SettingsApp can be acted on.
+    if (await onSaveHost({ ...draft })) draft = blankHost();
   }
 
   function edit(host: RemoteHost) {
@@ -83,7 +84,11 @@
             {t('remote_disconnect')}
           </button>
         {:else}
-          <button class="b" disabled={busy} onclick={() => onConnect(host.id)}>
+          <button
+            class="b"
+            disabled={busy || statuses[host.id]?.state === 'connecting'}
+            onclick={() => onConnect(host.id)}
+          >
             {t('remote_connect')}
           </button>
         {/if}

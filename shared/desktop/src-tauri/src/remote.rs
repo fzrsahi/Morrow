@@ -8,7 +8,7 @@
 //! function here; only the commands and the pump thread touch a process or a
 //! clock. No new dependency and no second remote engine.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -35,12 +35,12 @@ pub const REMOTE_STATUS_EVENT: &str = "remote-status-changed";
 /// What the card draws. `Failed` carries the engine's message, including the
 /// folder/socket refusal details, unmodified.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
+#[serde(tag = "state", rename_all = "lowercase")]
 pub enum RemoteStatus {
     Disconnected,
     Connecting,
     Connected,
-    Failed(String),
+    Failed { message: String },
 }
 
 impl From<&TunnelStatus> for RemoteStatus {
@@ -49,12 +49,13 @@ impl From<&TunnelStatus> for RemoteStatus {
             TunnelStatus::Disconnected => Self::Disconnected,
             TunnelStatus::Connecting => Self::Connecting,
             TunnelStatus::Connected => Self::Connected,
-            TunnelStatus::Failed(message) => Self::Failed(message.clone()),
+            TunnelStatus::Failed(message) => Self::Failed { message: message.clone() },
         }
     }
 }
 
 static DISCONNECTED: TunnelStatus = TunnelStatus::Disconnected;
+static CONNECTING: TunnelStatus = TunnelStatus::Connecting;
 
 /// Read the host list from one settings document. A missing key or a malformed
 /// value is an empty list, never a crash on startup.
@@ -106,6 +107,9 @@ pub struct RemoteManager {
     plugin_source: String,
     hosts: Vec<SshHost>,
     tunnels: BTreeMap<String, RemoteTunnel>,
+    /// Hosts whose connect worker holds the lock. Kept outside the engine so
+    /// the card sees Connecting immediately and a second click is a no-op.
+    pending: BTreeSet<String>,
 }
 
 impl RemoteManager {
@@ -141,6 +145,7 @@ impl RemoteManager {
             plugin_source,
             hosts,
             tunnels: BTreeMap::new(),
+            pending: BTreeSet::new(),
         }
     }
 
@@ -154,11 +159,14 @@ impl RemoteManager {
         self.hosts
             .iter()
             .map(|host| {
-                let status = self
-                    .tunnels
-                    .get(&host.id)
-                    .map(RemoteTunnel::status)
-                    .unwrap_or(&DISCONNECTED);
+                let status = if self.pending.contains(&host.id) {
+                    &CONNECTING
+                } else {
+                    self.tunnels
+                        .get(&host.id)
+                        .map(RemoteTunnel::status)
+                        .unwrap_or(&DISCONNECTED)
+                };
                 (host.id.clone(), RemoteStatus::from(status))
             })
             .collect()
@@ -212,6 +220,19 @@ impl RemoteManager {
 
     /// Called on a worker thread: the engine's `connect` runs ssh probes and
     /// waits for the socket, which must not freeze the Settings window.
+    /// Record an in-flight connect. Returns false when one is already running.
+    pub fn begin_connect(&mut self, id: &str) -> bool {
+        if self.pending.contains(id) {
+            return false;
+        }
+        self.pending.insert(id.to_owned());
+        true
+    }
+
+    pub fn end_connect(&mut self, id: &str) {
+        self.pending.remove(id);
+    }
+
     pub fn finish_connect(&mut self, id: &str) {
         let Ok(host) = self.host(id).cloned() else {
             return;
@@ -296,8 +317,12 @@ pub fn remote_connect(
 ) -> Result<RemoteStatus, String> {
     let state = Arc::clone(&manager);
     {
-        let manager = lock(&state)?;
+        let mut manager = lock(&state)?;
         manager.validate(&id)?;
+        if !manager.begin_connect(&id) {
+            return Ok(RemoteStatus::Connecting);
+        }
+        emit_statuses(&app, &manager);
     }
     let worker = Arc::clone(&state);
     let worker_app = app.clone();
@@ -305,6 +330,7 @@ pub fn remote_connect(
     thread::spawn(move || {
         if let Ok(mut manager) = lock(&worker) {
             manager.finish_connect(&worker_id);
+            manager.end_connect(&worker_id);
             emit_statuses(&worker_app, &manager);
         }
     });
@@ -367,6 +393,26 @@ mod tests {
     }
 
     #[test]
+    fn remote_status_serializes_to_the_tagged_frontend_shape() {
+        assert_eq!(
+            serde_json::to_value(RemoteStatus::Disconnected).unwrap(),
+            serde_json::json!({ "state": "disconnected" })
+        );
+        assert_eq!(
+            serde_json::to_value(RemoteStatus::Connecting).unwrap(),
+            serde_json::json!({ "state": "connecting" })
+        );
+        assert_eq!(
+            serde_json::to_value(RemoteStatus::Connected).unwrap(),
+            serde_json::json!({ "state": "connected" })
+        );
+        assert_eq!(
+            serde_json::to_value(RemoteStatus::Failed { message: "no route".into() }).unwrap(),
+            serde_json::json!({ "state": "failed", "message": "no route" })
+        );
+    }
+
+    #[test]
     fn hosts_from_value_skips_a_malformed_list() {
         assert!(hosts_from_value(&serde_json::json!({})).is_empty());
         assert!(
@@ -416,7 +462,7 @@ mod tests {
         manager.finish_connect("a");
         assert_eq!(
             manager.statuses().get("a"),
-            Some(&RemoteStatus::Failed("invalid host".into()))
+            Some(&RemoteStatus::Failed { message: "invalid host".into() })
         );
     }
 
@@ -432,7 +478,7 @@ mod tests {
         );
         assert_eq!(
             RemoteStatus::from(&TunnelStatus::Failed("no route".into())),
-            RemoteStatus::Failed("no route".into())
+            RemoteStatus::Failed { message: "no route".into() }
         );
         let mut manager = RemoteManager::with_options(
             settings_dir("statuses"),
