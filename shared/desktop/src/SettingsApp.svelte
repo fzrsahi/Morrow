@@ -24,11 +24,14 @@
   } from './lib/prayer';
   import {
     DEFAULT_APPEARANCE,
+    DEFAULT_GESTURES,
     SETTINGS_KEYS,
     SETTINGS_NAV,
     appearanceFromSettings,
+    gesturesFromSettings,
     pageLabel,
     type AppearanceSettings,
+    type GestureSettings,
     type SettingsPageId,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
@@ -100,6 +103,7 @@
     return null;
   });
   let followUpMinutes = $state(1);
+  let gestures = $state<GestureSettings>({ ...DEFAULT_GESTURES });
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -129,6 +133,7 @@
       cues = sound;
       settingsFile = file;
       appearance = appearanceFromSettings(stored);
+      gestures = gesturesFromSettings(stored);
       prayer = prayerSettingsFromSettings(stored);
       cities = availableCities;
       hosts = remoteHosts;
@@ -178,6 +183,12 @@
 
   function saveFollowUpMinutes(key: string, value: number) {
     followUpMinutes = value;
+    void run(() => invoke('settings_set', { key, value }), false);
+  }
+
+  // Parity #3: the island reads these keys on the next settings-changed event.
+  function saveGestureSetting(key: string, value: boolean) {
+    gestures = { ...gestures, [key]: value };
     void run(() => invoke('settings_set', { key, value }), false);
   }
 
@@ -277,7 +288,13 @@
           onChange={(key, value) => run(() => invoke('prayer_settings_set', { key, value }))}
         />
       {:else if page === 'behavior'}
-        <BehaviorPage {t} minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
+        <BehaviorPage
+          {t}
+          minutes={followUpMinutes}
+          {gestures}
+          onChange={saveFollowUpMinutes}
+          onGestureChange={saveGestureSetting}
+        />
       {:else if page === 'about'}
         <AboutPage {settingsFile} {t} />
       {:else}

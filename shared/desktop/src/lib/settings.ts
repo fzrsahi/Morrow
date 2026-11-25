@@ -131,6 +131,9 @@ export const SETTINGS_KEYS = {
   language: 'appLanguage',
   sessionFilter: 'sessionFilter',
   sessionDensity: 'sessionDensity',
+  /** Parity #3 — the same keys as Swift `SettingsKey.notchScroll*`. */
+  scrollVolume: 'notchScrollVolumeControl',
+  swipeTabs: 'notchScrollTabSwitch',
   /** #307 — the four keys owned by the Prayer settings page. */
   prayerCityId: 'prayerManualCityId',
   prayerMethod: 'prayerCalculationMethod',
@@ -244,6 +247,20 @@ export function sessionFilterFromSettings(value: unknown): SessionFilter {
 /// that build on it; a fresh install uses the 34 pt compact rows.
 export function sessionDensityFromSettings(value: unknown): SessionDensity {
   return chosen((object(value) ?? {})[SETTINGS_KEYS.sessionDensity], DENSITIES, 'compact');
+}
+
+/** Parity #3 — the two island gestures, both on by default like Swift's
+ *  `SettingsDefaults.notchScroll*`. A written `false` is the off switch. */
+export type GestureSettings = { scrollVolume: boolean; swipeTabs: boolean };
+
+export const DEFAULT_GESTURES: GestureSettings = { scrollVolume: true, swipeTabs: true };
+
+export function gesturesFromSettings(value: unknown): GestureSettings {
+  const stored = object(value) ?? {};
+  return {
+    scrollVolume: flag(stored[SETTINGS_KEYS.scrollVolume], DEFAULT_GESTURES.scrollVolume),
+    swipeTabs: flag(stored[SETTINGS_KEYS.swipeTabs], DEFAULT_GESTURES.swipeTabs),
+  };
 }
 
 export type DescribedCapability = {

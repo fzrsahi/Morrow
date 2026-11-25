@@ -8,13 +8,16 @@
     SETTINGS_KEY_FOLLOW_UP_MINUTES,
     followUpMinutesFromSettings,
   } from '../reminders';
+  import { SETTINGS_KEYS, type GestureSettings } from '../settings';
 
   type Props = {
     minutes: number;
     t: (key: string) => string;
+    gestures: GestureSettings;
     onChange: (key: string, value: number) => void;
+    onGestureChange: (key: string, value: boolean) => void;
   };
-  let { minutes, t, onChange }: Props = $props();
+  let { minutes, t, gestures, onChange, onGestureChange }: Props = $props();
 
   const choices = FOLLOW_UP_CHOICES_MINUTES;
   const label = (value: number) =>
@@ -50,6 +53,36 @@
   <p class="hint">
     One notification per waiting approval or question after this interval. “Off” disables
     follow-ups; the current choice persists in the settings file.
+  </p>
+</div>
+<div class="grp">
+  <div>
+    <span class="n">Scroll on the island for volume</span>
+    <span class="s">
+      <button
+        class="sw"
+        class:off={!gestures.scrollVolume}
+        aria-label="Scroll on the island for volume"
+        aria-pressed={gestures.scrollVolume}
+        onclick={() => onGestureChange(SETTINGS_KEYS.scrollVolume, !gestures.scrollVolume)}
+      ></button>
+    </span>
+  </div>
+  <div>
+    <span class="n">Swipe sideways to switch tabs</span>
+    <span class="s">
+      <button
+        class="sw"
+        class:off={!gestures.swipeTabs}
+        aria-label="Swipe sideways to switch tabs"
+        aria-pressed={gestures.swipeTabs}
+        onclick={() => onGestureChange(SETTINGS_KEYS.swipeTabs, !gestures.swipeTabs)}
+      ></button>
+    </span>
+  </div>
+  <p class="hint">
+    Mouse wheel or trackpad over the collapsed island changes system volume. Swipe left or right
+    over the island switches between Agents and Music; the tab switch opens the panel.
   </p>
 </div>
 

@@ -7,7 +7,7 @@ This folder replaces the old implementation plans and progress boards. Those doc
 | [2026-11-16.md](2026-11-16.md) | Fork and rebrand (#47), port specification (#33, PR #49), monorepo restructure (#86, PR #171). |
 | [2026-11-21.md](2026-11-21.md) | Rust workspace and Tauri shell (#87 to #90), Option E rejected (#85, PR #117), endpoint contract (#84, PR #115), packaging decisions (#70). |
 | [2026-11-23.md](2026-11-23.md) | Discovery stack (#232 to #287), installer batches (#288 to #312), prayer, quota and push ports, capability truth (#235) and sound outlet (#241). |
-| [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), multi-display localization keys restored (#454). |
+| [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), multi-display localization keys restored (#454), desktop island wheel volume and swipe tabs (#462). |
 | [2026-11-24.md](2026-11-24.md) | Agent docs and gates, port status map, X11 readers, #399 ports, blocking bridge answer, and desktop Remote shell wiring (#448). |
 | [2026-11-24.md](2026-11-24.md) | Host gates and build docs (#400, #405 to #408), main build repairs (#397, #398, #404), stack merge, docs cleanup, mascot animation gate (#410), Dynamic Island geometry spec (#417), Notch fullscreen concave ears (#424), Dynamic Island geometry fixes (#421), Swift power-banner parity (#399). |
 | [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), Dynamic Island geometry, clipping, and state reactivity (#444), Dynamic Island Pixel/Modern visual polish and notification previews (#445), and CI lane router (#369). |
