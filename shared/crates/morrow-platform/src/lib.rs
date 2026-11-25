@@ -42,6 +42,7 @@ pub mod remote;
 pub mod runner;
 pub mod settings;
 pub mod sound;
+pub mod synthetic_input;
 pub mod system_stats;
 pub mod terminal;
 #[cfg(windows)]
