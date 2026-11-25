@@ -51,6 +51,26 @@ final class NowPlayingLyricSyncTests: XCTestCase {
 
         XCTAssertEqual(manager.trackDuration, 40.0)
     }
+
+    @MainActor
+    func testCurrentLyricDurationReturnsDeltaUntilNextLineAndNilOnLastLine() {
+        let manager = NowPlayingManager.shared
+        manager.lyrics = [
+            LyricLine(id: 0, timestamp: 1.0, text: "Line one"),
+            LyricLine(id: 1, timestamp: 5.5, text: "Line two"),
+            LyricLine(id: 2, timestamp: 9.0, text: "Final line")
+        ]
+        manager.trackDuration = 60.0
+
+        manager.seek(to: 2.0)
+        XCTAssertEqual(manager.currentLyricDuration ?? -1, 4.5, accuracy: 0.01)
+
+        manager.seek(to: 6.0)
+        XCTAssertEqual(manager.currentLyricDuration ?? -1, 3.5, accuracy: 0.01)
+
+        manager.seek(to: 12.0)
+        XCTAssertNil(manager.currentLyricDuration)
+    }
 }
 
 // MARK: - Next-line scheduling from the anchor (idle-perf ticket 08)

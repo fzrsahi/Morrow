@@ -16,11 +16,11 @@ adapters that exist, and the ones that do not are listed at the end.
 | Now Playing | `playerctl` (MPRIS over D-Bus) | `GlobalSystemMediaTransportControlsSessionManager` (WinRT SMTC) | W-006 |
 | Volume | `wpctl` / `pactl` | `IAudioEndpointVolume` (Core Audio) | W-006 |
 | Screen lock | `loginctl … LockedHint` | `WTSSessionInfoEx` → `SessionFlags` | W-007 |
-| Fullscreen | — no reader yet (see below) | `SHQueryUserNotificationState` | W-007 |
+| Fullscreen | `_NET_WM_STATE` via `xprop`, X11 only (see below) | `SHQueryUserNotificationState` | W-007 |
 | Reminders | `notify-send` | `ToastNotificationManager` | W-009 (installed app) |
 | Start at login | `~/.config/autostart/*.desktop` | `HKCU\…\CurrentVersion\Run` via `reg.exe` | W-009 |
 | Jump to terminal | `swaymsg`/`hyprctl`/`wmctrl` by app id | the session's process chain, then `SetForegroundWindow` | W-005 |
-| Pointer | — no reader yet (see below) | `GetCursorPos`, global here | — |
+| Pointer | `xdotool getmouselocation`, X11 only (see below) | `GetCursorPos`, global here | — |
 | Sound effects | `pw-play` / `paplay` / `canberra-gtk-play` | `PlaySoundW` with `SND_ASYNC` | — |
 | Secrets | — no adapter yet (see below) | — no adapter yet (see below) | W-008 |
 
@@ -29,14 +29,16 @@ adapters that exist, and the ones that do not are listed at the end.
 These rows answer `Not supported` with a reason on both OSes, because no module
 behind them exists. They are the list the Capability table used to overstate:
 
-`Synthetic input` · `System stats` · `Geolocation` · `Secret storage` ·
-`Claude credentials` · `Bluetooth (ESP32)` · `Updates`
+`Geolocation` · `Secret storage` · `Claude credentials` ·
+`Bluetooth (ESP32)` · `Updates`
 
-On Linux only, for the same reason: `Fullscreen detection`, `Pointer outside
-the island`, `Terminal visibility`. The Windows adapters for the first two are
-real (`windows/fullscreen.rs`, `windows/pointer.rs`); the Linux readers
-(`_NET_WM_STATE`, `XQueryPointer`, `_NET_ACTIVE_WINDOW`) are not written yet, so
-the commands answer `false`/`None` and the table says so instead of promising.
+On Linux, `Fullscreen detection`, `Pointer outside the island` and
+`Terminal visibility` now have readers in `src/x11.rs`: `_NET_WM_STATE` through
+`xprop`, pointer coordinates through `xdotool getmouselocation`, and the active
+terminal class through `xdotool getactivewindow`. Their probes say `Supported`,
+`Degraded` or `Unsupported` instead of a boolean guess, and the Windows
+adapters for the first two remain real (`windows/fullscreen.rs`,
+`windows/pointer.rs`). A real X11 host run is still pending.
 
 Adding a row back is two steps: write the adapter, then add it to
 `capability::ADAPTERS` — the guard test fails until both are true.
