@@ -60,12 +60,14 @@ public enum IslandDisplayMetrics {
     }
 
     /// Vertical distance below the top screen edge where the panel sits.
+    /// Notch mode always stays docked flush at 0pt (including in fullscreen) so concave
+    /// upper ears remain flush with the top bezel/hardware notch; Dynamic Island floats.
     public static func floatingYOffset(
         displayMode: IslandDisplayMode,
         isFullscreenMode: Bool,
         customTopOffset: Double = floatingPillTopGap
     ) -> Double {
-        (displayMode == .dynamicIsland || isFullscreenMode)
+        displayMode == .dynamicIsland
             ? DynamicIslandTopOffset.clamp(customTopOffset)
             : 0.0
     }

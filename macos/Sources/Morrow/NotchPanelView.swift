@@ -257,9 +257,6 @@ struct NotchPanelView: View {
     private var displayMode: IslandDisplayMode {
         displayModeOverride ?? IslandDisplayMode.resolved(from: islandDisplayModeRaw)
     }
-    private var isFullscreenActive: Bool {
-        isFullscreenOverride ?? appState.isFullscreenMode
-    }
     @AppStorage(SettingsKey.showClaudeQuota) private var showClaudeQuota = SettingsDefaults.showClaudeQuota
     @AppStorage(SettingsKey.claudeQuotaChip) private var claudeQuotaChip = SettingsDefaults.claudeQuotaChip
     @AppStorage(SettingsKey.hapticOnHover) private var hapticOnHover = SettingsDefaults.hapticOnHover
@@ -1426,14 +1423,6 @@ struct NotchPanelView: View {
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             }
-        } else if isFullscreenActive {
-            RoundedRectangle(cornerRadius: 7)
-                .fill(Color.black)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 7)
-                        .stroke(isToastOnly ? Color.clear : Color(red: 0.16, green: 0.19, blue: 0.24), lineWidth: isToastOnly ? 0 : 1)
-                )
-                .shadow(color: Color.black.opacity(0.8), radius: 8, y: 4)
         } else {
             let shape = NotchPanelShape(
                 topExtension: currentTopExt,
@@ -1805,13 +1794,11 @@ struct NotchPanelView: View {
             .clipShape(
                 displayMode == .dynamicIsland
                     ? dynamicIslandShape
-                    : (appState.isFullscreenMode
-                        ? AnyShape(RoundedRectangle(cornerRadius: 7))
-                        : AnyShape(NotchPanelShape(
-                            topExtension: currentTopExt,
-                            bottomRadius: currentBottomRadius,
-                            minHeight: effectiveNotchHeight
-                        )))
+                    : AnyShape(NotchPanelShape(
+                        topExtension: currentTopExt,
+                        bottomRadius: currentBottomRadius,
+                        minHeight: effectiveNotchHeight
+                    ))
             )
             .animation(.spring(response: 0.38, dampingFraction: 0.86), value: panelWidth)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: shouldShowExpanded)
