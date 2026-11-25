@@ -10,7 +10,7 @@ This folder replaces the old implementation plans and progress boards. Those doc
 | [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), multi-display localization keys restored (#454). |
 | [2026-11-24.md](2026-11-24.md) | Agent docs and gates, port status map, X11 readers, #399 ports, blocking bridge answer, and desktop Remote shell wiring (#448). |
 | [2026-11-24.md](2026-11-24.md) | Host gates and build docs (#400, #405 to #408), main build repairs (#397, #398, #404), stack merge, docs cleanup, mascot animation gate (#410), Dynamic Island geometry spec (#417), Notch fullscreen concave ears (#424), Dynamic Island geometry fixes (#421), Swift power-banner parity (#399). |
-| [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), Dynamic Island geometry, clipping, and state reactivity (#444), and Dynamic Island Pixel/Modern visual polish and notification previews (#445). |
+| [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), Dynamic Island geometry, clipping, and state reactivity (#444), Dynamic Island Pixel/Modern visual polish and notification previews (#445), and CI lane router (#369). |
 
 > Format: `date | what landed | why it matters`. Update this index when you create or modify a memory file. Older entries keep their original text; if a decision changed, append `Superseded on YYYY-MM-DD` to that entry instead of rewriting it.
 
