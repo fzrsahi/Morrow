@@ -56,6 +56,7 @@ pub mod push_channel;
 pub mod push_policy;
 pub mod push_transport;
 pub mod reduce;
+pub mod remote;
 pub mod scan_policy;
 pub mod session_recap;
 pub mod session_store;
