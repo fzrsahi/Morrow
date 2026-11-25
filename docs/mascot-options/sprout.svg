@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Sprout, a morning leaf mascot">
+  <defs>
+    <linearGradient id="sprout-face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#B8E8A9"/>
+      <stop offset="1" stop-color="#7BC47F"/>
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#1C1C1E"/>
+  <path d="M32 53 Q29 41 32 31" fill="none" stroke="#5E9E66" stroke-width="4" stroke-linecap="round"/>
+  <path d="M30 34 Q13 34 15 20 Q28 20 30 34 Z" fill="#8FD694"/>
+  <path d="M34 31 Q51 29 48 16 Q37 18 34 31 Z" fill="#6FBF73"/>
+  <path d="M16 23 Q22 26 29 30 M47 19 Q41 24 35 28" fill="none" stroke="#4F945A" stroke-width="1.2" stroke-linecap="round" opacity="0.6"/>
+  <circle cx="32" cy="43" r="12" fill="url(#sprout-face)"/>
+  <circle cx="27" cy="41" r="2.6" fill="#2C4A32"/>
+  <circle cx="37" cy="41" r="2.6" fill="#2C4A32"/>
+  <circle cx="28" cy="40" r="0.9" fill="#FFFFFF"/>
+  <circle cx="38" cy="40" r="0.9" fill="#FFFFFF"/>
+  <path d="M29 47 Q32 50 35 47" fill="none" stroke="#3E7A49" stroke-width="1.6" stroke-linecap="round"/>
+</svg>
