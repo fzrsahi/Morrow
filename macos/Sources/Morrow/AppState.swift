@@ -315,7 +315,7 @@ final class AppState {
             }
         }
     }
-    /// Whether the active space is fullscreen — undocks the notch into a Machined Floating Deck
+    /// Whether any active display currently has a fullscreen window.
     var isFullscreenMode: Bool = false
     var surface: IslandSurface = .collapsed {
         didSet {

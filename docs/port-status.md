@@ -2,19 +2,19 @@
 
 This is the status source of truth for the Swift-to-Rust gap in #399. It replaces the plan and progress documents deleted in PR #406. Background lives in the [memory index](../.agents/memory/memory.md), [fork differences](fork-differences.md) and the [build guide](build-windows-linux.md). Paths in the table are from the repository root.
 
-A row is `ported` only under the #240 definition: the module exists, is callable from the shell, and has a test. `library-only` means Rust code with no shell caller. `host gate pending` means no real Linux or Windows run has happened.
+A row is `ported` only under the #240 definition: the module exists, is callable from the shell, and has a test. `library-only` means Rust code with no UI consumer; an IPC command may exist without a UI that uses it. `host gate pending` means no real Linux or Windows run has happened.
 
 | Area | Status | Evidence | Ticket/decision |
 |---|---|---|---|
 | Capability honesty and `ADAPTERS` guard | ported | `shared/crates/morrow-platform/src/capability.rs:309`; `shared/crates/morrow-platform/tests/capability_and_settings.rs:95-110` | #235, PR #249 |
 | Discovery: 13 readers, SQLite, PID correlation, backfill | ported | `shared/crates/morrow-core/src/discovery.rs`; `shared/desktop/src-tauri/src/discovery.rs::scan_stores`; `shared/desktop/src-tauri/src/feed.rs::backfill_with`; [fork differences](fork-differences.md) `:37-38` | #232, #244-#248, #261, #339 |
-| Secrets | decision pending | `shared/crates/morrow-platform/src/capability.rs:270`; #235 demoted the row, no scope decision | #235 (honesty), #240 (audit) |
-| SystemStats | decision pending | `capability.rs:246,477` | #235, #240 |
-| Geolocation | decision pending | `capability.rs:247-250` | #235, #240 |
-| SyntheticInput | decision pending | `capability.rs:243-245` | #235, #240 |
-| TerminalVisibility | decision pending | `capability.rs:174-179`; triage calls the `Unsupported` row deliberate | #235, #240 |
-| PointerMonitor | decision pending | `capability.rs:217-222`; triage calls the `Unsupported` row deliberate | #235, #240 |
-| Fullscreen | decision pending | `capability.rs:223-228`; a Windows adapter exists at `capability.rs:426` | #235, #240 |
+| Secrets | decision pending | `shared/crates/morrow-platform/src/capability.rs:270`; #235 demoted the row and no scope decision had been recorded when this map was written. Issue #441 is open and recommends retiring this row in favour of the already-ported `ClaudeCredentials` (`capability.rs:466-475`), the only secret path the Swift app reads | #235 (honesty), #240 (audit), #441 (decision) |
+| SystemStats | library-only | PR #438 added `morrow_platform::system_stats` with Linux and Windows readers, real capability probes and both `ADAPTERS` rows (`src/system_stats.rs`); no shell command or UI asks for system stats | #235, #240, #437, PR #438 |
+| Geolocation | decision pending | `capability.rs:247-250` still hardcodes `Unsupported` and there is no adapter. Issue #443 is open and recommends out-of-scope for the no-dependency port, with the ported offline city catalog and manual-city path as the supported prayer-location flow. Not ported | #235, #240, #443 (decision) |
+| SyntheticInput | library-only | PR #440, for issue #439, added `morrow_platform::synthetic_input` (xdotool/XTEST on Linux, PowerShell SendKeys on Windows) with both `ADAPTERS` rows (`src/synthetic_input.rs`); no shell command or UI calls it | #235, #240, #439, PR #440 |
+| TerminalVisibility | library-only | PR #436 added the Linux X11 reader (`src/x11.rs`) and its `ADAPTERS` row; the capability probe is no longer hardcoded `Unsupported` on X11, it now follows `xdotool` and `xprop`. No shell or UI call site | #235, #240, PR #436 |
+| PointerMonitor | library-only | PR #436 added the Linux X11 reader (`src/x11.rs`) and its `ADAPTERS` row; the capability probe is no longer hardcoded `Unsupported` on X11, it now follows `xdotool`. No shell or UI call site | #235, #240, PR #436 |
+| Fullscreen | library-only | PR #436 added the Linux X11 reader (`src/x11.rs`) and its `ADAPTERS` row; the capability probe is no longer hardcoded `Unsupported` on X11, it now follows `_NET_WM_STATE`. The existing `fullscreen()` command calls the reader on Unix, but no UI exposes the state. A Windows adapter exists at `capability.rs:426` | #235, #240, PR #436 |
 | Ble | decision pending | `capability.rs:277-279`; #240 §11 excludes Apple Companion BLE only | #240 |
 | Updater / Sparkle | out-of-scope | `capability.rs:287,478`; `shared/crates/morrow-core/README.md:318`; macOS keeps Sparkle, the port uses `tauri-plugin-updater` | #337, #240 |
 | RemoteInstaller + SSHForwarder + reconnect policy | library-only | PR #429 adds `morrow_core::remote` and `morrow_platform::remote`; no Settings card or IPC caller | #233, PR #429 |
@@ -29,4 +29,4 @@ A row is `ported` only under the #240 definition: the module exists, is callable
 | One Rust core with FFI into macOS | out-of-scope | `docs/adr/0001-two-cores-one-contract.md:11` rejects FFI; the IPC seam already exists | #240, ADR-0001 |
 | Flatpak packaging | decision pending | Named in #399; no scope decision in current docs or memory | none yet |
 
-`decision pending` means there is no recorded scope decision, not that the work is forgotten. #235 changed the table to `Unsupported(reason)` and #240 audited it; neither declares those rows out of scope. Promote a row to `out-of-scope` only with a decision issue number. #433 is the decision issue for NotchHoopsEngine and recommends out-of-scope (game UI) subject to maintainer confirmation.
+`decision pending` means there is no recorded scope decision, not that the work is forgotten. #235 changed the table to `Unsupported(reason)` and #240 audited it; neither declares those rows out of scope. Promote a row to `out-of-scope` only with a decision issue number. #433 is the decision issue for NotchHoopsEngine and recommends out-of-scope (game UI) subject to maintainer confirmation. #441 and #443 are the decision issues for Secrets and Geolocation; both recommend an out-of-scope outcome but neither decision is final.
