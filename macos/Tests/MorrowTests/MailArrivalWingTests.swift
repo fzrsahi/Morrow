@@ -392,4 +392,22 @@ final class MailArrivalWingTests: XCTestCase {
             1
         )
     }
+
+    @MainActor
+    func testTriggerTestMailArrivalBypassesAutoPeekSetting() {
+        let prevObj = UserDefaults.standard.object(forKey: SettingsKey.mailAutoPeekNewEmail)
+        UserDefaults.standard.set(false, forKey: SettingsKey.mailAutoPeekNewEmail)
+        defer {
+            MailManager.shared.dismissMailArrival()
+            if let prevObj {
+                UserDefaults.standard.set(prevObj, forKey: SettingsKey.mailAutoPeekNewEmail)
+            } else {
+                UserDefaults.standard.removeObject(forKey: SettingsKey.mailAutoPeekNewEmail)
+            }
+        }
+
+        MailManager.shared.triggerTestMailArrival()
+        XCTAssertTrue(MailManager.shared.showMailArrivalAnimation)
+        XCTAssertNotNil(MailManager.shared.latestArrivalMail)
+    }
 }

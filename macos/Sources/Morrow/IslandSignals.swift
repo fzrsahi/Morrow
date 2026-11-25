@@ -22,6 +22,9 @@ final class IslandSignals {
     /// The track name, for the one `.onChange` that opens the Music tab when a
     /// new track starts.
     private(set) var musicTitle = ""
+    private(set) var currentLyricText = ""
+    private(set) var currentLyricIndex = 0
+    private(set) var lyricsLoading = false
     /// The collapsed bar's music tooltip, composed once per track instead of
     /// on every render.
     private(set) var musicTooltip = "Session & Token Usage"
@@ -64,6 +67,12 @@ final class IslandSignals {
             ? "♫ \(title) - \(artist) (Click for Music HUD)"
             : "Session & Token Usage"
         if musicTooltip != tooltip { musicTooltip = tooltip }
+    }
+
+    func setLyricState(text: String, index: Int, loading: Bool) {
+        if currentLyricText != text { currentLyricText = text }
+        if currentLyricIndex != index { currentLyricIndex = index }
+        if lyricsLoading != loading { lyricsLoading = loading }
     }
 
     func setTooltip(_ text: String) {

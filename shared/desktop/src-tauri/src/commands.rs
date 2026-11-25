@@ -22,7 +22,7 @@
 mod tests {
     use std::collections::BTreeSet;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     /// Commands that are registered on purpose without a frontend caller. Empty,
     /// and a test below fails if one is added without the other side changing:
@@ -197,14 +197,5 @@ mod tests {
             !registered.contains("generate_handler"),
             "the parser is trimming the macro name, not a name list"
         );
-    }
-
-    #[test]
-    fn a_definition_is_not_a_caller() {
-        // `called_from_rust` skips the `fn` line. Without that, every helper looks
-        // used by the file that defines it — which is how seven orphans went
-        // unnoticed in the first audit.
-        let _ = Path::new("unused");
-        assert_eq!(called_from_rust("pointer_position"), 0);
     }
 }

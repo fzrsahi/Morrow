@@ -146,10 +146,11 @@ describe('appearance settings', () => {
       'prayer',
       'behavior',
       'hooks',
+      'remote',
       'capabilities',
       'about',
     ]);
-    for (const id of ['hooks', 'capabilities', 'appearance', 'prayer', 'about']) {
+    for (const id of ['hooks', 'remote', 'capabilities', 'appearance', 'prayer', 'about']) {
       expect(SETTINGS_NAV.flatMap((group) => group.items).find((item) => item.id === id)?.available).toBe(
         true,
       );
@@ -183,17 +184,17 @@ describe('the pages that have no controls say why', () => {
     }
   });
 
-  test('four pages are still empty and eight are built', () => {
+  test('four pages are still empty and nine are built', () => {
     // Measured, not assumed: #239 counted seven empty pages; Sound was filled by
-    // #241, Shortcuts by this change, and Prayer/Behavior by #307/#376, so four
-    // remain.
+    // #241, Shortcuts by this change, Prayer/Behavior by #307/#376 and Remote by
+    // #448, so four remain.
     expect(items.filter((entry) => !entry.available).map((entry) => entry.id)).toEqual([
       'general',
       'mascots',
       'agents',
       'music',
     ]);
-    expect(items.filter((entry) => entry.available).length).toBe(8);
+    expect(items.filter((entry) => entry.available).length).toBe(9);
   });
 
   test('the shortcut the page prints is the one the shell registers', () => {

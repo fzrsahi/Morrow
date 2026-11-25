@@ -229,8 +229,8 @@ public struct MagSafeChargingBanner: View {
                 .fixedSize()
                 .layoutPriority(2)
         }
-        .padding(.horizontal, displayMode == .dynamicIsland ? 20 : 16)
-        .padding(.vertical, displayMode == .dynamicIsland ? 12 : 10)
+        .padding(.horizontal, displayMode == .dynamicIsland ? 18 : 16)
+        .padding(.vertical, displayMode == .dynamicIsland ? 8 : 10)
     }
 
     // MARK: - 2. Modern Clean Dynamic Island Banner
@@ -287,8 +287,8 @@ public struct MagSafeChargingBanner: View {
                 .fixedSize()
                 .layoutPriority(2)
         }
-        .padding(.horizontal, displayMode == .dynamicIsland ? 20 : 16)
-        .padding(.vertical, displayMode == .dynamicIsland ? 12 : 10)
+        .padding(.horizontal, displayMode == .dynamicIsland ? 18 : 16)
+        .padding(.vertical, displayMode == .dynamicIsland ? 8 : 10)
     }
 }
 
