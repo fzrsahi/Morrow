@@ -43,9 +43,8 @@ This specification is normative when creating or modifying Dynamic Island UI in 
 
 ## 5. Has-Notch Dynamic Island (`hasNotch == true`)
 
-- Inherits hardware notch cutout and strict left/right wing symmetry from [notch-geometry.md](notch-geometry.md) (`leftWidth == rightWidth`, `centerShift == 0`, center gap `>= notchW`).
-- Uses Dynamic Island floating Y-offset (`10 pt`), chrome stroke (`1.2 pt`), and the Shape Decision Rule in Section 4 (e.g., Connected Chin Lyrics uses `notchHeight + 26 pt` with `RoundedRectangle(cornerRadius: 18, style: .continuous)`).
-- Once `topOffset >= physicalNotchHeight` (`IslandDisplayMetrics.intersectsHardwareNotch == false`), the floating pill clears the physical camera housing and uses the compact non-notch Dynamic Island geometry (Sections 1–4: `34 pt` `Capsule`, Balanced Twin, centered Inline Lyrics, unified `32 pt` expanded header).
+- On displays with a physical hardware notch, Dynamic Island mode automatically anchors below the camera housing (`physicalNotchHeight + topOffset`) and uses the unified compact single-row Dynamic Island geometry (Sections 1–4: `34 pt` `Capsule`, Balanced Twin, centered Inline Lyrics, flush toasts, and unified `32 pt` expanded header), ensuring consistent appearance across notched and non-notch displays.
+- When `hasNotch == true` is explicitly passed to `NotchPanelView` (e.g., cutout-protected test scenes), it inherits hardware notch cutout and strict left/right wing symmetry from [notch-geometry.md](notch-geometry.md) (`leftWidth == rightWidth`, `centerShift == 0`, center gap `>= notchW`), with `10 pt` floating Y-offset, `1.2 pt` chrome stroke, and Section 4 shapes.
 
 ## 6. Calculate Before Modifying UI
 

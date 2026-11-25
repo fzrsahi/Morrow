@@ -1753,24 +1753,6 @@ private struct DisplayConfigRow: View {
                         )
                         .accessibilityLabel(Text(l10n["dynamic_island_top_offset"]))
                         .accessibilityValue(Text("\(Int(configuration.dynamicIslandTopOffset.rounded()))pt"))
-
-                        if display.hasNotch {
-                            HStack(spacing: 8) {
-                                Text(configuration.dynamicIslandTopOffset >= 32
-                                    ? "Below hardware notch — compact single-row Dynamic Island active"
-                                    : "Overlaps hardware notch — set offset ≥ 32pt for compact single-row pill")
-                                    .font(.caption2)
-                                    .foregroundStyle(.secondary)
-                                Spacer(minLength: 4)
-                                if configuration.dynamicIslandTopOffset < 32 {
-                                    Button("Below Notch (36pt)") {
-                                        configuration.dynamicIslandTopOffset = 36
-                                    }
-                                    .buttonStyle(.bordered)
-                                    .controlSize(.mini)
-                                }
-                            }
-                        }
                     }
                 }
             } else {

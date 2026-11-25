@@ -35,6 +35,8 @@ final class IslandDisplayModeTests: XCTestCase {
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: -5), 0)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: 80), 40)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: false, customTopOffset: 24), 0)
+        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: 10, physicalNotchHeight: 32), 42)
+        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: false, customTopOffset: 10, physicalNotchHeight: 32), 0)
     }
 
     func testIntersectsHardwareNotchClearsWhenFloatingBelowPhysicalNotch() {
