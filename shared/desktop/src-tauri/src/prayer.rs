@@ -357,11 +357,6 @@ impl PrayerSite {
 // --- Tauri commands -------------------------------------------------------
 
 #[tauri::command]
-pub fn prayer_settings_load(site: State<'_, HooksSite>) -> Result<PrayerSettings, String> {
-    PrayerSite::system(&site).settings_load()
-}
-
-#[tauri::command]
 pub fn prayer_settings_set(
     app: AppHandle,
     site: State<'_, HooksSite>,

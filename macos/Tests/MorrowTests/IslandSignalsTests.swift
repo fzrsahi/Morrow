@@ -196,4 +196,22 @@ final class IslandSignalsTests: XCTestCase {
         XCTAssertEqual(signals.chargingBannerState, low)
         XCTAssertEqual(count(), 2)
     }
+
+    func testLyricStateNotifiesOnlyWhenChanged() async {
+        let signals = IslandSignals()
+        signals.setLyricState(text: "Yeah", index: 0, loading: false)
+        let count = notificationCount {
+            _ = signals.currentLyricText
+            _ = signals.currentLyricIndex
+            _ = signals.lyricsLoading
+        }
+
+        signals.setLyricState(text: "Yeah", index: 0, loading: false)
+        await Task.yield()
+        XCTAssertEqual(count(), 0)
+
+        signals.setLyricState(text: "Midnight neon rain", index: 1, loading: false)
+        await Task.yield()
+        XCTAssertEqual(count(), 1)
+    }
 }

@@ -1,8 +1,10 @@
 import SwiftUI
 import AppKit
+import MorrowCore
 
 struct NotchVolumeHUDView: View {
     @ObservedObject var volumeManager: SystemVolumeManager = .shared
+    var displayMode: IslandDisplayMode = .notch
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
     @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
@@ -86,10 +88,10 @@ struct NotchVolumeHUDView: View {
             // Recessed Speaker Icon Slot
             ZStack {
                 Image(systemName: speakerIconName)
-                    .font(.system(size: 9.5, weight: .black))
+                    .font(.system(size: 9, weight: .black))
                     .foregroundStyle(speakerIconColor)
             }
-            .frame(width: 20, height: 20)
+            .frame(width: 18, height: 18)
             .pixel16Bevel(raised: false, cornerRadius: 3.5, fillColor: Pixel16Palette.slot)
 
             // 12-Segment Discrete Solid Hi-Fi LED Meter (Lineless)
@@ -108,11 +110,11 @@ struct NotchVolumeHUDView: View {
 
                     Rectangle()
                         .fill(isFilled ? blockColor : Color.white.opacity(0.12))
-                        .frame(width: 5, height: 9.5)
+                        .frame(width: 5, height: 8)
                 }
             }
-            .padding(.horizontal, 4.5)
-            .padding(.vertical, 3)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 2.5)
             .pixel16Bevel(raised: false, cornerRadius: 3, fillColor: Pixel16Palette.slot)
 
             // Monospace Readout
@@ -122,7 +124,8 @@ struct NotchVolumeHUDView: View {
                 .frame(width: 32, alignment: .trailing)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.vertical, 3)
+        .frame(height: 26)
         .pixel16Bevel(raised: false, cornerRadius: 6, fillColor: Pixel16Palette.surface)
         .shadow(color: Color.black.opacity(0.5), radius: 4, y: 2)
     }
@@ -130,7 +133,8 @@ struct NotchVolumeHUDView: View {
     // MARK: - 2. Modern Clean Dynamic Island Fluid Volume HUD
 
     private var modernVolumeHUD: some View {
-        HStack(spacing: 8) {
+        let isDynamicIsland = displayMode == .dynamicIsland
+        return HStack(spacing: 8) {
             // Dynamic speaker icon
             Image(systemName: speakerIconName)
                 .font(.system(size: 11, weight: .bold))
@@ -161,14 +165,17 @@ struct NotchVolumeHUDView: View {
                 .foregroundStyle(Color.white.opacity(0.9))
                 .frame(width: 32, alignment: .trailing)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
+        .padding(.horizontal, 11)
+        .frame(height: 26)
         .background(
-            Capsule()
-                .fill(Color(white: 0.08).opacity(0.94))
+            Capsule(style: isDynamicIsland ? .circular : .continuous)
+                .fill(isDynamicIsland ? Color.black : Color(white: 0.08).opacity(0.94))
                 .overlay(
-                    Capsule()
-                        .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+                    Capsule(style: isDynamicIsland ? .circular : .continuous)
+                        .strokeBorder(
+                            Color.white.opacity(isDynamicIsland ? 0.24 : 0.18),
+                            lineWidth: isDynamicIsland ? 1.2 : 0.8
+                        )
                 )
                 .shadow(color: Color.black.opacity(0.45), radius: 6, y: 3)
         )

@@ -152,6 +152,7 @@ final class DynamicIslandModeTests: XCTestCase {
             "non-notch Dynamic Island must collapse simulated 185pt notch dead space"
         )
         XCTAssertTrue(pillRender.hasBlueArtworkPixel, "album cover missing inside Dynamic Island pill")
+        XCTAssertGreaterThanOrEqual(pillRender.blueArtworkWidthPt, 15, "18pt album cover must not be clipped by double outer padding")
         XCTAssertTrue(pillRender.hasAmberVisualizerPixel, "visualizer missing inside Dynamic Island pill")
     }
 
@@ -359,17 +360,21 @@ final class DynamicIslandModeTests: XCTestCase {
             canvasHeight: 72,
             saveName: "after-balanced-twin-idle-music"
         )
-        XCTAssertGreaterThanOrEqual(idleMusic.midRowWidthPt, 96)
+        XCTAssertGreaterThanOrEqual(idleMusic.midRowWidthPt, 115)
         XCTAssertLessThanOrEqual(
             idleMusic.midRowWidthPt,
             152,
             "Option 2 Balanced Twin must avoid wide hollow gap between Mascot and Album+EQ"
         )
         XCTAssertTrue(idleMusic.hasBlueArtworkPixel)
+        XCTAssertGreaterThanOrEqual(idleMusic.blueArtworkWidthPt, 15)
         XCTAssertTrue(idleMusic.hasAmberVisualizerPixel)
 
         // Native Lyrics inside Dynamic Island Mode: single unified capsule (no detached sub-notch pill below)
-        NowPlayingManager.shared.lyrics = [LyricLine(id: 0, timestamp: 0, text: "Midnight neon rain on the glass")]
+        NowPlayingManager.shared.lyrics = [
+            LyricLine(id: 0, timestamp: 0, text: "Yeah"),
+            LyricLine(id: 1, timestamp: 5, text: "Midnight neon rain falling on the glass")
+        ]
         NowPlayingManager.shared.currentLyricIndex = 0
         IslandSignals.shared.setMusic(
             isPlaying: true,
@@ -379,8 +384,28 @@ final class DynamicIslandModeTests: XCTestCase {
             title: "Midnight City",
             artist: "M83"
         )
+        IslandSignals.shared.setLyricState(text: "Yeah", index: 0, loading: false)
 
-        let lyricPill = try renderScene(
+        let shortLyricPill = try renderScene(
+            displayMode: .dynamicIsland,
+            hasNotch: false,
+            state: makeAgentState(status: .idle),
+            canvasWidth: 620,
+            canvasHeight: 112,
+            showCompactLyrics: true,
+            saveName: "after-balanced-twin-lyrics-short"
+        )
+        XCTAssertLessThanOrEqual(
+            shortLyricPill.renderedHeightPt,
+            40,
+            "Dynamic Island lyrics must live inside the unified top pill without a detached sub-notch bar"
+        )
+        XCTAssertLessThanOrEqual(shortLyricPill.midRowWidthPt, 200)
+        XCTAssertTrue(shortLyricPill.hasBlueArtworkPixel)
+
+        NowPlayingManager.shared.currentLyricIndex = 1
+        IslandSignals.shared.setLyricState(text: "Midnight neon rain falling on the glass", index: 1, loading: false)
+        let longLyricPill = try renderScene(
             displayMode: .dynamicIsland,
             hasNotch: false,
             state: makeAgentState(status: .idle),
@@ -389,12 +414,9 @@ final class DynamicIslandModeTests: XCTestCase {
             showCompactLyrics: true,
             saveName: "after-balanced-twin-lyrics"
         )
-        XCTAssertLessThanOrEqual(
-            lyricPill.renderedHeightPt,
-            40,
-            "Dynamic Island lyrics must live inside the unified top pill without a detached sub-notch bar"
-        )
-        XCTAssertTrue(lyricPill.hasBlueArtworkPixel)
+        XCTAssertGreaterThan(longLyricPill.midRowWidthPt, shortLyricPill.midRowWidthPt + 60)
+        XCTAssertLessThanOrEqual(longLyricPill.midRowWidthPt, 390)
+        XCTAssertTrue(longLyricPill.hasBlueArtworkPixel)
     }
 
     func testSettingsAppearanceRendersDisplayModePicker() throws {
@@ -599,6 +621,47 @@ final class DynamicIslandModeTests: XCTestCase {
 
             let sheetImage = try OffscreenRender.hosted(sheet, size: CGSize(width: 652, height: 420), scale: 2, passes: 3)
             try OffscreenRender.writePNG(sheetImage, to: path)
+        }
+    }
+
+    func testDynamicIslandMagSafeToastHeightAndVolumeHUDAndPixelInlineLyrics() throws {
+        // 1. MagSafeChargingBanner in Dynamic Island mode stays <= 56pt
+        let bannerHosting = NSHostingView(
+            rootView: MagSafeChargingBanner(batteryLevel: 82, displayMode: .dynamicIsland)
+                .frame(width: 360)
+        )
+        XCTAssertLessThanOrEqual(bannerHosting.fittingSize.height, 56.5)
+
+        // 2. NotchVolumeHUDView renders at 26pt height in both Modern and Pixel modes
+        suite.set(IslandUITheme.modern.rawValue, forKey: SettingsKey.islandUITheme)
+        let modernVol = NSHostingView(
+            rootView: NotchVolumeHUDView(displayMode: .dynamicIsland).defaultAppStorage(suite)
+        )
+        XCTAssertEqual(modernVol.fittingSize.height, 26, accuracy: 0.5)
+
+        suite.set(IslandUITheme.pixel.rawValue, forKey: SettingsKey.islandUITheme)
+        let pixelVol = NSHostingView(
+            rootView: NotchVolumeHUDView(displayMode: .dynamicIsland).defaultAppStorage(suite)
+        )
+        XCTAssertEqual(pixelVol.fittingSize.height, 26, accuracy: 0.5)
+
+        // 3. DynamicIslandInlineLyricPillView renders cleanly in both Pixel and Modern modes
+        configureMusic(artworkColor: NSColor(srgbRed: 0.0, green: 0.35, blue: 1.0, alpha: 1.0))
+        NowPlayingManager.shared.lyrics = [LyricLine(id: 0, timestamp: 0, text: "Pixel neon sky")]
+        NowPlayingManager.shared.currentLyricIndex = 0
+        for theme in [IslandUITheme.modern.rawValue, IslandUITheme.pixel.rawValue] {
+            suite.set(theme, forKey: SettingsKey.islandUITheme)
+            let pill = DynamicIslandInlineLyricPillView(
+                nowPlaying: NowPlayingManager.shared,
+                mascotSource: "claude",
+                mascotStatus: .idle,
+                mascotSize: 20,
+                width: 240
+            )
+            .environment(\.mascotStaticTime, 5.2)
+            .defaultAppStorage(suite)
+            let img = try OffscreenRender.hosted(pill, size: CGSize(width: 240, height: 34), scale: 2, passes: 3)
+            XCTAssertGreaterThan(img.width, 0)
         }
     }
 

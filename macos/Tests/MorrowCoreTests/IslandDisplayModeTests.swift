@@ -35,6 +35,59 @@ final class IslandDisplayModeTests: XCTestCase {
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: -5), 0)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: 80), 40)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: false, customTopOffset: 24), 0)
+        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: 10, physicalNotchHeight: 32), 42)
+        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: false, customTopOffset: 10, physicalNotchHeight: 32), 0)
+    }
+
+    func testIntersectsHardwareNotchClearsWhenFloatingBelowPhysicalNotch() {
+        XCTAssertFalse(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: false,
+                topOffset: 10,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertTrue(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .notch,
+                hasNotch: true,
+                topOffset: 40,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertTrue(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 10,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertTrue(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 31,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 32,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 40,
+                physicalNotchHeight: 32
+            )
+        )
     }
 
     func testCenterGapCollapsesDeadSpaceInDynamicIslandOnNonNotchScreens() {
@@ -178,21 +231,21 @@ final class IslandDisplayModeTests: XCTestCase {
 
         let mediumW = IslandDisplayMetrics.inlineLyricsWidth(displayedText: "Dancing in the moonlight", screenWidth: 1440, scalePercent: 100)
         XCTAssertGreaterThan(mediumW, 180)
-        XCTAssertLessThanOrEqual(mediumW, 320)
+        XCTAssertLessThanOrEqual(mediumW, 380)
 
         let longW = IslandDisplayMetrics.inlineLyricsWidth(
             displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
             screenWidth: 1440,
             scalePercent: 100
         )
-        XCTAssertEqual(longW, 320, accuracy: 0.5)
+        XCTAssertEqual(longW, 380, accuracy: 0.5)
 
         let scaledMaxW = IslandDisplayMetrics.inlineLyricsWidth(
             displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
             screenWidth: 1440,
             scalePercent: 200
         )
-        XCTAssertEqual(scaledMaxW, 340, accuracy: 0.5)
+        XCTAssertEqual(scaledMaxW, 400, accuracy: 0.5)
 
         let narrowScreenW = IslandDisplayMetrics.inlineLyricsWidth(
             displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
@@ -203,7 +256,7 @@ final class IslandDisplayModeTests: XCTestCase {
 
         let cjkW = IslandDisplayMetrics.inlineLyricsWidth(displayedText: "夜空ノムコウ", screenWidth: 1440, scalePercent: 100)
         XCTAssertGreaterThanOrEqual(cjkW, 180)
-        XCTAssertLessThanOrEqual(cjkW, 320)
+        XCTAssertLessThanOrEqual(cjkW, 380)
     }
 
     func testBalancedTwinHardCapMatchesSpecSection2() {
@@ -252,6 +305,16 @@ final class IslandDisplayModeTests: XCTestCase {
             ),
             320
         )
+        XCTAssertEqual(
+            IslandDisplayMetrics.balancedTwinHardCap(
+                isHoveringRightWing: false,
+                hasActiveOrWaitingAgent: false,
+                isMusicPlaying: false,
+                hasPriorityAccessory: false,
+                hasQuotaChip: true
+            ),
+            260
+        )
     }
 
     func testDynamicIslandPillCornerRadiiMatchCollapsedExtendedAndExpandedStates() {
@@ -260,7 +323,7 @@ final class IslandDisplayModeTests: XCTestCase {
         XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 44, isExpanded: false, isExtendedPill: false), 22)
         XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 58, isExpanded: false, isExtendedPill: true), 18)
         XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 320, isExpanded: true, isExtendedPill: false), 24)
-        XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 80, isExpanded: true, isExtendedPill: true), 18)
+        XCTAssertEqual(IslandDisplayMetrics.pillCornerRadius(height: 80, isExpanded: true, isExtendedPill: true), 24)
     }
 
     func testPillOuterPaddingProtectsRoundedCapsInDynamicIslandMode() {
@@ -278,7 +341,7 @@ final class IslandDisplayModeTests: XCTestCase {
         )
         XCTAssertEqual(
             IslandDisplayMetrics.outerPadding(wingWidth: 80, expanded: true, bilateral: false, displayMode: .dynamicIsland),
-            12
+            14
         )
     }
 
@@ -287,22 +350,28 @@ final class IslandDisplayModeTests: XCTestCase {
             leftWidth: 26,
             rightWidth: 38,
             outerPadding: 13,
-            dividerGap: 11,
+            dividerGap: 10,
             hasDivider: true,
             scalePercent: 100,
             maxAllowedWidth: 400
         )
-        XCTAssertEqual(idleMusicW, 113, accuracy: 0.5)
+        XCTAssertEqual(idleMusicW, 111, accuracy: 0.5)
+
+        let defaultGapW = IslandDisplayMetrics.balancedTwinWidth(
+            leftWidth: 26,
+            rightWidth: 38
+        )
+        XCTAssertEqual(defaultGapW, 111, accuracy: 0.5)
 
         let thinkingW = IslandDisplayMetrics.balancedTwinWidth(
             leftWidth: 86,
             rightWidth: 44,
             outerPadding: 13,
-            dividerGap: 11,
+            dividerGap: 10,
             hasDivider: true,
             scalePercent: 100,
             maxAllowedWidth: 400
         )
-        XCTAssertEqual(thinkingW, 179, accuracy: 0.5)
+        XCTAssertEqual(thinkingW, 177, accuracy: 0.5)
     }
 }

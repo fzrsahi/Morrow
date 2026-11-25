@@ -843,6 +843,36 @@ public final class MailManager: ObservableObject {
         self.recentMails = parsedItems
     }
 
+    /// Triggers a brief 4.5-second mail arrival animation for Settings preview,
+    /// bypassing the `mailAutoPeekNewEmail` gate so manual previews always work.
+    public func triggerTestMailArrival() {
+        let sample = MailItem(
+            id: -1,
+            senderRaw: "Alex Chen <alex@morrow.dev>",
+            senderName: "Alex Chen",
+            senderEmail: "alex@morrow.dev",
+            subject: "PR Review Approved — Dynamic Island",
+            dateReceived: "Just now",
+            receivedDate: Date(),
+            isRead: false
+        )
+        SoundManager.shared.playMailArrivalSound()
+        self.latestArrivalMail = sample
+        self.arrivalAnimStartTime = Date()
+        self.arrivalAnimId += 1
+        mailArrivalDismissTimer?.invalidate()
+        withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+            self.showMailArrivalAnimation = true
+        }
+        mailArrivalDismissTimer = Timer.scheduledTimer(withTimeInterval: 4.5, repeats: false) { [weak self] _ in
+            Task { @MainActor in
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.82)) {
+                    self?.showMailArrivalAnimation = false
+                }
+            }
+        }
+    }
+
     /// Triggers a brief 3.8-second roller coaster mail arrival animation in the notch right wing
     public func triggerNewMailArrival(_ item: MailItem) {
         SoundManager.shared.playMailArrivalSound()
