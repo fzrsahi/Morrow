@@ -26,6 +26,7 @@ use base64::Engine as _;
 use serde_json::{Map, Value, json};
 use std::borrow::Cow;
 
+use crate::digest::sha256;
 use crate::push::{PushEventKind, PushMessage, truncated, truncated_utf8, truncated_utf16};
 use crate::push_policy::PushChannelKind;
 use crate::push_transport::PushHttpRequest;
@@ -769,12 +770,30 @@ impl PushSigning {
 }
 
 fn hmac_sha256(key: &[u8], message: &[u8]) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
+    let mut block = [0u8; 64];
+    if key.len() > 64 {
+        block[..32].copy_from_slice(&sha256(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let mut ipad = [0x36u8; 64];
+    let mut opad = [0x5cu8; 64];
+    for (byte, key_byte) in ipad.iter_mut().zip(block) {
+        *byte ^= key_byte;
+    }
+    for (byte, key_byte) in opad.iter_mut().zip(block) {
+        *byte ^= key_byte;
+    }
 
-    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC takes any key length");
-    mac.update(message);
-    base64(&mac.finalize().into_bytes())
+    let mut inner = Vec::with_capacity(64 + message.len());
+    inner.extend_from_slice(&ipad);
+    inner.extend_from_slice(message);
+    let inner = sha256(&inner);
+
+    let mut outer = Vec::with_capacity(64 + 32);
+    outer.extend_from_slice(&opad);
+    outer.extend_from_slice(&inner);
+    base64(&sha256(&outer))
 }
 
 #[cfg(test)]
