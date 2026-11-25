@@ -3,12 +3,13 @@
 //! calls for on its own — a sound, a completion card, a push, a follow-up
 //! reminder — given the session it happened to.
 //!
-//! [`intents`] is the port; every rule here has a row in
-//! `fixtures/core/attention.json`. `settle(_:context:)` — the user's sound
-//! switches, quiet hours, the lock screen, the completion style, Smart
-//! Suppress — is not ported: it reads settings and scene facts that arrive
-//! with the `morrow-platform` adapters (plan §5.2) and no fixture covers it.
-//! Until then a shell settles what it has in its own outlets.
+//! [`intents`] and [`settle`] are the ports; their rules have rows in
+//! `fixtures/core/attention.json` and `fixtures/core/settle.json`, both
+//! exported from Swift. The shell reads the settings and the scene and hands
+//! [`settle`] the facts; [`settle_completion`] remains the shell's earlier
+//! completion-only projection, which asks Smart Suppress as the card shows.
+
+use std::collections::BTreeSet;
 
 use serde::Serialize;
 
@@ -438,4 +439,117 @@ pub fn settle_completion(
         CompletionStyle::Expand if session_in_front => CompletionPresentation::Glance,
         CompletionStyle::Expand => CompletionPresentation::Card,
     })
+}
+
+/// The user's standing sound choices — `SoundPreferences` in Swift.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SoundPreferences {
+    /// The master switch for event sounds.
+    pub enabled: bool,
+    /// Cues whose own switch is on and which have a sound.
+    pub audible_cues: BTreeSet<String>,
+}
+
+/// Why event sounds may be held back right now — `SoundHold` in Swift. The
+/// shell reads the clock and the scene and supplies the results.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SoundHold {
+    /// Inside the user's quiet-hours window.
+    pub quiet_hours: bool,
+    /// "Mute when away" is on.
+    pub mute_when_away: bool,
+    /// The screen is locked or the screen saver runs.
+    pub scene_quiet: bool,
+}
+
+/// The user's settings and the room's facts [`settle`] reads —
+/// `AttentionContext` in Swift.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AttentionContext {
+    pub sounds: SoundPreferences,
+    pub sound_hold: SoundHold,
+    pub completion_style: CompletionStyle,
+    pub push_enabled: bool,
+    /// The setting is on and the session's own terminal is in front.
+    pub session_in_front: bool,
+}
+
+/// Whether event sounds are held back for now — `holdsSounds(_:)` in Swift.
+pub fn holds_sounds(hold: &SoundHold) -> bool {
+    hold.quiet_hours || (hold.mute_when_away && hold.scene_quiet)
+}
+
+/// The sound that plays — `audibleSound(_:sounds:hold:)` in Swift. A cue with
+/// no sound of its own is never audible, however the switches are set.
+pub fn audible_sound(
+    cue: Option<&str>,
+    sounds: &SoundPreferences,
+    hold: &SoundHold,
+) -> Option<String> {
+    let cue = cue?;
+    if !sounds.enabled || !sounds.audible_cues.contains(cue) || holds_sounds(hold) {
+        return None;
+    }
+    Some(cue.to_owned())
+}
+
+/// What a settled turn does — `AttentionDecision` in Swift.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AttentionDecision {
+    pub sound: Option<String>,
+    pub completion: Option<CompletionDecision>,
+    pub push: Option<PushDecision>,
+    pub follow_up: Option<FollowUpIntent>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CompletionDecision {
+    pub turn_failed: bool,
+    pub presentation: CompletionPresentation,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PushDecision {
+    pub kind: AttentionPushKind,
+    pub smart_suppressed: bool,
+}
+
+/// `AttentionPolicy.settle(_:context:)`: what the user's settings and the room
+/// allow. Smart Suppress answers for a push here; a completion card asks when
+/// it is about to show, at once or from the queue, so style always wins.
+pub fn settle(intents: &AttentionIntents, context: &AttentionContext) -> AttentionDecision {
+    let mut decision = AttentionDecision {
+        sound: audible_sound(
+            intents.sound.as_deref(),
+            &context.sounds,
+            &context.sound_hold,
+        ),
+        ..AttentionDecision::default()
+    };
+    if let Some(completion) = &intents.completion {
+        decision.completion = Some(CompletionDecision {
+            turn_failed: completion.turn_failed,
+            presentation: match context.completion_style {
+                CompletionStyle::Off => CompletionPresentation::StatusOnly,
+                CompletionStyle::Glance => CompletionPresentation::Glance,
+                CompletionStyle::Expand => CompletionPresentation::Card,
+            },
+        });
+    }
+    if let Some(push) = intents.push.filter(|_| context.push_enabled) {
+        decision.push = Some(PushDecision {
+            kind: push.kind,
+            smart_suppressed: push.smart_suppressible && context.session_in_front,
+        });
+    }
+    decision.follow_up = match intents.follow_up {
+        // Follow-ups only chase completions the user asked to hear about.
+        Some(FollowUpIntent::TrackCompletion { .. })
+            if context.completion_style == CompletionStyle::Off =>
+        {
+            None
+        }
+        follow_up => follow_up,
+    };
+    decision
 }

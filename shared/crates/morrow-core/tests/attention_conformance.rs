@@ -3,8 +3,8 @@
 //! out of `AttentionPolicyTests`): the intents Swift returns for a moment and
 //! a subject must be the ones morrow-core returns.
 //!
-//! `settle(_:context:)` is not part of the bundle: it reads the user's
-//! settings and the room, which arrive with the platform adapters.
+//! `settle(_:context:)` has its own bundle, `fixtures/core/settle.json`,
+//! checked by `settle_conformance.rs`.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

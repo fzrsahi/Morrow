@@ -8,7 +8,9 @@
 
 use serde_json::{Map, Value, json};
 
-use morrow_core::attention::{AttentionIntents, AttentionPushKind, FollowUpIntent};
+use morrow_core::attention::{
+    AttentionDecision, AttentionIntents, AttentionPushKind, CompletionPresentation, FollowUpIntent,
+};
 
 fn push_kind(kind: AttentionPushKind) -> Value {
     match kind {
@@ -48,17 +50,50 @@ pub fn intents_document(intents: &AttentionIntents) -> Value {
             None => Value::Null,
         },
     );
+    doc.insert("follow_up".into(), follow_up_document(intents.follow_up));
+    Value::Object(doc)
+}
+
+fn follow_up_document(follow_up: Option<FollowUpIntent>) -> Value {
+    match follow_up {
+        Some(FollowUpIntent::TrackCompletion { turn_failed }) => {
+            json!({"type": "trackCompletion", "turn_failed": turn_failed})
+        }
+        Some(FollowUpIntent::RestartWait(kind)) => {
+            json!({"type": "restartWait", "kind": kind.raw_value()})
+        }
+        None => Value::Null,
+    }
+}
+
+/// `CoreContractJSONExporter`'s `decision` document in settle.json.
+pub fn decision_document(decision: &AttentionDecision) -> Value {
+    let mut doc = Map::new();
+    doc.insert("sound".into(), json!(decision.sound));
     doc.insert(
-        "follow_up".into(),
-        match intents.follow_up {
-            Some(FollowUpIntent::TrackCompletion { turn_failed }) => {
-                json!({"type": "trackCompletion", "turn_failed": turn_failed})
-            }
-            Some(FollowUpIntent::RestartWait(kind)) => {
-                json!({"type": "restartWait", "kind": kind.raw_value()})
-            }
+        "completion".into(),
+        match &decision.completion {
+            Some(completion) => json!({
+                "turn_failed": completion.turn_failed,
+                "presentation": match completion.presentation {
+                    CompletionPresentation::StatusOnly => "status_only",
+                    CompletionPresentation::Glance => "glance",
+                    CompletionPresentation::Card => "card",
+                },
+            }),
             None => Value::Null,
         },
     );
+    doc.insert(
+        "push".into(),
+        match &decision.push {
+            Some(push) => json!({
+                "kind": push_kind(push.kind),
+                "smart_suppressed": push.smart_suppressed,
+            }),
+            None => Value::Null,
+        },
+    );
+    doc.insert("follow_up".into(), follow_up_document(decision.follow_up));
     Value::Object(doc)
 }

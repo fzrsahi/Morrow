@@ -2,13 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://morrow.dev/schemas/core-fixture.schema.json",
   "title": "Morrow Core Contract Fixture Bundle",
-  "description": "fixtures/core/reducer.json (hook events through the reducer: sessions, effects, facts, and the AttentionPolicy intents of each step) or fixtures/core/attention.json (AttentionPolicy moments and their intents), exported from Swift by CoreContractJSONExporter. Dates are clock tokens: $T0 while the initial sessions were built, $Tk while step k (1-based) was applied; a fixed seeded instant is ISO 8601.",
+  "description": "fixtures/core/reducer.json (hook events through the reducer: sessions, effects, facts, and the AttentionPolicy intents of each step), fixtures/core/attention.json (AttentionPolicy moments and their intents), or fixtures/core/settle.json (AttentionPolicy intents, context and decision), exported from Swift by CoreContractJSONExporter. Dates are clock tokens: $T0 while the initial sessions were built, $Tk while step k (1-based) was applied; a fixed seeded instant is ISO 8601.",
   "type": "object",
   "required": ["contract"],
-  "properties": { "contract": { "enum": ["reducer", "attention"] } },
+  "properties": { "contract": { "enum": ["reducer", "attention", "settle"] } },
   "if": { "properties": { "contract": { "const": "reducer" } } },
   "then": { "$ref": "#/$defs/reducerBundle" },
-  "else": { "$ref": "#/$defs/attentionBundle" },
+  "else": {
+    "if": { "properties": { "contract": { "const": "settle" } } },
+    "then": { "$ref": "#/$defs/settleBundle" },
+    "else": { "$ref": "#/$defs/attentionBundle" }
+  },
   "$defs": {
     "reducerBundle": {
       "type": "object",
@@ -317,6 +321,77 @@
           }
         }
       ]
+    },
+    "settleBundle": {
+      "type": "object",
+      "required": ["contract", "cases"],
+      "additionalProperties": false,
+      "properties": {
+        "contract": { "const": "settle" },
+        "cases": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/settleCase" } }
+      }
+    },
+    "settleCase": {
+      "type": "object",
+      "required": ["name", "intents", "context", "decision"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "description": "The AttentionPolicyTests settle rule.", "type": "string" },
+        "intents": { "$ref": "#/$defs/intents" },
+        "context": { "$ref": "#/$defs/settleContext" },
+        "decision": { "$ref": "#/$defs/decision" }
+      }
+    },
+    "settleContext": {
+      "description": "The user's settings and the room, as the settle test rows build them.",
+      "type": "object",
+      "required": ["sound_enabled", "audible_cues", "quiet_hours", "mute_when_away", "scene_quiet", "completion_style", "push_enabled", "session_in_front"],
+      "additionalProperties": false,
+      "properties": {
+        "sound_enabled": { "type": "boolean" },
+        "audible_cues": { "type": "array", "items": { "type": "string" } },
+        "quiet_hours": { "type": "boolean" },
+        "mute_when_away": { "type": "boolean" },
+        "scene_quiet": { "type": "boolean" },
+        "completion_style": { "enum": ["expand", "glance", "off"] },
+        "push_enabled": { "type": "boolean" },
+        "session_in_front": { "type": "boolean" }
+      }
+    },
+    "decision": {
+      "description": "AttentionDecision.",
+      "type": "object",
+      "required": ["sound", "completion", "push", "follow_up"],
+      "additionalProperties": false,
+      "properties": {
+        "sound": { "type": ["string", "null"] },
+        "completion": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["turn_failed", "presentation"],
+              "additionalProperties": false,
+              "properties": {
+                "turn_failed": { "type": "boolean" },
+                "presentation": { "enum": ["status_only", "glance", "card"] }
+              }
+            }
+          ]
+        },
+        "push": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "required": ["kind", "smart_suppressed"],
+              "additionalProperties": false,
+              "properties": { "kind": { "$ref": "#/$defs/pushKind" }, "smart_suppressed": { "type": "boolean" } }
+            }
+          ]
+        },
+        "follow_up": { "$ref": "#/$defs/intents/properties/follow_up" }
+      }
     },
     "attentionBundle": {
       "type": "object",
