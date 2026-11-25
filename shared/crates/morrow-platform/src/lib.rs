@@ -41,6 +41,7 @@ pub mod quota;
 pub mod runner;
 pub mod settings;
 pub mod sound;
+pub mod synthetic_input;
 pub mod terminal;
 #[cfg(windows)]
 pub mod windows;
