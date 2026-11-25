@@ -578,5 +578,22 @@
   "reply_complete_placeholder": "回覆完成",
   "reply_failed_placeholder": "回覆失敗",
   "reply_aborted_placeholder": "回覆已中斷",
-  "hosted_by_harness_hint": "執行於 %@ 中"
+  "hosted_by_harness_hint": "執行於 %@ 中",
+  "custom_agent_commands": "自訂代理程式命令與別名",
+  "cyber_theme_engine": "賽博主題引擎",
+  "dynamic_island_notification_previews": "動態島通知預覽",
+  "notch_gestures": "劉海手勢",
+  "agents_tab_theme": "代理程式標籤主題",
+  "display_typography": "顯示與排版",
+  "agent_details_cards": "代理程式詳情與卡片",
+  "claude_plan_limits": "Claude 方案限制與配額",
+  "workspace_hud": "工作區 HUD",
+  "monitored_repositories": "監控的存放庫與檔案",
+  "right_wing_preview": "右側翼預覽（10 秒）",
+  "gameplay": "遊戲玩法",
+  "scoreboard": "記分板",
+  "controls": "控制",
+  "music_player_hud": "音樂播放器 HUD",
+  "floating_synced_lyrics": "浮動同步歌詞（劉海下方）",
+  "retro_sound_pack": "復古音效包"
 }

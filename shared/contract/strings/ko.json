@@ -582,5 +582,22 @@
   "reply_complete_placeholder": "답변 완료",
   "reply_failed_placeholder": "답변 실패",
   "reply_aborted_placeholder": "답변 중단",
-  "hosted_by_harness_hint": "%@에서 실행 중"
+  "hosted_by_harness_hint": "%@에서 실행 중",
+  "custom_agent_commands": "사용자 정의 에이전트 명령 및 별칭",
+  "cyber_theme_engine": "사이버 테마 엔진",
+  "dynamic_island_notification_previews": "다이내믹 아일랜드 알림 미리보기",
+  "notch_gestures": "노치 제스처",
+  "agents_tab_theme": "에이전트 탭 테마",
+  "display_typography": "표시 및 타이포그래피",
+  "agent_details_cards": "에이전트 세부 정보 및 카드",
+  "claude_plan_limits": "Claude 플랜 한도 및 할당량",
+  "workspace_hud": "워크스페이스 HUD",
+  "monitored_repositories": "모니터링 중인 저장소 및 파일",
+  "right_wing_preview": "오른쪽 날개 미리보기 (10초)",
+  "gameplay": "게임플레이",
+  "scoreboard": "점수판",
+  "controls": "제어",
+  "music_player_hud": "음악 플레이어 HUD",
+  "floating_synced_lyrics": "플로팅 동기화 가사 (노치 아래)",
+  "retro_sound_pack": "레트로 사운드 팩"
 }

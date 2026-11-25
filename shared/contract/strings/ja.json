@@ -582,5 +582,22 @@
   "reply_complete_placeholder": "返信完了",
   "reply_failed_placeholder": "返信失敗",
   "reply_aborted_placeholder": "返信中断",
-  "hosted_by_harness_hint": "%@ 上で実行中"
+  "hosted_by_harness_hint": "%@ 上で実行中",
+  "custom_agent_commands": "カスタムエージェントコマンドとエイリアス",
+  "cyber_theme_engine": "サイバーテーマエンジン",
+  "dynamic_island_notification_previews": "Dynamic Island 通知プレビュー",
+  "notch_gestures": "ノッチジェスチャー",
+  "agents_tab_theme": "Agents タブのテーマ",
+  "display_typography": "表示とタイポグラフィ",
+  "agent_details_cards": "エージェント詳細とカード",
+  "claude_plan_limits": "Claude プラン制限とクォータ",
+  "workspace_hud": "ワークスペース HUD",
+  "monitored_repositories": "監視中のリポジトリとファイル",
+  "right_wing_preview": "右ウィングプレビュー (10秒)",
+  "gameplay": "ゲームプレイ",
+  "scoreboard": "スコアボード",
+  "controls": "コントロール",
+  "music_player_hud": "ミュージックプレーヤー HUD",
+  "floating_synced_lyrics": "フローティング同期歌詞 (ノッチ下)",
+  "retro_sound_pack": "レトロサウンドパック"
 }

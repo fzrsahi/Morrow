@@ -578,5 +578,22 @@
   "reply_complete_placeholder": "回复完成",
   "reply_failed_placeholder": "回复失败",
   "reply_aborted_placeholder": "回复已中断",
-  "hosted_by_harness_hint": "运行在 %@ 中"
+  "hosted_by_harness_hint": "运行在 %@ 中",
+  "custom_agent_commands": "自定义代理命令与别名",
+  "cyber_theme_engine": "赛博主题引擎",
+  "dynamic_island_notification_previews": "灵动岛通知预览",
+  "notch_gestures": "刘海手势",
+  "agents_tab_theme": "代理标签主题",
+  "display_typography": "显示与排版",
+  "agent_details_cards": "代理详情与卡片",
+  "claude_plan_limits": "Claude 套餐限额与配额",
+  "workspace_hud": "工作区 HUD",
+  "monitored_repositories": "监控的仓库与文件",
+  "right_wing_preview": "右侧翼预览（10 秒）",
+  "gameplay": "游戏玩法",
+  "scoreboard": "记分板",
+  "controls": "控制",
+  "music_player_hud": "音乐播放器 HUD",
+  "floating_synced_lyrics": "浮动同步歌词（刘海下方）",
+  "retro_sound_pack": "复古音效包"
 }

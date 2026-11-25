@@ -582,5 +582,22 @@
   "reply_complete_placeholder": "Reply complete",
   "reply_failed_placeholder": "Reply failed",
   "reply_aborted_placeholder": "Reply interrupted",
-  "hosted_by_harness_hint": "Running under %@"
+  "hosted_by_harness_hint": "Running under %@",
+  "custom_agent_commands": "Custom Agent Commands & Aliases",
+  "cyber_theme_engine": "Cyber Theme Engine",
+  "dynamic_island_notification_previews": "Dynamic Island Notification Previews",
+  "notch_gestures": "Notch Gestures",
+  "agents_tab_theme": "Agents Tab Theme",
+  "display_typography": "Display & Typography",
+  "agent_details_cards": "Agent Details & Cards",
+  "claude_plan_limits": "Claude Plan Limits & Quota",
+  "workspace_hud": "Workspace HUD",
+  "monitored_repositories": "Monitored Repositories & Files",
+  "right_wing_preview": "Right Wing Preview (10s)",
+  "gameplay": "Gameplay",
+  "scoreboard": "Scoreboard",
+  "controls": "Controls",
+  "music_player_hud": "Music Player HUD",
+  "floating_synced_lyrics": "Floating Synced Lyrics (Below Notch)",
+  "retro_sound_pack": "Retro Sound Pack"
 }
