@@ -254,8 +254,10 @@ impl Feature {
                     Capability::Unsupported("needs notify-send for reminders".into())
                 }
             }
-            Self::SyntheticInput => Capability::Unsupported(
-                "no synthetic-input adapter yet: XTEST and the portal are not wired".into(),
+            // #439: xdotool injects through XTEST on X11 or XWayland.
+            Self::SyntheticInput => crate::synthetic_input::linux_capability(
+                environment.has("xdotool"),
+                environment.is_x11(),
             ),
             Self::SystemStats => {
                 if cfg!(target_os = "linux") {
@@ -405,6 +407,12 @@ pub const ADAPTERS: &[Adapter] = &[
         feature: Feature::Notifications,
         module: "src/notify.rs",
     },
+    // #439: xdotool on X11/XWayland, PowerShell SendKeys on Windows.
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::SyntheticInput,
+        module: "src/synthetic_input.rs",
+    },
     Adapter {
         os: Os::Linux,
         feature: Feature::Tray,
@@ -485,6 +493,11 @@ pub const ADAPTERS: &[Adapter] = &[
         os: Os::Windows,
         feature: Feature::Notifications,
         module: "src/windows/toast.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::SyntheticInput,
+        module: "src/synthetic_input.rs",
     },
     Adapter {
         os: Os::Windows,
@@ -581,9 +594,8 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::Fullscreen => Capability::Supported,
         Feature::SessionLock => Capability::Supported,
         Feature::Notifications => Capability::Supported,
-        Feature::SyntheticInput => {
-            Capability::Unsupported("no synthetic-input adapter yet: SendInput is not wired".into())
-        }
+        // #439: PowerShell SendKeys ships with Windows.
+        Feature::SyntheticInput => crate::synthetic_input::windows_capability(),
         Feature::SystemStats => crate::system_stats::windows_capability(),
         Feature::Geolocation => Capability::Unsupported(
             "no geolocation adapter yet: WinRT Geolocation is not called".into(),

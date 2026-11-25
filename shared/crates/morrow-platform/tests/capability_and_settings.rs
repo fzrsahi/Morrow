@@ -253,7 +253,6 @@ fn wayland_still_has_no_x11_readers_even_with_the_tools() {
 fn adapters_that_do_not_exist_yet_are_unsupported_everywhere() {
     for environment in [x11(temp("absent-x11")), wayland(temp("absent-wayland"))] {
         for feature in [
-            Feature::SyntheticInput,
             Feature::Geolocation,
             Feature::Secrets,
             Feature::Ble,
@@ -337,6 +336,56 @@ fn no_session_bus_marks_the_bus_bound_features() {
         Feature::SystemVolume.probe(&env),
         Capability::Unsupported(_) | Capability::Supported
     ));
+}
+
+/// #439: the row follows the tool and the display instead of saying "no
+/// adapter" on every session.
+#[test]
+fn synthetic_input_rows_follow_the_tool_and_the_session() {
+    let root = temp("synthetic-input");
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).expect("bin");
+    let mut env = x11(temp("synthetic-env"));
+    env.path_tools = vec![bin.to_string_lossy().into_owned()];
+
+    let missing = Feature::SyntheticInput.probe(&env);
+    assert!(matches!(missing, Capability::Unsupported(_)), "{missing:?}");
+    assert!(missing.reason().unwrap().contains("xdotool"));
+
+    let tool = bin.join("xdotool");
+    fs::write(&tool, "#!/bin/sh\n").expect("tool");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).expect("chmod");
+    }
+    assert_eq!(Feature::SyntheticInput.probe(&env), Capability::Supported);
+
+    let mut wayland_env = wayland(temp("synthetic-wayland"));
+    wayland_env.path_tools = env.path_tools.clone();
+    let limited = Feature::SyntheticInput.probe(&wayland_env);
+    assert!(matches!(limited, Capability::Degraded(_)), "{limited:?}");
+    assert!(limited.reason().unwrap().contains("XWayland"));
+
+    assert_eq!(
+        Feature::SyntheticInput.probe(&windows(temp("synthetic-windows"))),
+        Capability::Supported
+    );
+    assert_eq!(
+        adapter(Os::Linux, Feature::SyntheticInput).unwrap().module,
+        "src/synthetic_input.rs"
+    );
+    assert_eq!(
+        adapter(Os::Windows, Feature::SyntheticInput)
+            .unwrap()
+            .module,
+        "src/synthetic_input.rs"
+    );
+    assert!(
+        table(&env)
+            .iter()
+            .any(|row| row.feature == Feature::SyntheticInput.name())
+    );
 }
 
 #[test]
