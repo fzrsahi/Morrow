@@ -44,7 +44,7 @@ def neutrality_errors(bundle: dict) -> list[str]:
     return errors
 
 
-CORE = ("reducer", "attention")
+CORE = ("reducer", "attention", "settle")
 
 
 def core_errors(name: str, bundle: dict) -> list[str]:
