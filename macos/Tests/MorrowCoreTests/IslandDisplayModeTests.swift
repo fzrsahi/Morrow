@@ -22,14 +22,16 @@ final class IslandDisplayModeTests: XCTestCase {
         XCTAssertEqual(IslandDisplayMode.resolved(from: nil), .notch)
     }
 
-    func testFloatingYOffsetDetachesInDynamicIslandOrFullscreen() {
+    func testFloatingYOffsetDetachesOnlyInDynamicIsland() {
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: false), 0)
-        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: true), 10)
+        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: true), 0)
+        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: true, customTopOffset: 24), 0)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false), 10)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: true), 10)
 
-        // Custom top offset clamps cleanly to 0...40pt when Dynamic Island or Fullscreen is active
+        // Custom top offset clamps cleanly to 0...40pt when Dynamic Island is active
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: 24), 24)
+        XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: true, customTopOffset: 24), 24)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: -5), 0)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .dynamicIsland, isFullscreenMode: false, customTopOffset: 80), 40)
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: false, customTopOffset: 24), 0)

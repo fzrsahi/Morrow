@@ -47,7 +47,15 @@ final class PanelWindowControllerTests: XCTestCase {
             isFullscreenMode: false,
             topOffset: 24
         )
+        let display1NotchFullscreenY = PanelWindowLayout.anchoredY(
+            screenMaxY: 982,
+            panelHeight: 32,
+            displayMode: .notch,
+            isFullscreenMode: true,
+            topOffset: 10
+        )
         XCTAssertEqual(display1NotchY, 950)
+        XCTAssertEqual(display1NotchFullscreenY, 950)
         XCTAssertEqual(display2IslandY, 1031)
     }
 
