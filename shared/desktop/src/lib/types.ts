@@ -208,5 +208,26 @@ export type CapabilityRow = {
 
 export type AutostartStatus = { installed: boolean; path: string };
 
+/** Mirrors `SshHost` in src-tauri/src/remote.rs (morrow_core::remote::host). */
+export type RemoteHost = {
+  id: string;
+  name: string;
+  host: string;
+  user: string;
+  port: number | null;
+  identity_file: string;
+  auto_connect: boolean;
+  auth_socket: string;
+  cwd_filter: string;
+  agents_run_as_other_users: boolean;
+};
+
+/** Mirrors the tagged `RemoteStatus` serialized by src-tauri/src/remote.rs. */
+export type RemoteStatus =
+  | { state: 'disconnected' }
+  | { state: 'connecting' }
+  | { state: 'connected' }
+  | { state: 'failed'; message: string };
+
 /** #241 — one row of the Sound page, from the shell's cue table. */
 export type SoundCue = { name: string; file: string };

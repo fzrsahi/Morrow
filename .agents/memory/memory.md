@@ -7,6 +7,7 @@ This folder replaces the old implementation plans and progress boards. Those doc
 | [2026-11-16.md](2026-11-16.md) | Fork and rebrand (#47), port specification (#33, PR #49), monorepo restructure (#86, PR #171). |
 | [2026-11-21.md](2026-11-21.md) | Rust workspace and Tauri shell (#87 to #90), Option E rejected (#85, PR #117), endpoint contract (#84, PR #115), packaging decisions (#70). |
 | [2026-11-23.md](2026-11-23.md) | Discovery stack (#232 to #287), installer batches (#288 to #312), prayer, quota and push ports, capability truth (#235) and sound outlet (#241). |
+| [2026-11-24.md](2026-11-24.md) | Agent docs and gates, port status map, X11 readers, #399 ports, blocking bridge answer, and desktop Remote shell wiring (#448). |
 
 > Format: `date | what landed | why it matters`. Update this index when you create or modify a memory file. Older entries keep their original text; if a decision changed, append `Superseded on YYYY-MM-DD` to that entry instead of rewriting it.
 
