@@ -439,4 +439,50 @@ final class NotchHoverInteractionTests: XCTestCase {
         state.refreshDerivedState()
         XCTAssertTrue(state.isThinking)
     }
+
+    @MainActor
+    func testHasActiveOrWaitingAgentOverridesInlineLyrics() {
+        let state = AppState()
+        XCTAssertFalse(NotchWidthMetrics.hasActiveOrWaitingAgent(isThinking: false, appState: state))
+
+        var idle = SessionSnapshot()
+        idle.status = .idle
+        state.sessions = ["s1": idle]
+        state.refreshDerivedState()
+        XCTAssertFalse(NotchWidthMetrics.hasActiveOrWaitingAgent(isThinking: false, appState: state))
+
+        for activeStatus: AgentStatus in [.processing, .running, .waitingApproval, .waitingQuestion] {
+            var session = SessionSnapshot()
+            session.status = activeStatus
+            state.sessions = ["s1": session]
+            state.refreshDerivedState()
+            XCTAssertTrue(
+                NotchWidthMetrics.hasActiveOrWaitingAgent(isThinking: false, appState: state),
+                "Expected \(activeStatus) to override Inline Lyrics"
+            )
+        }
+
+        var toolSession = SessionSnapshot()
+        toolSession.status = .idle
+        toolSession.currentTool = "Read"
+        state.sessions = ["s1": toolSession]
+        state.refreshDerivedState()
+        XCTAssertTrue(NotchWidthMetrics.hasActiveOrWaitingAgent(isThinking: false, appState: state))
+
+        state.sessions = [:]
+        state.refreshDerivedState()
+        XCTAssertTrue(NotchWidthMetrics.hasActiveOrWaitingAgent(isThinking: true, appState: state))
+    }
+
+    func testInlineLyricResolvedDisplayTextUsesActiveLyricNotTitle() {
+        let longTitle = "Very Long Track Title That Exceeds Sixty Characters Easily For Testing"
+        let resolved = DynamicIslandInlineLyricPillView.resolvedDisplayText(
+            currentLyric: "Yeah",
+            lyricsLoading: false,
+            currentLyricIndex: 2,
+            title: longTitle,
+            artist: "Artist Name"
+        )
+        XCTAssertEqual(resolved, "Yeah")
+    }
 }
