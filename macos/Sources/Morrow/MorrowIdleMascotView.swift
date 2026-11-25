@@ -1,127 +1,161 @@
 import SwiftUI
 
 /// The idle notch mascot for #44. Agents may be switched off for non-agentic
-/// users; the app still needs a living mark in the notch, so this draws Nori,
-/// the notch-dwelling cat from `docs/mascot-options/nori.svg`, as transparent
-/// vector art with a slow blink and bob. The SVG's dark preview backing is not
-/// drawn: Nori sits directly on the notch chrome and reads by its amber eyes.
+/// users; the app still needs a living mark in the notch, so this draws Lumen,
+/// the dawn signal companion, from the two `docs/mascot-options/lumen-*.svg`
+/// vectors. The SVGs' dark preview background is not drawn. The existing
+/// `islandUITheme` key picks the smooth Modern finish or the blocky Pixel one;
+/// both keep a slow blink and bob on `MascotTimeline`.
 struct MorrowIdleMascotView: View {
     let status: MascotAgentStatus
     var size: CGFloat = 27
+    @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
 
-    // Nori's palette, copied from the SVG's gradient stops and fills.
-    private static let bodyTop = Color(red: 90 / 255, green: 95 / 255, blue: 150 / 255)
-    private static let bodyBottom = Color(red: 52 / 255, green: 56 / 255, blue: 89 / 255)
-    private static let tail = Color(red: 66 / 255, green: 72 / 255, blue: 120 / 255)
-    private static let ear = Color(red: 82 / 255, green: 88 / 255, blue: 140 / 255)
-    private static let innerEar = Color(red: 233 / 255, green: 145 / 255, blue: 106 / 255)
-    private static let eye = Color(red: 1, green: 196 / 255, blue: 107 / 255)
-    private static let pupil = Color(red: 32 / 255, green: 34 / 255, blue: 58 / 255)
-    private static let mouth = Color(red: 185 / 255, green: 189 / 255, blue: 224 / 255)
+    private var isPixel: Bool { islandUITheme == IslandUITheme.pixel.rawValue }
+
+    // Modern palette: indigo → blue body, glass edge and rounded glowing eyes.
+    private static let bodyTop = Color(red: 143 / 255, green: 216 / 255, blue: 1)
+    private static let bodyBottom = Color(red: 108 / 255, green: 123 / 255, blue: 1)
+    private static let antennaDot = Color(red: 188 / 255, green: 235 / 255, blue: 1)
+    private static let modernEye = Color(red: 143 / 255, green: 216 / 255, blue: 1)
+    private static let modernScreen = Color(red: 22 / 255, green: 27 / 255, blue: 58 / 255)
+
+    // Pixel palette: hard 16-bit steps in blue with cyan accents.
+    private static let pixelBody = Color(red: 58 / 255, green: 111 / 255, blue: 191 / 255)
+    private static let pixelBodyShade = Color(red: 42 / 255, green: 82 / 255, blue: 150 / 255)
+    private static let pixelScreen = Color(red: 16 / 255, green: 20 / 255, blue: 38 / 255)
+    private static let pixelScreenInset = Color(red: 24 / 255, green: 32 / 255, blue: 67 / 255)
+    private static let pixelCyan = Color(red: 90 / 255, green: 209 / 255, blue: 230 / 255)
+    private static let pixelCyanLight = Color(red: 155 / 255, green: 233 / 255, blue: 245 / 255)
 
     var body: some View {
         MascotTimeline(interval: 0.1) { t in
             Canvas { context, canvasSize in
-                let scale = min(canvasSize.width, canvasSize.height) / 64
-                let bob = sin(t * 2.4) * 0.5 * scale
-                let blink = t.truncatingRemainder(dividingBy: 3.6) < 0.16
-
-                func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
-                    CGPoint(x: x * scale, y: y * scale + bob)
+                if self.isPixel {
+                    self.drawPixel(context: &context, canvasSize: canvasSize, t: t)
+                } else {
+                    self.drawModern(context: &context, canvasSize: canvasSize, t: t)
                 }
-                func bodyShading(from top: CGFloat, to bottom: CGFloat) -> GraphicsContext.Shading {
-                    .linearGradient(
-                        Gradient(colors: [Self.bodyTop, Self.bodyBottom]),
-                        startPoint: point(0, top),
-                        endPoint: point(0, bottom)
-                    )
-                }
-
-                // Tail: M47 45 Q59 41 54 29 Q52 37 45 39 Z
-                var tail = Path()
-                tail.move(to: point(47, 45))
-                tail.addQuadCurve(to: point(54, 29), control: point(59, 41))
-                tail.addQuadCurve(to: point(45, 39), control: point(52, 37))
-                tail.closeSubpath()
-                context.fill(tail, with: .color(Self.tail))
-
-                // Body: ellipse cx=32 cy=41 rx=16 ry=14
-                let body = CGRect(x: 16 * scale, y: 27 * scale + bob,
-                                  width: 32 * scale, height: 28 * scale)
-                context.fill(Path(ellipseIn: body), with: bodyShading(from: 27, to: 55))
-
-                // Ears: M19 22 Q17 7 29 16 Q25 19 19 22 Z, mirrored on x=32.
-                var leftEar = Path()
-                leftEar.move(to: point(19, 22))
-                leftEar.addQuadCurve(to: point(29, 16), control: point(17, 7))
-                leftEar.addQuadCurve(to: point(19, 22), control: point(25, 19))
-                leftEar.closeSubpath()
-                context.fill(leftEar, with: .color(Self.ear))
-
-                var rightEar = Path()
-                rightEar.move(to: point(45, 22))
-                rightEar.addQuadCurve(to: point(35, 16), control: point(47, 7))
-                rightEar.addQuadCurve(to: point(45, 22), control: point(39, 19))
-                rightEar.closeSubpath()
-                context.fill(rightEar, with: .color(Self.ear))
-
-                var leftInnerEar = Path()
-                leftInnerEar.move(to: point(22, 20))
-                leftInnerEar.addQuadCurve(to: point(27, 17), control: point(21, 12))
-                leftInnerEar.closeSubpath()
-                context.fill(leftInnerEar, with: .color(Self.innerEar))
-
-                var rightInnerEar = Path()
-                rightInnerEar.move(to: point(42, 20))
-                rightInnerEar.addQuadCurve(to: point(37, 17), control: point(43, 12))
-                rightInnerEar.closeSubpath()
-                context.fill(rightInnerEar, with: .color(Self.innerEar))
-
-                // Head: circle cx=32 cy=25 r=15
-                let head = CGRect(x: 17 * scale, y: 10 * scale + bob,
-                                  width: 30 * scale, height: 30 * scale)
-                context.fill(Path(ellipseIn: head), with: bodyShading(from: 10, to: 40))
-
-                // Eyes: amber ellipses at (26,25) and (38,25), with slit pupils.
-                // Blink flattens both without removing the amber signal at 20 pt.
-                let eyeHeight: CGFloat = blink ? 0.9 : 4.2
-                let pupilHeight: CGFloat = blink ? 0.4 : 2.4
-                for x in [26, 38] {
-                    let eye = CGRect(x: (CGFloat(x) - 3.2) * scale,
-                                     y: (25 - eyeHeight / 2) * scale + bob,
-                                     width: 6.4 * scale,
-                                     height: eyeHeight * scale)
-                    context.fill(Path(ellipseIn: eye), with: .color(Self.eye))
-
-                    let pupil = CGRect(x: (CGFloat(x) - 1.2) * scale,
-                                       y: (25 - pupilHeight / 2) * scale + bob,
-                                       width: 2.4 * scale,
-                                       height: pupilHeight * scale)
-                    context.fill(Path(ellipseIn: pupil), with: .color(Self.pupil))
-                }
-
-                // Nose: M29 32 L35 32 L32 35 Z
-                var nose = Path()
-                nose.move(to: point(29, 32))
-                nose.addLine(to: point(35, 32))
-                nose.addLine(to: point(32, 35))
-                nose.closeSubpath()
-                context.fill(nose, with: .color(Self.innerEar))
-
-                // Mouth: M32 35 Q29 38 26 35 M32 35 Q35 38 38 35
-                var mouth = Path()
-                mouth.move(to: point(32, 35))
-                mouth.addQuadCurve(to: point(26, 35), control: point(29, 38))
-                mouth.move(to: point(32, 35))
-                mouth.addQuadCurve(to: point(38, 35), control: point(35, 38))
-                context.stroke(
-                    mouth,
-                    with: .color(Self.mouth),
-                    style: StrokeStyle(lineWidth: 1.2 * scale, lineCap: .round)
-                )
             }
         }
         .frame(width: size, height: size)
+    }
+
+    // MARK: - Modern: rounded body, glass highlight and soft glow
+
+    private func drawModern(context: inout GraphicsContext, canvasSize: CGSize, t: Double) {
+        let scale = min(canvasSize.width, canvasSize.height) / 64
+        let bob = sin(t * 2.4) * 0.5 * scale
+        let blink = t.truncatingRemainder(dividingBy: 3.6) < 0.16
+
+        func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: x * scale, y: y * scale + bob)
+        }
+        func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect {
+            CGRect(x: x * scale, y: y * scale + bob, width: w * scale, height: h * scale)
+        }
+
+        // Signal antenna: M32 12 L32 5, circle cx=32 cy=4 r=2.4
+        var antenna = Path()
+        antenna.move(to: point(32, 12))
+        antenna.addLine(to: point(32, 5))
+        context.stroke(
+            antenna,
+            with: .color(Self.modernEye),
+            style: StrokeStyle(lineWidth: 2 * scale, lineCap: .round)
+        )
+        context.fill(Path(ellipseIn: rect(29.6, 1.6, 4.8, 4.8)), with: .color(Self.antennaDot))
+
+        // Soft outer glow: circle cx=32 cy=35 r=21, opacity 0.16
+        context.fill(
+            Path(ellipseIn: rect(11, 14, 42, 42)),
+            with: .color(Self.bodyBottom.opacity(0.16))
+        )
+
+        // Body: rounded rect x=13 y=18 w=38 h=34 rx=15, indigo → blue
+        context.fill(
+            Path(roundedRect: rect(13, 18, 38, 34), cornerRadius: 15 * scale, style: .continuous),
+            with: .linearGradient(
+                Gradient(colors: [Self.bodyTop, Self.bodyBottom]),
+                startPoint: point(0, 18),
+                endPoint: point(0, 52)
+            )
+        )
+
+        // Glass highlight: M18 26 Q20 20 28 19, opacity 0.45
+        var glass = Path()
+        glass.move(to: point(18, 26))
+        glass.addQuadCurve(to: point(28, 19), control: point(20, 20))
+        context.stroke(
+            glass,
+            with: .color(Color.white.opacity(0.45)),
+            style: StrokeStyle(lineWidth: 2 * scale, lineCap: .round)
+        )
+
+        // Screen face: x=20 y=27 w=24 h=16 rx=8
+        context.fill(
+            Path(roundedRect: rect(20, 27, 24, 16), cornerRadius: 8 * scale, style: .continuous),
+            with: .color(Self.modernScreen)
+        )
+
+        // Glowing eyes: x=25/35 y=32 w=4 h=6 rx=2; blink flattens them.
+        let eyeHeight: CGFloat = blink ? 1.2 : 6
+        let eyeTop = 35 - eyeHeight / 2
+        for x in [25, 35] {
+            context.fill(
+                Path(roundedRect: rect(CGFloat(x), eyeTop, 4, eyeHeight),
+                     cornerRadius: min(2, eyeHeight / 2) * scale, style: .continuous),
+                with: .color(Self.modernEye)
+            )
+        }
+
+        // Tiny smile: M29 40 Q32 42 35 40
+        var smile = Path()
+        smile.move(to: point(29, 40))
+        smile.addQuadCurve(to: point(35, 40), control: point(32, 42))
+        context.stroke(
+            smile,
+            with: .color(Self.modernEye.opacity(0.8)),
+            style: StrokeStyle(lineWidth: 1.2 * scale, lineCap: .round)
+        )
+    }
+
+    // MARK: - Pixel: hard-stepped body, inset screen and square eyes
+
+    private func drawPixel(context: inout GraphicsContext, canvasSize: CGSize, t: Double) {
+        let scale = min(canvasSize.width, canvasSize.height) / 64
+        let bob = sin(t * 2.4) * 0.5 * scale
+        let blink = t.truncatingRemainder(dividingBy: 3.6) < 0.16
+
+        func fill(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, _ color: Color) {
+            let tile = CGRect(x: x * scale, y: y * scale + bob,
+                              width: w * scale, height: h * scale)
+            context.fill(Path(tile), with: .color(color))
+        }
+
+        // 16-bit antenna
+        fill(30, 4, 4, 12, Self.pixelCyan)
+        fill(28, 2, 8, 6, Self.pixelCyanLight)
+
+        // Chunky body with hard steps and shaded edges
+        fill(16, 16, 32, 4, Self.pixelBody)
+        fill(12, 20, 40, 30, Self.pixelBody)
+        fill(16, 50, 32, 4, Self.pixelBody)
+        fill(12, 20, 4, 30, Self.pixelBodyShade)
+        fill(48, 20, 4, 30, Self.pixelBodyShade)
+
+        // Inset screen
+        fill(20, 26, 24, 18, Self.pixelScreen)
+        fill(22, 28, 20, 14, Self.pixelScreenInset)
+
+        // Square pixel eyes: blink folds them into single rows
+        let eyeHeight: CGFloat = blink ? 2 : 8
+        let eyeTop: CGFloat = blink ? 34 : 31
+        fill(25, eyeTop, 5, eyeHeight, Self.pixelCyan)
+        fill(35, eyeTop, 5, eyeHeight, Self.pixelCyan)
+
+        // Pixel grin
+        fill(28, 41, 9, 2, Self.pixelCyanLight)
     }
 }
 
