@@ -104,6 +104,13 @@ describe('appearance settings', () => {
     expect(SETTINGS_KEYS.displayMode).toBe('islandDisplayMode');
   });
 
+  test('#462: the language key matches Swift and survives a reload', () => {
+    expect(SETTINGS_KEYS.language).toBe('appLanguage');
+    expect(appearanceFromSettings(null).language).toBe('system');
+    expect(appearanceFromSettings({ appLanguage: 'de' }).language).toBe('de');
+    expect(appearanceFromSettings({ appLanguage: 42 }).language).toBe('system');
+  });
+
   test('a pre-existing islandShape setting migrates to the Swift mode names', () => {
     expect(appearanceFromSettings({ islandShape: 'floating-pill' }).displayMode).toBe(
       'dynamicIsland',
@@ -152,7 +159,7 @@ describe('appearance settings', () => {
       'capabilities',
       'about',
     ]);
-    for (const id of ['hooks', 'remote', 'capabilities', 'appearance', 'prayer', 'about']) {
+    for (const id of ['hooks', 'remote', 'capabilities', 'general', 'appearance', 'prayer', 'about']) {
       expect(SETTINGS_NAV.flatMap((group) => group.items).find((item) => item.id === id)?.available).toBe(
         true,
       );
@@ -186,17 +193,16 @@ describe('the pages that have no controls say why', () => {
     }
   });
 
-  test('four pages are still empty and nine are built', () => {
-    // Measured, not assumed: #239 counted seven empty pages; Sound was filled by
-    // #241, Shortcuts by this change, Prayer/Behavior by #307/#376 and Remote by
-    // #448, so four remain.
+  test('three pages are still empty and ten are built', () => {
+    // Measured, not assumed: #239 counted seven empty pages; Sound (#241),
+    // Shortcuts (#239), Prayer/Behavior (#307/#376), Remote (#448) and General's
+    // language picker (#462) are built, so three remain.
     expect(items.filter((entry) => !entry.available).map((entry) => entry.id)).toEqual([
-      'general',
       'mascots',
       'agents',
       'music',
     ]);
-    expect(items.filter((entry) => entry.available).length).toBe(9);
+    expect(items.filter((entry) => entry.available).length).toBe(10);
   });
 
   test('the shortcut the page prints is the one the shell registers', () => {
