@@ -193,7 +193,6 @@ fn main() -> ExitCode {
             settings::settings_load,
             settings::settings_set,
             settings::settings_path,
-            prayer::prayer_settings_load,
             prayer::prayer_settings_set,
             prayer::prayer_cities,
             prayer::prayer_next,
