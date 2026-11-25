@@ -50,6 +50,18 @@ final class IdleMascotTests: XCTestCase {
         XCTAssertGreaterThan(brightPixels(image), 100)
     }
 
+    /// Pip was the #44 choice: the vector must still read at the 20pt size used
+    /// by the collapsed pill, without the SVG preview's dark backing rect.
+    func testPipDrawsVisiblePixelsAt20Points() throws {
+        let mascot = MascotView(source: IdleMascotSource.morrow, status: .idle, size: 20)
+            .environment(\.mascotAnimationsActive, false)
+            .environment(\.mascotStaticTime, 1.0)
+        let image = try XCTUnwrap(OffscreenRender.rasterize(mascot, scale: 4))
+        let coverage = pipCoverage(image)
+        XCTAssertGreaterThan(coverage.opaque, 500, "Pip must be visible at 20pt")
+        XCTAssertGreaterThan(coverage.warm, 300, "Pip's gold → coral art must survive at 20pt")
+    }
+
     /// Default behaviour stays intact: agents on keeps the configured idle mascot.
     func testAgentsEnabledUsesConfiguredIdleMascot() throws {
         let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -109,7 +121,34 @@ final class IdleMascotTests: XCTestCase {
         return try OffscreenRender.hosted(panel, size: CGSize(width: 400, height: 64), scale: 2)
     }
 
-    /// The notch shell is black; the Morrow tile is light even at idle opacity.
+    /// Opaque coverage and warm (gold/coral) pixels of the Pip render.
+    private func pipCoverage(_ image: CGImage) -> (opaque: Int, warm: Int) {
+        let width = image.width, height = image.height
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ), let data = context.data else { return (0, 0) }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        let pixels = data.assumingMemoryBound(to: UInt8.self)
+        var opaque = 0, warm = 0
+        for offset in stride(from: 0, to: width * height * 4, by: 4) {
+            let alpha = Int(pixels[offset + 3])
+            guard alpha > 16 else { continue }
+            opaque += 1
+            let red = Int(pixels[offset])
+            let green = Int(pixels[offset + 1])
+            let blue = Int(pixels[offset + 2])
+            if red > 180, green > 100, blue < 160 { warm += 1 }
+        }
+        return (opaque, warm)
+    }
+
+    /// The notch shell is black; Pip's warm fills read even at idle opacity.
     private func brightPixels(_ image: CGImage) -> Int {
         let width = image.width, height = image.height
         guard let context = CGContext(
