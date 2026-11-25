@@ -1,20 +1,20 @@
 ---
 const releases = 'https://github.com/fzrsahi/Morrow/releases';
 ---
-<section class="hero hero--split" style="--h: 1" data-enter aria-labelledby="hero-h">
+<section class="hero" style="--h: 1" data-enter aria-labelledby="hero-h">
   <div class="wrap">
-    <div class="hero-text grid hero-split">
-      <div class="hero-copy span-6">
+    <div class="hero-text grid">
+      <div class="hero-copy span-3">
         <h1 id="hero-h">One island for coding agents.</h1>
-        <p class="t-lead">Morrow puts sessions, approval prompts and playback in a notch on macOS. The same hook contract now runs on Linux and Windows through a Tauri shell.</p>
-        <div class="btn-row">
-          <a class="btn btn--primary" href={releases}>See releases</a>
-          <a class="btn btn--secondary" href="https://github.com/fzrsahi/Morrow#readme">Read the docs</a>
-        </div>
-        <p class="t-small">Open source on GitHub, with no account or telemetry.</p>
+        <p class="t-small">Runs on macOS, Linux and Windows.</p>
       </div>
-      <div class="hero-visual span-6 start-7">
-        <img src="images/readme-hero.png" alt="The Morrow notch showing an active agent session and music controls" width="1440" height="900" />
+      <div class="hero-island span-6 start-4">
+        <img class="main-shot" src="images/readme-hero.png" alt="The Morrow island showing an active session and music controls" width="1440" height="900" />
+        <img class="small-shot" src="images/readme-approval.png" alt="An approval card in the Morrow panel" width="1200" height="800" />
+        <img class="small-shot second" src="images/readme-question.png" alt="A question card in the Morrow panel" width="1200" height="800" />
+      </div>
+      <div class="hero-action span-3 start-10">
+        <a class="btn btn--primary" href={releases}>See releases</a>
       </div>
     </div>
   </div>
