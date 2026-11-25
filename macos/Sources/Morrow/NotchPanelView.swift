@@ -635,23 +635,6 @@ struct NotchPanelView: View {
         }
     }
 
-    @ViewBuilder
-    private var dynamicIslandStrokeOverlay: some View {
-        if displayMode == .dynamicIsland && !isToastOnly {
-            switch IslandDisplayMetrics.pillShapeKind(
-                isExpanded: shouldShowExpanded,
-                isExtendedPill: isConnectedChinLyricActive || isToastOnly
-            ) {
-            case .capsule:
-                Capsule(style: .circular)
-                    .strokeBorder(Color.white.opacity(0.24), lineWidth: 1.2)
-            case .roundedRectangle(let radius):
-                RoundedRectangle(cornerRadius: CGFloat(radius), style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.24), lineWidth: 1.2)
-            }
-        }
-    }
-
     /// Derived in `AppState.refreshDerivedState()`; walking every session here
     /// ran on each render of the bar.
     private var isThinking: Bool {
@@ -1592,10 +1575,34 @@ struct NotchPanelView: View {
     @ViewBuilder
     private var panelChromeBackground: some View {
         if displayMode == .dynamicIsland {
-            dynamicIslandShape
-                .fill(Color.black)
-                .overlay(chargingAmbientLayer(for: dynamicIslandShape))
-                .overlay(prayerAmbientLayer(for: dynamicIslandShape))
+            let isFlushMagSafeToast = isToastOnly && signals.showChargingBanner && !shouldShowExpanded
+            if isFlushMagSafeToast {
+                let accent = chargingAmbientColor
+                dynamicIslandShape
+                    .fill(Color.black)
+                    .overlay(
+                        dynamicIslandShape
+                            .fill(
+                                LinearGradient(
+                                    colors: [accent.opacity(0.20), accent.opacity(0.11), .clear],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                    )
+                    .clipShape(dynamicIslandShape)
+                    .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
+            } else {
+                dynamicIslandShape
+                    .fill(Color.black)
+                    .overlay(prayerAmbientLayer(for: dynamicIslandShape))
+                    .overlay(
+                        dynamicIslandShape
+                            .stroke(isToastOnly ? Color.clear : Color.white.opacity(0.24), lineWidth: isToastOnly ? 0 : 1.2)
+                    )
+                    .clipShape(dynamicIslandShape)
+                    .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
+            }
         } else {
             let shape = NotchPanelShape(
                 topExtension: currentTopExt,
@@ -1972,12 +1979,6 @@ struct NotchPanelView: View {
                         bottomRadius: currentBottomRadius,
                         minHeight: effectiveNotchHeight
                     ))
-            )
-            .overlay(dynamicIslandStrokeOverlay)
-            .shadow(
-                color: displayMode == .dynamicIsland ? Color.black.opacity(0.45) : .clear,
-                radius: displayMode == .dynamicIsland ? 10 : 0,
-                y: displayMode == .dynamicIsland ? 4 : 0
             )
             .animation(.spring(response: 0.38, dampingFraction: 0.86), value: panelWidth)
             .animation(.spring(response: 0.40, dampingFraction: 0.84), value: shouldShowExpanded)
