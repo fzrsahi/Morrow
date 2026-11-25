@@ -19,6 +19,7 @@ mod position;
 mod prayer;
 mod prune;
 mod reminders;
+mod remote;
 mod sessions;
 mod settings;
 mod settings_window;
@@ -29,7 +30,7 @@ mod tray;
 mod windows_panel;
 
 use std::process::ExitCode;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use morrow_ipc::{Error, Server, current_endpoint};
 use tauri::State;
@@ -122,6 +123,14 @@ fn main() -> ExitCode {
     }
 
     let hooks_site = hooks::site();
+    // #448: the remote tunnel forwards to this island's own endpoint. The
+    // manager also holds the hosts from the same settings document the pages
+    // edit; the pump thread is the only driver of the engine's `poll()`.
+    let remote = Arc::new(Mutex::new(remote::RemoteManager::new(
+        hooks_site.paths.codeisland_dir.clone(),
+        endpoint.as_str().to_owned(),
+    )));
+    let remote_pump = Arc::clone(&remote);
     let position = position::Store::new(&hooks_site.paths.codeisland_dir);
     let feed = Arc::new(Feed::default());
     listener::spawn(server, Arc::clone(&feed));
@@ -148,6 +157,7 @@ fn main() -> ExitCode {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .manage(feed)
         .manage(hooks_site)
+        .manage(remote)
         .manage(Smoke(smoke))
         .manage(position)
         .manage(prayer::PrayerWakeState::new())
@@ -187,6 +197,12 @@ fn main() -> ExitCode {
             prayer::prayer_cities,
             prayer::prayer_next,
             prayer::prayer_tick,
+            remote::remote_hosts,
+            remote::remote_status,
+            remote::remote_host_save,
+            remote::remote_host_remove,
+            remote::remote_connect,
+            remote::remote_disconnect,
             sound::sound_cues,
             sound::sound_preview,
             settings_window::open_settings,
@@ -208,6 +224,7 @@ fn main() -> ExitCode {
             island::anchoring
         ])
         .setup(|app| {
+            remote::spawn_status_pump(app.handle().clone(), remote_pump);
             island::create(app)?;
             peek_window::maybe_show(app)?;
             tray::create(app);

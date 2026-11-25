@@ -44,9 +44,17 @@ impl RemoteTunnel {
     /// Tests can point this at a stand-in for `ssh`; production uses the one
     /// on PATH, as on macOS and Linux.
     pub fn with_binary(binary: impl Into<String>) -> Self {
+        // Explicit fields: a type with Drop cannot be consumed by struct update
+        // syntax, and the constructor must not drop a process that was never
+        // started.
         Self {
             binary: binary.into(),
-            ..Self::new()
+            state: TunnelState::default(),
+            process: None,
+            hook_source: String::new(),
+            plugin_source: String::new(),
+            published: None,
+            changed: None,
         }
     }
 
@@ -159,5 +167,11 @@ impl RemoteTunnel {
             let _ = process.child.kill();
             let _ = process.child.wait();
         }
+    }
+}
+
+impl Drop for RemoteTunnel {
+    fn drop(&mut self) {
+        self.disconnect();
     }
 }

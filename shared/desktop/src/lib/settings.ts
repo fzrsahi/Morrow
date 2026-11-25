@@ -20,6 +20,7 @@ export type SettingsPageId =
   | 'prayer'
   | 'behavior'
   | 'hooks'
+  | 'remote'
   | 'capabilities'
   | 'about';
 
@@ -107,6 +108,7 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
     items: [
       { id: 'behavior', label: 'Behavior', icon: 'workspace', available: true },
       { id: 'hooks', label: 'Hooks', icon: 'checkmark', available: true },
+      { id: 'remote', label: 'Remote', icon: 'workspace', available: true },
       { id: 'capabilities', label: 'Capabilities', icon: 'workspace', available: true },
       { id: 'about', label: 'About', icon: 'settings', available: true },
     ],
