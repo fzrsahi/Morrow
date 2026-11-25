@@ -72,6 +72,22 @@ final class IslandSignalsTests: XCTestCase {
         XCTAssertEqual(count(), 0)
     }
 
+    func testPrayerPriorityYieldsToMusicAndNeedsARealPrayer() {
+        let signals = IslandSignals()
+        let sync = IslandSignalsSync(signals: signals)
+
+        // minutesUntilNextPrayer defaults to 0 with nothing scheduled; that
+        // must not light the prayer wing over the music.
+        sync.publishPrayerPriority(isPrayerPrioritized: false, isMusicPlaying: false)
+        XCTAssertFalse(signals.isPrayerPrioritized)
+
+        sync.publishPrayerPriority(isPrayerPrioritized: true, isMusicPlaying: true)
+        XCTAssertFalse(signals.isPrayerPrioritized, "a playing track keeps the right wing")
+
+        sync.publishPrayerPriority(isPrayerPrioritized: true, isMusicPlaying: false)
+        XCTAssertTrue(signals.isPrayerPrioritized)
+    }
+
     func testTheBatteryLevelAloneCanChange() async {
         let signals = IslandSignals()
         signals.setChargingBanner(visible: true, batteryLevel: 80)

@@ -125,20 +125,62 @@ pub fn settings_path(site: State<'_, HooksSite>) -> PathBuf {
 #[cfg(all(test, not(windows)))]
 mod tests {
     use super::*;
+    use morrow_platform::capability::{Capability, Environment, Os};
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn x11(path_tools: Vec<String>) -> Environment {
+        Environment {
+            os: Os::Linux,
+            session_type: Some("x11".into()),
+            has_session_bus: false,
+            path_tools,
+            config_home: PathBuf::new(),
+            claude_credentials: PathBuf::new(),
+            has_portal_shortcuts: false,
+        }
+    }
 
     #[test]
-    fn fullscreen_detection_says_not_supported_off_windows() {
-        let rows = capabilities();
-        let row = rows
-            .iter()
+    fn fullscreen_detection_follows_x11_tools_off_windows() {
+        // #435: the row used to say "Not supported" on every non-Windows host.
+        // It now follows the readers in `morrow_platform::x11`.
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("a clock")
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("morrow-shell-caps-{}-{nanos}", std::process::id()));
+        let bin = root.join("bin");
+        fs::create_dir_all(&bin).expect("bin");
+
+        let without = Feature::Fullscreen.probe(&x11(Vec::new()));
+        assert!(
+            matches!(without, Capability::Degraded(_)),
+            "no tools says {without:?}"
+        );
+        for tool in ["xdotool", "xprop"] {
+            let path = bin.join(tool);
+            fs::write(&path, "#!/bin/sh\n").expect("tool");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+            }
+        }
+        let with = Feature::Fullscreen.probe(&x11(vec![bin.to_string_lossy().into_owned()]));
+        assert_eq!(with, Capability::Supported);
+
+        let row = capabilities()
+            .into_iter()
             .find(|row| row.feature == Feature::Fullscreen.name())
             .expect("a Fullscreen detection row");
-        assert_eq!(row.capability.label(), "Not supported");
         assert!(
             row.capability
                 .reason()
-                .is_some_and(|reason| !reason.is_empty()),
-            "an unsupported capability has to say why"
+                .map_or(true, |reason| !reason.contains("no fullscreen reader")),
+            "the rendered table must not repeat the old excuse: {row:?}"
         );
     }
 }

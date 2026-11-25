@@ -727,12 +727,6 @@ struct NotchPanelView: View {
         if mailManager.showMailArrivalAnimation {
             return isThinking ? 118 : 52
         }
-        if isPrayerPrioritized {
-            if isThinking {
-                return effectiveNaturalLeftWidth
-            }
-            return 56
-        }
         if signals.isPlaying || nowPlaying.isPlaying {
             if isThinking && !isConnectedChinLyricActive {
                 // Keep Thinking + Music locked to the exact same left/right wing width as Thinking without Music.
@@ -744,6 +738,12 @@ struct NotchPanelView: View {
                 return max(baseMusic, min(rightWingWidth + 8, cap))
             }
             return min(baseMusic, cap)
+        }
+        if prayerManager.isPrayerPrioritized {
+            if isThinking {
+                return effectiveNaturalLeftWidth
+            }
+            return 56
         }
         // Standby / Git right wing:
         // Strict width lock during Thinking and Idle: never expand the notch for status badges.
@@ -969,10 +969,11 @@ struct NotchPanelView: View {
                 return min(max(rightWingWidth, 148), 156)
             }
             if rightWingWidth > 0 { return rightWingWidth }
-            if isPrayerPrioritized { return 62 }
+            if isHoveringRightWing { return 108 }
             if signals.isPlaying || nowPlaying.isPlaying {
                 return 42
             }
+            if isPrayerPrioritized { return 62 }
             return 48
         }()
         return min(raw, isHoveringRightWing ? 156 : 88)
@@ -2799,6 +2800,8 @@ private struct CompactRightWing: View {
         isHovered
     }
 
+    private var isMusicPlaying: Bool { signals.isPlaying || nowPlaying.isPlaying }
+
     private var activeStatusBadge: NotchWidthMetrics.NotchStatusBadge? {
         NotchWidthMetrics.primaryStatusBadge(for: appState, inQuietHours: inQuietHours)
     }
@@ -2870,16 +2873,16 @@ private struct CompactRightWing: View {
 
     private var rightInnerLeadingPadding: CGFloat {
         if isDynamicIslandCompact && !hasNotch { return 0 }
-        if !isThinking && signals.isPrayerPrioritized { return 0 }
-        return (isNarrowCollapsedWing || (!isThinking && (signals.isPlaying || nowPlaying.isPlaying))) ? 2 : ((signals.isPlaying || nowPlaying.isPlaying) ? 3 : 6)
+        if !isThinking && signals.isPrayerPrioritized && !isMusicPlaying { return 0 }
+        return (isNarrowCollapsedWing || (!isThinking && isMusicPlaying)) ? 2 : (isMusicPlaying ? 3 : 6)
     }
 
     private var rightInnerTrailingPadding: CGFloat {
         if expanded && displayMode == .dynamicIsland { return 0 }
         if expanded { return 10 }
         if isDynamicIslandCompact && !hasNotch { return 0 }
-        if isNarrowCollapsedWing || mailManager.showMailArrivalAnimation || (!isThinking && (signals.isPlaying || nowPlaying.isPlaying || signals.isPrayerPrioritized)) { return 2 }
-        return (signals.isPlaying || nowPlaying.isPlaying) ? 4 : 8
+        if isNarrowCollapsedWing || mailManager.showMailArrivalAnimation || (!isThinking && (isMusicPlaying || (signals.isPrayerPrioritized && !isMusicPlaying))) { return 2 }
+        return isMusicPlaying ? 4 : 8
     }
 
     private var totalRightInnerPadding: CGFloat {
@@ -2960,17 +2963,9 @@ private struct CompactRightWing: View {
                 alignment: .trailing
             )
             .transition(.opacity)
-        } else if signals.isPrayerPrioritized || PrayerTimeManager.shared.isPrayerPrioritized {
-            // SMART PRIORITY: Prayer countdown takes active priority at T <= 30m (frameless, strict budget)
-            PrayerCompactWingView(
-                isHovered: shouldExpandRightWing,
-                isWideMode: isThinking && (!isDynamicIslandCompact || hasNotch)
-            ) {
-                expandedTab = .prayer
-                appState.surface = .sessionList
-            }
-            .transition(.opacity.combined(with: .scale(scale: 0.9)))
-        } else if signals.isPlaying || nowPlaying.isPlaying {
+        } else if isMusicPlaying {
+            // A playing track owns the right wing: the prayer clock must not
+            // replace the artwork and visualizer while music is active.
             let musicMaxContentWidth: CGFloat? = (!expanded && wingWidth > 0)
                 ? max(0, collapsedMaxInnerWidth - totalRightInnerPadding - badgeReserve)
                 : nil
@@ -2985,6 +2980,17 @@ private struct CompactRightWing: View {
                 maxContentWidth: (isDynamicIslandCompact && !hasNotch) ? (shouldExpandRightWing ? 156 : nil) : musicMaxContentWidth,
                 mascotSize: mascotSize
             )
+            .transition(.opacity.combined(with: .scale(scale: 0.9)))
+        } else if signals.isPrayerPrioritized {
+            // SMART PRIORITY: with no music, the prayer countdown takes the
+            // right wing at T <= 30m (frameless, strict budget).
+            PrayerCompactWingView(
+                isHovered: shouldExpandRightWing,
+                isWideMode: isThinking && (!isDynamicIslandCompact || hasNotch)
+            ) {
+                expandedTab = .prayer
+                appState.surface = .sessionList
+            }
             .transition(.opacity.combined(with: .scale(scale: 0.9)))
         } else {
             // AGENT / STANDBY MODE: minimal Git telemetry without hover-dock transition

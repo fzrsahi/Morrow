@@ -63,7 +63,7 @@ None of these are usable on Linux or Windows yet. Keep them separate from the wi
 
 ## Platform readiness
 
-Linux and Windows remain **experimental**. Code compiles and Rust tests pass, but host gates have not run: E2E-1, E2E-2, L-001 through L-012, and W-001 through W-009. Build commands and limits are in `docs/build-windows-linux.md` (PR #406). The debt is tracked in #399, #400, #401, and #402.
+Linux and Windows remain **experimental**. Code compiles and Rust tests pass, but host gates have not run: E2E-1, E2E-2, L-001 through L-012, and W-001 through W-009. Build commands and limits are in `docs/build-windows-linux.md` (PR #406). The debt is tracked in #399, #400, #401, and #402. The per-feature status map is in [docs/port-status.md](port-status.md).
 
 Do not read the presence of a Rust module as parity with macOS. `morrow-watch`, for example, compiles for Linux and Windows but has never watched a real directory on either OS.
 
