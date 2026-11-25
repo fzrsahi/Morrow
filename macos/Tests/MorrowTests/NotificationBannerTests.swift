@@ -52,6 +52,47 @@ final class NotificationBannerTests: XCTestCase {
         XCTAssertTrue(dismissed)
     }
 
+    // MARK: - Compact notification pill action
+
+    func testNotificationPillActionChromeKeepsBothThemesAndFootprint() {
+        XCTAssertEqual(NotificationPillAction.hitTarget, 24)
+        XCTAssertEqual(NotificationPillAction.glyphSize, 9)
+        XCTAssertEqual(NotificationPillAction.cornerRadius(isPixel: true), 4)
+        XCTAssertEqual(NotificationPillAction.cornerRadius(isPixel: false), 12)
+        XCTAssertGreaterThan(
+            NotificationPillAction.borderOpacity(isPixel: true),
+            NotificationPillAction.borderOpacity(isPixel: false),
+            "Pixel keeps a harder bevel than Modern's hairline border"
+        )
+    }
+
+    func testChargingBannerDismissActionRendersInBothThemesWithinHeightBudget() throws {
+        let suiteName = "NotificationBannerActionTests"
+        let suite = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        suite.removePersistentDomain(forName: suiteName)
+        defer { suite.removePersistentDomain(forName: suiteName) }
+
+        for theme in [IslandUITheme.modern.rawValue, IslandUITheme.pixel.rawValue] {
+            suite.set(theme, forKey: SettingsKey.islandUITheme)
+            let banner = MagSafeChargingBanner(batteryLevel: 70, displayMode: .dynamicIsland) {}
+
+            let host = NSHostingView(rootView: banner.defaultAppStorage(suite).frame(width: 360))
+            host.layoutSubtreeIfNeeded()
+            XCTAssertLessThanOrEqual(
+                host.fittingSize.height,
+                56.5,
+                "\(theme) dismiss control must not grow the Dynamic Island toast"
+            )
+
+            let image = try OffscreenRender.hosted(
+                banner.defaultAppStorage(suite).frame(width: 360),
+                size: CGSize(width: 360, height: 56),
+                passes: 3
+            )
+            XCTAssertGreaterThan(image.width, 0, "\(theme) dismiss control must render")
+        }
+    }
+
     // MARK: - PowerBannerState Metadata
 
     func testPowerBannerStateMetadataAndIcons() {

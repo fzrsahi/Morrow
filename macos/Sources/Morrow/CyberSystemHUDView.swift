@@ -4,6 +4,20 @@ import MorrowCore
 
 // MARK: - MagSafe / USB-C Charging Dynamic Island Banner
 
+/// Footprint for the compact action button on a notification pill. The two
+/// themes keep their own materials, but the tap target stays identical so the
+/// control reads the same whether Modern or Pixel is active at runtime.
+enum NotificationPillAction {
+    static let hitTarget: CGFloat = 24
+    static let glyphSize: CGFloat = 9
+
+    static func cornerRadius(isPixel: Bool) -> CGFloat { isPixel ? 4 : 12 }
+    static func fill(isPixel: Bool) -> Color {
+        isPixel ? Pixel16Palette.surface : Color.white.opacity(0.12)
+    }
+    static func borderOpacity(isPixel: Bool) -> Double { isPixel ? 0.28 : 0.16 }
+}
+
 public struct MagSafeChargingBanner: View {
     let batteryLevel: Int
     var displayMode: IslandDisplayMode = .notch
@@ -49,6 +63,48 @@ public struct MagSafeChargingBanner: View {
 
     private var pixelGlyph: PixelIconGlyph {
         effectiveState.pixelGlyph
+    }
+
+    /// The panel passes a dismiss closure but the pill had no control to call
+    /// it. Keep the footprint shared and let each theme supply its own chrome.
+    @ViewBuilder
+    private var dismissAction: some View {
+        if let onDismiss {
+            Button {
+                NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default)
+                onDismiss()
+            } label: {
+                ZStack {
+                    RoundedRectangle(
+                        cornerRadius: NotificationPillAction.cornerRadius(isPixel: isPixel),
+                        style: .continuous
+                    )
+                    .fill(NotificationPillAction.fill(isPixel: isPixel))
+                    .overlay {
+                        RoundedRectangle(
+                            cornerRadius: NotificationPillAction.cornerRadius(isPixel: isPixel),
+                            style: .continuous
+                        )
+                        .stroke(
+                            Color.white.opacity(NotificationPillAction.borderOpacity(isPixel: isPixel)),
+                            lineWidth: 1
+                        )
+                    }
+
+                    Image(systemName: "xmark")
+                        .font(.system(size: NotificationPillAction.glyphSize, weight: .bold))
+                        .foregroundStyle(Color.white.opacity(isPixel ? 0.85 : 0.72))
+                }
+                .frame(
+                    width: NotificationPillAction.hitTarget,
+                    height: NotificationPillAction.hitTarget
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Dismiss charging notification")
+            .accessibilityLabel("Dismiss charging notification")
+        }
     }
 
     public var body: some View {
@@ -228,6 +284,9 @@ public struct MagSafeChargingBanner: View {
             PixelText(text: "\(displayedPercent)%", color: .white, pixelSize: 2.2)
                 .fixedSize()
                 .layoutPriority(2)
+
+            dismissAction
+                .padding(.leading, 2)
         }
         .padding(.horizontal, displayMode == .dynamicIsland ? 18 : 16)
         .padding(.vertical, displayMode == .dynamicIsland ? 8 : 10)
@@ -286,6 +345,9 @@ public struct MagSafeChargingBanner: View {
                 .contentTransition(.numericText())
                 .fixedSize()
                 .layoutPriority(2)
+
+            dismissAction
+                .padding(.leading, 2)
         }
         .padding(.horizontal, displayMode == .dynamicIsland ? 18 : 16)
         .padding(.vertical, displayMode == .dynamicIsland ? 8 : 10)
