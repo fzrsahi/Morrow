@@ -416,6 +416,7 @@ struct NotchPanelView: View {
     /// Measured width of the collapsed left wing (0 until first laid out).
     @State private var leftWingWidth: CGFloat = 0
     @State private var chargingAmbientPulse = false
+    @State private var chargingToastAppearDate = Date()
     /// Measured width of the collapsed right wing (0 until first laid out).
     @State private var rightWingWidth: CGFloat = 0
     @State private var isHoveringRightWing = false
@@ -1468,8 +1469,14 @@ struct NotchPanelView: View {
                     )
 
                     Rectangle()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 1, height: 14)
+                        .fill(
+                            LinearGradient(
+                                colors: [.clear, Color.white.opacity(0.26), .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 1, height: 16)
 
                     compactRightWingSlot(
                         expanded: false,
@@ -1577,19 +1584,9 @@ struct NotchPanelView: View {
         if displayMode == .dynamicIsland {
             let isFlushMagSafeToast = isToastOnly && signals.showChargingBanner && !shouldShowExpanded
             if isFlushMagSafeToast {
-                let accent = chargingAmbientColor
                 dynamicIslandShape
                     .fill(Color.black)
-                    .overlay(
-                        dynamicIslandShape
-                            .fill(
-                                LinearGradient(
-                                    colors: [accent.opacity(0.20), accent.opacity(0.11), .clear],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                            )
-                    )
+                    .overlay(dynamicIslandChargingAmbientLayer(for: dynamicIslandShape))
                     .clipShape(dynamicIslandShape)
                     .shadow(color: Color.black.opacity(0.45), radius: 10, y: 4)
             } else {
@@ -1884,9 +1881,169 @@ struct NotchPanelView: View {
         }
     }
 
+    private struct DynamicIslandChargingCurve {
+        let intensity: Double
+        let reach: Double
+        let radialPeak: Double
+        let radialMid: Double
+        let washStart: Double
+        let washMid: Double
+    }
+
+    private func dynamicIslandChargingCurve(
+        for state: PowerBannerState,
+        elapsed t: Double
+    ) -> DynamicIslandChargingCurve {
+        switch state {
+        case .charging:
+            let wave = 0.5 - 0.5 * cos(2.0 * .pi * t / 2.4)
+            return DynamicIslandChargingCurve(
+                intensity: 0.55 + 0.45 * wave,
+                reach: 0.95 + 0.11 * wave,
+                radialPeak: 0.42,
+                radialMid: 0.14,
+                washStart: 0.24,
+                washMid: 0.10
+            )
+        case .onHold:
+            let wave = 0.5 - 0.5 * cos(2.0 * .pi * t / 3.4)
+            return DynamicIslandChargingCurve(
+                intensity: 0.48 + 0.40 * wave,
+                reach: 0.94,
+                radialPeak: 0.34,
+                radialMid: 0.10,
+                washStart: 0.18,
+                washMid: 0.07
+            )
+        case .fullyCharged:
+            let intensity: Double
+            let reach: Double
+            if t < 1.15 {
+                if t < 0.46 {
+                    let p = 0.5 - 0.5 * cos(.pi * (t / 0.46))
+                    intensity = 0.20 + 0.80 * p
+                    reach = 0.82 + 0.26 * p
+                } else {
+                    let p = 0.5 - 0.5 * cos(.pi * ((t - 0.46) / (1.15 - 0.46)))
+                    intensity = 1.00 - 0.28 * p
+                    reach = 1.08 - 0.08 * p
+                }
+            } else {
+                let wave = 0.5 - 0.5 * cos(2.0 * .pi * (t - 1.15) / 4.5)
+                intensity = 0.68 + 0.14 * wave
+                reach = 1.00
+            }
+            return DynamicIslandChargingCurve(
+                intensity: intensity,
+                reach: reach,
+                radialPeak: 0.36,
+                radialMid: 0.12,
+                washStart: 0.22,
+                washMid: 0.08
+            )
+        case .lowBattery:
+            let cycle = t.truncatingRemainder(dividingBy: 1.35) / 1.35
+            let intensity: Double = {
+                if cycle < 0.22 {
+                    let p = 0.5 - 0.5 * cos(.pi * (cycle / 0.22))
+                    return 0.22 + 0.78 * p
+                } else if cycle < 0.42 {
+                    let p = 0.5 - 0.5 * cos(.pi * ((cycle - 0.22) / 0.20))
+                    return 1.00 - 0.64 * p
+                } else if cycle < 0.62 {
+                    let p = 0.5 - 0.5 * cos(.pi * ((cycle - 0.42) / 0.20))
+                    return 0.36 + 0.56 * p
+                } else {
+                    let p = 0.5 - 0.5 * cos(.pi * ((cycle - 0.62) / 0.38))
+                    return 0.92 - 0.70 * p
+                }
+            }()
+            return DynamicIslandChargingCurve(
+                intensity: intensity,
+                reach: 1.00,
+                radialPeak: 0.46,
+                radialMid: 0.14,
+                washStart: 0.25,
+                washMid: 0.10
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func dynamicIslandChargingAmbientLayer<S: Shape>(for shape: S) -> some View {
+        let accent = chargingAmbientColor
+        let state = signals.chargingBannerState
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+            let elapsed = max(0, context.date.timeIntervalSince(chargingToastAppearDate))
+            let curve = dynamicIslandChargingCurve(for: state, elapsed: elapsed)
+            if islandUITheme == IslandUITheme.pixel.rawValue {
+                Canvas { ctx, size in
+                    let w = Double(size.width)
+                    let h = Double(size.height)
+                    let cell = 4.0
+                    let dot = 2.0
+                    let dotColor = accent.opacity(0.38 * curve.intensity)
+
+                    var y = 0.0
+                    var rowIdx = 0
+                    while y < h {
+                        let ny = abs((y / max(1.0, h)) - 0.5) * 2.0
+                        let bayerRow = Self.bayer4Matrix[rowIdx & 3]
+                        var x = 0.0
+                        var colIdx = 0
+                        while x < w {
+                            let nx = x / max(1.0, w)
+                            let falloff = exp(-pow(nx / (0.44 * curve.reach), 1.6)) * (1.0 - 0.28 * ny * ny)
+                            let intensity = falloff * curve.intensity
+                            let threshold = bayerRow[colIdx & 3] / 16.0
+                            if intensity > threshold + 0.08 {
+                                ctx.fill(
+                                    Path(CGRect(x: x, y: y, width: dot, height: dot)),
+                                    with: .color(dotColor)
+                                )
+                            }
+                            x += cell
+                            colIdx += 1
+                        }
+                        y += cell
+                        rowIdx += 1
+                    }
+                }
+                .clipShape(shape)
+            } else {
+                ZStack {
+                    shape.fill(
+                        EllipticalGradient(
+                            colors: [
+                                accent.opacity(curve.radialPeak * curve.intensity),
+                                accent.opacity(curve.radialMid * curve.intensity),
+                                .clear
+                            ],
+                            center: UnitPoint(x: 0.08, y: 0.5),
+                            startRadiusFraction: 0.0,
+                            endRadiusFraction: 0.48 * curve.reach
+                        )
+                    )
+                    shape.fill(
+                        LinearGradient(
+                            stops: [
+                                .init(color: accent.opacity(curve.washStart * curve.intensity), location: 0.0),
+                                .init(color: accent.opacity(curve.washMid * curve.intensity), location: min(0.95, 0.42 * curve.reach)),
+                                .init(color: .clear, location: min(1.0, 0.82 * curve.reach))
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     private func updateChargingAmbientAnimation(visible: Bool) {
         chargingAmbientPulse = false
         guard visible else { return }
+        chargingToastAppearDate = Date()
 
         switch signals.chargingBannerState {
         case .charging:
@@ -4470,8 +4627,14 @@ private struct IdleIndicatorBar: View {
                         .opacity(hovered ? 0.95 : 0.72)
 
                     Rectangle()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 1, height: 14)
+                        .fill(
+                            LinearGradient(
+                                colors: [.clear, Color.white.opacity(0.26), .clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: 1, height: 16)
 
                     if !forceEmptyIdle && mailManager.showMailArrivalAnimation {
                         MailArrivalWingView(

@@ -415,7 +415,7 @@ final class DynamicIslandModeTests: XCTestCase {
             saveName: "after-balanced-twin-lyrics"
         )
         XCTAssertGreaterThan(longLyricPill.midRowWidthPt, shortLyricPill.midRowWidthPt + 60)
-        XCTAssertLessThanOrEqual(longLyricPill.midRowWidthPt, 330)
+        XCTAssertLessThanOrEqual(longLyricPill.midRowWidthPt, 390)
         XCTAssertTrue(longLyricPill.hasBlueArtworkPixel)
     }
 

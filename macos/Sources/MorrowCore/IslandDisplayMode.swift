@@ -184,7 +184,7 @@ public enum IslandDisplayMetrics {
             && !isToastOnly
     }
 
-    /// Adaptive Inline Lyrics pill width (180–320 pt at 100%, hard-capped at min(340, screenWidth * 0.35)),
+    /// Adaptive Inline Lyrics pill width (180–380 pt at 100%, hard-capped at min(400, screenWidth * 0.35)),
     /// measured strictly from the currently displayed lyric text.
     public static func inlineLyricsWidth(
         displayedText: String,
@@ -200,7 +200,7 @@ public enum IslandDisplayMetrics {
             return sum + (isWideCJK ? 11.5 : 6.2)
         }
         let chromeAllowance = 106.0
-        let base = min(320.0, max(180.0, chromeAllowance + textWidth))
+        let base = min(380.0, max(180.0, chromeAllowance + textWidth))
         let factor = scaleFactor(for: scalePercent)
         let scaled: Double
         if factor >= 1.0 {
@@ -208,7 +208,7 @@ public enum IslandDisplayMetrics {
         } else {
             scaled = max(180.0, base - (1.0 - factor) * 20.0)
         }
-        let hardCap = min(340.0, screenWidth * 0.35)
+        let hardCap = min(400.0, screenWidth * 0.35)
         return min(scaled, hardCap)
     }
 

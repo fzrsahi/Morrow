@@ -304,6 +304,9 @@ struct ModernMarqueeText: View {
     var tracking: CGFloat = 0
     var maxWidth: CGFloat? = nil
     var centerShortText: Bool = false
+    var lineDuration: Double? = nil
+    var lineKey: Int = 0
+    var edgeFadeWidth: CGFloat = 0
     @Environment(\.animationGates) private var animationGates
     @State private var textWidth: CGFloat = 0
     @State private var startDate = Date()
@@ -316,6 +319,27 @@ struct ModernMarqueeText: View {
             // that fits never scrolls, so no timeline is created for it.
             if animationGates.allows(.marquee) && excess > 0 {
                 scrolling(containerWidth: containerWidth, excess: excess, height: geo.size.height)
+            } else if excess > 0 && edgeFadeWidth > 0 {
+                let fadeFraction = min(0.25, Double(edgeFadeWidth / max(1, containerWidth)))
+                Text(text)
+                    .font(font)
+                    .tracking(tracking)
+                    .foregroundStyle(color)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .frame(width: containerWidth, height: geo.size.height, alignment: .leading)
+                    .clipped()
+                    .mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black, location: 0.0),
+                                .init(color: .black, location: max(0.0, 1.0 - fadeFraction)),
+                                .init(color: .clear, location: 1.0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
             } else {
                 Text(text)
                     .font(font)
@@ -354,20 +378,39 @@ struct ModernMarqueeText: View {
             startDate = Date()
             textWidth = max(CGFloat(newText.count) * 7.0, 10)
         }
+        .onChange(of: lineKey) { _, _ in
+            startDate = Date()
+        }
     }
 
     private func scrolling(containerWidth: CGFloat, excess: CGFloat, height: CGFloat) -> some View {
         TimelineView(.animation(minimumInterval: 0.03)) { timeline in
+                let elapsed = max(0, timeline.date.timeIntervalSince(startDate))
                 let offset: CGFloat = {
                     guard excess > 0 else { return 0 }
-                    let scrollDuration = max(2.5, Double(excess) / 22.0)
-                    let pauseStart = 1.2
-                    let pauseEnd = 1.2
+                    if let lineDuration {
+                        let dur = max(1.8, lineDuration)
+                        let leadHold = min(0.65, dur * 0.16)
+                        let tailHold = min(0.65, dur * 0.16)
+                        let moveDur = max(0.8, dur - leadHold - tailHold)
+                        if elapsed < leadHold {
+                            return 0
+                        } else if elapsed < leadHold + moveDur {
+                            let progress = (elapsed - leadHold) / moveDur
+                            let smooth = (1.0 - cos(progress * .pi)) / 2.0
+                            return CGFloat(smooth) * excess
+                        } else {
+                            return excess
+                        }
+                    }
+
+                    let scrollDuration = max(2.0, Double(excess) / 26.0)
+                    let pauseStart = 0.9
+                    let pauseEnd = 0.9
                     let resetDuration = 1.0
                     let totalCycle = pauseStart + scrollDuration + pauseEnd + resetDuration
 
-                    let time = max(0, timeline.date.timeIntervalSince(startDate))
-                    let t = time.truncatingRemainder(dividingBy: totalCycle)
+                    let t = elapsed.truncatingRemainder(dividingBy: totalCycle)
 
                     if t < pauseStart {
                         return 0
@@ -384,7 +427,7 @@ struct ModernMarqueeText: View {
                     }
                 }()
 
-                Text(text)
+                let textView = Text(text)
                     .font(font)
                     .tracking(tracking)
                     .foregroundStyle(color)
@@ -398,6 +441,26 @@ struct ModernMarqueeText: View {
                     .offset(x: -offset)
                     .frame(width: containerWidth, height: height, alignment: .leading)
                     .clipped()
+
+                if edgeFadeWidth > 0 {
+                    let leftFade = min(1.0, Double(offset) / 12.0)
+                    let rightFade = min(1.0, Double(excess - offset) / 12.0)
+                    let fadeFraction = min(0.25, Double(edgeFadeWidth / max(1, containerWidth)))
+                    textView.mask(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .black.opacity(1.0 - leftFade), location: 0.0),
+                                .init(color: .black, location: fadeFraction),
+                                .init(color: .black, location: 1.0 - fadeFraction),
+                                .init(color: .black.opacity(1.0 - rightFade), location: 1.0)
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                } else {
+                    textView
+                }
         }
     }
 }
@@ -1410,24 +1473,40 @@ struct DynamicIslandInlineLyricPillView: View {
                     .fixedSize()
 
                 Rectangle()
-                    .fill(Color.white.opacity(0.18))
-                    .frame(width: 1, height: 14)
+                    .fill(
+                        LinearGradient(
+                            colors: [.clear, Color.white.opacity(0.26), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 1, height: 16)
 
                 if isPixel {
-                    Text(displayText.uppercased())
-                        .font(.system(size: min(10.5, max(9.5, CGFloat(floatingLyricFontSize) - 0.5)), weight: .bold, design: .monospaced))
-                        .tracking(0.5)
-                        .foregroundStyle(resolvedTextColor)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    ModernMarqueeText(
+                        text: displayText.uppercased(),
+                        font: .system(size: min(10.5, max(9.5, CGFloat(floatingLyricFontSize) - 0.5)), weight: .bold, design: .monospaced),
+                        color: resolvedTextColor,
+                        tracking: 0.5,
+                        centerShortText: true,
+                        lineDuration: nowPlaying.currentLyricDuration,
+                        lineKey: nowPlaying.currentLyricIndex,
+                        edgeFadeWidth: 16
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 18)
                 } else {
-                    Text(displayText)
-                        .font(.system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign))
-                        .foregroundStyle(resolvedTextColor)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                        .frame(maxWidth: .infinity, alignment: .center)
+                    ModernMarqueeText(
+                        text: displayText,
+                        font: .system(size: min(11.5, max(10, CGFloat(floatingLyricFontSize))), weight: .semibold, design: activeFontDesign),
+                        color: resolvedTextColor,
+                        centerShortText: true,
+                        lineDuration: nowPlaying.currentLyricDuration,
+                        lineKey: nowPlaying.currentLyricIndex,
+                        edgeFadeWidth: 16
+                    )
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 18)
                 }
 
                 ZStack {

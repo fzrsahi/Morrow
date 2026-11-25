@@ -7,7 +7,7 @@ This specification is normative when creating or modifying Dynamic Island UI in 
 - **Uniform Collapsed Height:** All collapsed states (`Idle`, `Idle + Priority`, `Balanced Twin`, `Inline Lyrics`) use a fixed height of **`34 pt`**. Transitioning between collapsed states must cause `0 pt` vertical height jump.
 - **Floating Y-Offset:** Default **`10 pt`** below the top screen edge (`DynamicIslandTopOffset`, clamped `0 – 40 pt`).
 - **Outer Horizontal Padding:** **`13 pt`** when collapsed; **`14 pt`** when expanded.
-- **Balanced Twin Center Divider:** **`1 × 14 pt`** (`white` at `18%` opacity) with **`10 pt`** gap on each side (`21 pt` total divider span).
+- **Balanced Twin Center Divider:** **`1 × 16 pt`** vertical fade (`clear → white 26% → clear`) with **`10 pt`** gap on each side (`21 pt` total divider span).
 - **Compact Asset Sizes:** Collapsed mascot **`20 pt`** (`19 pt` in Inline Lyrics); compact album artwork **`18 pt`** (`4.5 pt` corner radius).
 - **Chrome Stroke:** **`1.2 pt`** (`white` at `24%` opacity) on standard pills; **`0 pt`** (transparent) on flush toast banners.
 
@@ -21,7 +21,7 @@ This specification is normative when creating or modifying Dynamic Island UI in 
 | **4. Agent Active (No Music)** | `180 – 250 pt` | `260 pt` | `34 pt` | `Capsule` | `[Mascot + Thinking/Tool/Quota <= 110pt] \| [Standby <= 76pt]` |
 | **5. Agent Active + Music (No Lyrics)** | `210 – 270 pt` | `280 pt` | `34 pt` | `Capsule` | `[Mascot + Thinking/Tool <= 110pt] \| [Art + Spectrum + 1 Badge <= 88pt]` |
 | **6. Right-Wing Hover (Music Controls)** | `220 – 300 pt` | `320 pt` | `34 pt` | `Capsule` | `[Mascot] \| [Art + Track Marquee + Spectrum]` |
-| **7. Inline Lyrics (Idle + Music + Lyrics)** | `180 – 320 pt` | `min(340 pt, screenWidth * 0.35)` | `34 pt` | `Capsule` | `[19pt Mascot] \| [Displayed Lyric] [18pt Art]` |
+| **7. Inline Lyrics (Idle + Music + Lyrics)** | `180 – 380 pt` | `min(400 pt, screenWidth * 0.35)` | `34 pt` | `Capsule` | `[19pt Mascot] \| [Displayed Lyric] [18pt Art]` |
 | **8. Toast — MagSafe Charging** | `360 pt` | `380 pt` | `48 – 56 pt` | `RoundedRectangle(18)` | Flush charging banner |
 | **9. Toast — Prayer Mini Peek** | `460 pt` | `500 pt` | `140 – 156 pt` | `RoundedRectangle(18)` | Flush Sun-Arc banner |
 | **10. Volume HUD Overlay** | `172 pt` | `188 pt` | `26 pt` | `Capsule` | Separate pill `4 pt` below main island |

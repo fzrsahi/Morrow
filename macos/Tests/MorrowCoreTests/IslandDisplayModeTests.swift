@@ -231,21 +231,21 @@ final class IslandDisplayModeTests: XCTestCase {
 
         let mediumW = IslandDisplayMetrics.inlineLyricsWidth(displayedText: "Dancing in the moonlight", screenWidth: 1440, scalePercent: 100)
         XCTAssertGreaterThan(mediumW, 180)
-        XCTAssertLessThanOrEqual(mediumW, 320)
+        XCTAssertLessThanOrEqual(mediumW, 380)
 
         let longW = IslandDisplayMetrics.inlineLyricsWidth(
             displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
             screenWidth: 1440,
             scalePercent: 100
         )
-        XCTAssertEqual(longW, 320, accuracy: 0.5)
+        XCTAssertEqual(longW, 380, accuracy: 0.5)
 
         let scaledMaxW = IslandDisplayMetrics.inlineLyricsWidth(
             displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
             screenWidth: 1440,
             scalePercent: 200
         )
-        XCTAssertEqual(scaledMaxW, 340, accuracy: 0.5)
+        XCTAssertEqual(scaledMaxW, 400, accuracy: 0.5)
 
         let narrowScreenW = IslandDisplayMetrics.inlineLyricsWidth(
             displayedText: "This is a very long lyric line that should definitely hit the upper width cap cleanly",
@@ -256,7 +256,7 @@ final class IslandDisplayModeTests: XCTestCase {
 
         let cjkW = IslandDisplayMetrics.inlineLyricsWidth(displayedText: "夜空ノムコウ", screenWidth: 1440, scalePercent: 100)
         XCTAssertGreaterThanOrEqual(cjkW, 180)
-        XCTAssertLessThanOrEqual(cjkW, 320)
+        XCTAssertLessThanOrEqual(cjkW, 380)
     }
 
     func testBalancedTwinHardCapMatchesSpecSection2() {
