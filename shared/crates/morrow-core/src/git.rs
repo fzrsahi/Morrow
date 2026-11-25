@@ -135,6 +135,69 @@ pub fn standardize(path: &Path) -> PathBuf {
     out
 }
 
+/// Counts from `git status --porcelain=v1`, one row per changed path. The shell
+/// runs git; this only reads the two status columns, so a path with spaces or a
+/// rename arrow cannot split a row into two changes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusCounts {
+    /// Rows with a changed index column (`M `, `A `, `R `, …).
+    pub staged: usize,
+    /// Rows with a changed worktree column (` M`, ` D`, …). Untracked rows are
+    /// counted separately so "modified" never includes a file git does not track.
+    pub modified: usize,
+    /// `??` rows.
+    pub untracked: usize,
+}
+
+/// Parse the output of `git status --porcelain=v1`. Short or empty rows are
+/// ignored rather than guessed at; conflict rows count in both columns because
+/// git reports a change in each.
+pub fn parse_status(output: &str) -> GitStatusCounts {
+    let mut counts = GitStatusCounts::default();
+    for line in output.lines() {
+        let bytes = line.as_bytes();
+        if bytes.len() < 2 {
+            continue;
+        }
+        let (index, worktree) = (bytes[0], bytes[1]);
+        if index == b'?' && worktree == b'?' {
+            counts.untracked += 1;
+            continue;
+        }
+        if index != b' ' {
+            counts.staged += 1;
+        }
+        if worktree != b' ' {
+            counts.modified += 1;
+        }
+    }
+    counts
+}
+
+/// One recent commit, as the Workspace tab draws it.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct GitCommit {
+    pub hash: String,
+    pub subject: String,
+}
+
+/// Parse `git log --pretty=tformat:%h%x1f%s`. The unit separator keeps a colon
+/// or a space in a subject from being mistaken for the hash boundary.
+pub fn parse_log(output: &str, limit: usize) -> Vec<GitCommit> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let (hash, subject) = line.split_once('\u{1f}')?;
+            (!hash.is_empty() && !subject.is_empty()).then(|| GitCommit {
+                hash: hash.to_owned(),
+                subject: subject.to_owned(),
+            })
+        })
+        .take(limit)
+        .collect()
+}
+
 /// Whether `git_dir` sits at `<repo>/.git/worktrees/<name>` — by segments, so
 /// a checkout inside a directory literally named "worktrees" or a submodule
 /// (`.git/modules/…`) is not one.

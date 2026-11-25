@@ -74,6 +74,20 @@ export type QuestionCard = {
   prompts: QuestionPrompt[];
 };
 
+/** #462 — mirrors `WorkspaceStatus` in src-tauri/src/workspace.rs. Counts come
+ *  from `git status --porcelain=v1`, commits from `git log`. */
+export type GitCommit = { hash: string; subject: string };
+export type WorkspaceStatus = {
+  cwd: string;
+  project: string;
+  branch: string;
+  isWorktree: boolean;
+  staged: number;
+  modified: number;
+  untracked: number;
+  commits: GitCommit[];
+};
+
 export type Card = {
   id: number;
   session_id: string;

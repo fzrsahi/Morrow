@@ -16,6 +16,7 @@ export type SettingsPageId =
   | 'sound'
   | 'shortcuts'
   | 'agents'
+  | 'workspace'
   | 'music'
   | 'prayer'
   | 'behavior'
@@ -92,6 +93,7 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
         reason:
           'Per-agent switches are not a setting this shell reads: detection comes from the 13 readers in discovery, and which ones found something is on Hooks. A toggle here would write a key nothing consults.',
       },
+      { id: 'workspace', label: 'Workspace', icon: 'workspace', available: true },
       {
         id: 'music',
         label: 'Music',

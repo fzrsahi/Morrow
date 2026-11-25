@@ -26,6 +26,7 @@ mod settings_window;
 mod sound;
 mod transcripts;
 mod tray;
+mod workspace;
 #[cfg(windows)]
 mod windows_panel;
 
@@ -221,7 +222,8 @@ fn main() -> ExitCode {
             adapters::fullscreen,
             adapters::quiet_hours,
             island::island_question_focus,
-            island::anchoring
+            island::anchoring,
+            workspace::workspace_status
         ])
         .setup(|app| {
             remote::spawn_status_pump(app.handle().clone(), remote_pump);

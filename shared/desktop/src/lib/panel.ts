@@ -7,7 +7,7 @@ import { MOTION } from './tokens';
 export type PanelVariant = 'A' | 'B' | 'C';
 /** The two Swift `IslandDisplayMode` raw values, and nothing else. */
 export type DisplayMode = 'notch' | 'dynamicIsland';
-export type PanelTab = 'agents' | 'music';
+export type PanelTab = 'agents' | 'workspace' | 'music';
 export type SessionFilter = 'all' | 'sta' | 'agt';
 /** #185 keeps #183's comfortable cards reachable; compact is the default. */
 export type SessionDensity = 'compact' | 'comfortable';

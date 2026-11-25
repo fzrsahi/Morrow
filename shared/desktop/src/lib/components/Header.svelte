@@ -11,6 +11,8 @@
     theme?: Theme;
     tab: PanelTab;
     filter: SessionFilter;
+    /** #462: the Workspace tab follows the same key as macOS's panel. */
+    workspaceEnabled?: boolean;
     muted: boolean;
     quitArmed: boolean;
     variant: PanelVariant;
@@ -24,6 +26,7 @@
     theme = 'pixel',
     tab,
     filter,
+    workspaceEnabled = true,
     muted,
     quitArmed,
     variant,
@@ -34,10 +37,18 @@
     onQuit,
   }: Props = $props();
 
-  const tabs: Array<{ id: PanelTab; label: string; icon: string; line: 'cpu' | 'note'; modern: string }> = [
+  const tabs: Array<{
+    id: PanelTab;
+    label: string;
+    icon: string;
+    line: 'cpu' | 'branch' | 'note';
+    modern: string;
+  }> = [
     { id: 'agents', label: 'AGENTS', icon: 'agents', line: 'cpu', modern: 'Agents' },
+    { id: 'workspace', label: 'WORKSPACE', icon: 'workspace', line: 'branch', modern: 'Workspace' },
     { id: 'music', label: 'MUSIC', icon: 'music', line: 'note', modern: 'Music' },
   ];
+  const shownTabs = $derived(tabs.filter((item) => item.id !== 'workspace' || workspaceEnabled));
   const filters: Array<{ id: SessionFilter; label: string; modern: string }> = [
     { id: 'all', label: 'ALL', modern: 'All' },
     { id: 'sta', label: 'STA', modern: 'Status' },
@@ -48,7 +59,7 @@
 
 <header class="hdr" class:edge={variant !== 'B'} class:modern={theme === 'modern'} data-header={tab}>
   <div class="tabs" role="tablist" aria-label="Island tabs">
-    {#each tabs as item (item.id)}
+    {#each shownTabs as item (item.id)}
       <button
         class="tab"
         class:on={tab === item.id}
