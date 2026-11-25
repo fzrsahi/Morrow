@@ -73,13 +73,22 @@
     type SessionFilter,
     type Size,
   } from './lib/panel';
+  import {
+    SwipeGate,
+    cycleTab,
+    wheelDeltaPx,
+    wheelVolumePercent,
+  } from './lib/gestures';
   import { prayerCardModel } from './lib/prayer';
   import {
+    DEFAULT_GESTURES,
     SETTINGS_CHANGED_EVENT,
     SETTINGS_KEYS,
     appearanceFromSettings,
+    gesturesFromSettings,
     sessionDensityFromSettings,
     sessionFilterFromSettings,
+    type GestureSettings,
   } from './lib/settings';
   import { activeSession, collapsedWidth } from './lib/session-cards';
   import type { TerminalOutcome } from './lib/terminal-jump';
@@ -156,6 +165,10 @@
   let prehover = $state(false);
   let openHeight = $state<number | null>(null);
   let tab = $state<PanelTab>('agents');
+  // Parity #3: wheel-over-island volume and horizontal swipe tabs, both
+  // switchable in Settings → Behavior. Defaults are read from settings.json.
+  let gestures = $state<GestureSettings>({ ...DEFAULT_GESTURES });
+  const swipeGate = new SwipeGate();
   let filter = $state<SessionFilter>('all');
   // #185: #183's cards stay reachable; a fresh install uses compact rows.
   let density = $state<SessionDensity>('compact');
@@ -646,6 +659,31 @@
     openPanel();
   }
 
+  // Parity #3: vertical wheel on the pill steps the system volume through the
+  // same commands the HUD uses; a horizontal swipe switches tabs. The vertical
+  // gesture stops at the collapsed island so the open session list can scroll.
+  function onWheel(event: WheelEvent) {
+    if (event.ctrlKey) return;
+    const dx = wheelDeltaPx(event.deltaX, event.deltaMode);
+    const dy = wheelDeltaPx(event.deltaY, event.deltaMode);
+    if (gestures.swipeTabs && Math.abs(dx) > Math.abs(dy)) {
+      const direction = swipeGate.push(dx, performance.now());
+      if (direction !== null) {
+        event.preventDefault();
+        if (!expanded) openPanel();
+        tab = cycleTab(tab, direction);
+      }
+      return;
+    }
+    if (gestures.scrollVolume && !expanded && Math.abs(dy) > Math.abs(dx)) {
+      const percent = wheelVolumePercent(volume.percent, dy);
+      if (percent !== null) {
+        event.preventDefault();
+        void onSetVolume(percent);
+      }
+    }
+  }
+
   function onQuit() {
     clearTimeout(quitTimer);
     if (quitGate.click(performance.now()) === 'quit') {
@@ -960,6 +998,7 @@
       .then((stored) => {
         filter = sessionFilterFromSettings(stored);
         density = sessionDensityFromSettings(stored);
+        gestures = gesturesFromSettings(stored);
         const appearance = appearanceFromSettings(stored);
         theme = appearance.theme;
         displayMode = appearance.displayMode;
@@ -976,6 +1015,7 @@
     let unlisten: (() => void) | undefined;
     void listen<unknown>(SETTINGS_CHANGED_EVENT, (event) => {
       const appearance = appearanceFromSettings(event.payload);
+      gestures = gesturesFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
       // City/method/correction changes invalidate the card's schedule.
@@ -1089,6 +1129,7 @@
   bind:this={island}
   onpointerenter={onPointerEnter}
   onpointerleave={onPointerLeave}
+  onwheel={onWheel}
   role="presentation"
 >
   {#if !expanded && !closing}

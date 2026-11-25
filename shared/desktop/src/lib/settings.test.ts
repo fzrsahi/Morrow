@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
+  DEFAULT_GESTURES,
   DEFAULT_HOTKEY,
   appearanceFromSettings,
   describeCapability,
+  gesturesFromSettings,
   sessionDensityFromSettings,
   sessionFilterFromSettings,
   SETTINGS_KEYS,
@@ -200,5 +202,35 @@ describe('the pages that have no controls say why', () => {
   test('the shortcut the page prints is the one the shell registers', () => {
     // Two copies of a binding drift; `hotkey.rs` names this string once.
     expect(DEFAULT_HOTKEY).toBe('Super+Space');
+  });
+});
+
+// Parity #3 — both gestures are switches, not fixed behaviour.
+describe('gesture settings', () => {
+  test('a fresh install leaves both gestures on, as on macOS', () => {
+    expect(gesturesFromSettings(null)).toEqual(DEFAULT_GESTURES);
+    expect(gesturesFromSettings(null)).toEqual({ scrollVolume: true, swipeTabs: true });
+  });
+
+  test('each gesture can be turned off independently', () => {
+    expect(gesturesFromSettings({ notchScrollVolumeControl: false })).toEqual({
+      scrollVolume: false,
+      swipeTabs: true,
+    });
+    expect(gesturesFromSettings({ notchScrollTabSwitch: false })).toEqual({
+      scrollVolume: true,
+      swipeTabs: false,
+    });
+  });
+
+  test('malformed values fall back to the default', () => {
+    expect(gesturesFromSettings({ notchScrollVolumeControl: 'off', notchScrollTabSwitch: 0 })).toEqual(
+      DEFAULT_GESTURES,
+    );
+  });
+
+  test('the keys match Swift SettingsKey so the two apps can share a value', () => {
+    expect(SETTINGS_KEYS.scrollVolume).toBe('notchScrollVolumeControl');
+    expect(SETTINGS_KEYS.swipeTabs).toBe('notchScrollTabSwitch');
   });
 });
