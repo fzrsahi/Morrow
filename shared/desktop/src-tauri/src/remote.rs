@@ -315,6 +315,15 @@ pub fn remote_connect(
     manager: State<'_, Arc<Mutex<RemoteManager>>>,
     id: String,
 ) -> Result<RemoteStatus, String> {
+    // #451: the Windows endpoint is a named pipe and `ssh -R` cannot forward
+    // into one. Fail with an honest reason instead of offering a button that
+    // silently creates a tunnel nothing can reach.
+    if cfg!(target_os = "windows") {
+        return Err(
+            "Remote tunnels are Linux-only for now: ssh -R cannot reach a Windows named pipe (see #451)."
+                .into(),
+        );
+    }
     let state = Arc::clone(&manager);
     {
         let mut manager = lock(&state)?;
