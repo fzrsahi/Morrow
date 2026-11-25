@@ -46,6 +46,7 @@
     KimiStatus,
     OpencodeStatus,
     RemoteHost,
+    SocketHealth,
     SoundCue,
     TargetStatus,
     YamlStatus,
@@ -111,7 +112,7 @@
 
   async function load() {
     try {
-      const [h, c, a, stored, availableCities, sound, file, remoteHosts, remoteStatuses] =
+      const [h, c, a, stored, availableCities, sound, file, remoteHosts, remoteStatuses, socket] =
         await Promise.all([
           invoke<HooksSnapshot>('hooks_status'),
           invoke<CapabilityRow[]>('capabilities'),
@@ -122,8 +123,11 @@
           invoke<string>('settings_path'),
           invoke<RemoteHost[]>('remote_hosts'),
           invoke<RemoteStatuses>('remote_status'),
+          invoke<SocketHealth>('hooks_socket_health'),
         ]);
-      hooks = h;
+      // The dedicated probe is the live answer; `hooks_status` carries the same
+      // shape so the page still has one snapshot to render.
+      hooks = { ...h, socket };
       capabilities = c;
       autostart = a;
       cues = sound;
@@ -235,6 +239,18 @@
             run(() =>
               invoke(row.installed ? 'yaml_uninstall' : 'yaml_install', { source: row.source }),
             )}
+          onToggleConfigRoot={(row) =>
+            run(() =>
+              invoke(row.installed ? 'config_root_uninstall' : 'config_root_install', {
+                cli: row.cli,
+                path: row.path,
+              }),
+            )}
+          onAddExtraDir={(cli, path) => run(() => invoke('extra_config_dir_add', { cli, path }))}
+          onRemoveExtraDir={(id) => run(() => invoke('extra_config_dir_remove', { id }))}
+          onToggleExtraDir={(row, enabled) =>
+            run(() => invoke('extra_config_dir_set_enabled', { id: row.id, enabled }))
+          }
         />
       {:else if page === 'remote'}
         <RemotePage

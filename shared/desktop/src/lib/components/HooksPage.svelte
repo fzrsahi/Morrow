@@ -1,7 +1,18 @@
 <script lang="ts">
   // #199 — the Hooks page of the Settings window. The hook logic came from
   // SettingsPanel.svelte; the shell still owns every install decision.
+  // #462 — socket health, config roots and extra roots are read from the shell
+  // too; the page only maps controls onto commands.
+  import {
+    configRootLabel,
+    coverage,
+    extraDirLabel,
+    extraDirsFor,
+    socketLabel,
+  } from '../hooks';
   import type {
+    ConfigRootStatus,
+    ExtraConfigDirStatus,
     HooksSnapshot,
     KimiStatus,
     OpencodeStatus,
@@ -18,6 +29,10 @@
     onToggleOpencode: (row: OpencodeStatus) => void;
     onToggleKimi: (row: KimiStatus) => void;
     onToggleYaml: (row: YamlStatus) => void;
+    onToggleConfigRoot: (row: ConfigRootStatus) => void;
+    onAddExtraDir: (cli: string, path: string) => void;
+    onRemoveExtraDir: (id: string) => void;
+    onToggleExtraDir: (row: ExtraConfigDirStatus, enabled: boolean) => void;
   };
   let {
     hooks,
@@ -28,20 +43,24 @@
     onToggleOpencode,
     onToggleKimi,
     onToggleYaml,
+    onToggleConfigRoot,
+    onAddExtraDir,
+    onRemoveExtraDir,
+    onToggleExtraDir,
   }: Props = $props();
 
-  function coverage(): { installed: number; detected: number } {
-    if (!hooks) return { installed: 0, detected: 0 };
-    const rows = [
-      ...hooks.targets.map((row) => ({ detected: row.detected, installed: row.installed })),
-      { detected: hooks.opencode.detected, installed: hooks.opencode.plugin_installed },
-      { detected: hooks.kimi.detected, installed: hooks.kimi.installed },
-      ...hooks.yaml.map((row) => ({ detected: row.detected, installed: row.installed })),
-    ];
-    return {
-      installed: rows.filter((row) => row.installed).length,
-      detected: rows.filter((row) => row.detected).length,
-    };
+  let newCli = $state('claude');
+  let newPath = $state('');
+
+  function addExtraDir() {
+    const path = newPath.trim();
+    if (!path) return;
+    onAddExtraDir(newCli, path);
+    newPath = '';
+  }
+
+  function toggleExtraDir(row: ExtraConfigDirStatus, event: Event) {
+    onToggleExtraDir(row, (event.currentTarget as HTMLInputElement).checked);
   }
 </script>
 
@@ -50,6 +69,14 @@
   <div class="grp"><div><span class="s">Checking…</span></div></div>
 {:else}
   <div class="grp">
+    <div>
+      <span class="n">Hook socket</span>
+      <span
+        class="s"
+        class:yes={hooks.socket.listening}
+        class:no={!hooks.socket.listening}>{socketLabel(hooks.socket)}</span
+      >
+    </div>
     <div>
       <span class="n">Claude Code</span>
       <span class="s" class:yes={hooks.status.hooks_installed}>
@@ -68,7 +95,7 @@
     </div>
     <div>
       <span class="n">Coverage</span>
-      <span class="s">{coverage().installed} of {coverage().detected} agents found here are hooked</span>
+      <span class="s">{coverage(hooks).installed} of {coverage(hooks).detected} agents found here are hooked</span>
     </div>
   </div>
   <div class="grp" class:missing={hooks.targets.length === 0}>
@@ -141,8 +168,99 @@
       </div>
     {/each}
   </div>
+
+  <div class="grp">
+    <div><span class="n">Config roots</span><span class="s">Primary root and its extra roots, per CLI</span></div>
+    {#each hooks.config_roots as row (row.cli)}
+      <div class:missing={!row.ready}>
+        <span class="n">{row.name}</span>
+        <span class="s" class:yes={row.ready && row.installed}>{configRootLabel(row)}</span>
+        <span class="s path">{row.path}</span>
+        {#if row.ready}
+          <button class="b" disabled={busy} onclick={() => onToggleConfigRoot(row)}>
+            {row.installed ? 'Remove' : 'Install'}
+          </button>
+        {/if}
+      </div>
+      {#each extraDirsFor(hooks.extra_dirs, row.cli) as dir (dir.id)}
+        <div class:missing={!dir.ready || !dir.enabled}>
+          <span class="n">{row.name} extra</span>
+          <span
+            class="s"
+            class:yes={dir.ready && dir.installed && !dir.problem}
+            class:lim={!!dir.problem}>{extraDirLabel(dir)}</span
+          >
+          <span class="s path">{dir.path}</span>
+          {#if dir.ready && !dir.problem}
+            <button class="b" disabled={busy} onclick={() => onToggleConfigRoot({
+              cli: row.cli,
+              name: row.name,
+              path: dir.path,
+              ready: dir.ready,
+              installed: dir.installed,
+            })}>
+              {dir.installed ? 'Remove' : 'Install'}
+            </button>
+          {/if}
+          <label class="toggle">
+            <input
+              type="checkbox"
+              checked={dir.enabled}
+              disabled={busy}
+              onchange={(event) => toggleExtraDir(dir, event)}
+            /> Enabled
+          </label>
+          <button class="b" disabled={busy} onclick={() => onRemoveExtraDir(dir.id)}>Forget</button>
+        </div>
+      {/each}
+    {/each}
+  </div>
+  <div class="grp">
+    <div>
+      <span class="n">Add config root</span>
+      <select class="b" bind:value={newCli} disabled={busy} aria-label="CLI">
+        {#each hooks.config_roots as row (row.cli)}
+          <option value={row.cli}>{row.name}</option>
+        {/each}
+      </select>
+      <input
+        class="path-input"
+        type="text"
+        bind:value={newPath}
+        placeholder="~/.claude-work"
+        aria-label="Config directory"
+        onkeydown={(event) => event.key === 'Enter' && addExtraDir()}
+      />
+      <button class="b" disabled={busy || !newPath.trim()} onclick={addExtraDir}>Add</button>
+    </div>
+  </div>
   {#if hooks.note}
     <div class="grp missing"><div><span class="s">{hooks.note}</span></div></div>
   {/if}
 {/if}
 {#if error}<div class="grp"><div><span class="s no">{error}</span></div></div>{/if}
+
+<style>
+  .path {
+    font-family: ui-monospace, monospace;
+    overflow-wrap: anywhere;
+  }
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+    font-size: 12px;
+  }
+  .path-input {
+    flex: 1;
+    min-width: 120px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.2);
+    color: #fff;
+    padding: 4px 8px;
+    font: inherit;
+    font-size: 12px;
+  }
+</style>

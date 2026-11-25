@@ -379,6 +379,126 @@ pub fn uninstall_target(paths: &Paths, source: &str) -> Result<Option<Report>, E
     Ok(Some(report))
 }
 
+/// The hooks file of `source` inside an explicitly chosen config root. Codex
+/// reads `<root>/hooks.json`; Grok reads `<root>/hooks/codeisland.json` from
+/// `$GROK_HOME`, which is the root itself here. Claude's settings file is
+/// `<root>/settings.json` and needs no target table.
+fn root_hook_file(source: &str, root: &Path) -> Result<PathBuf, Error> {
+    if source == "claude" {
+        return Ok(root.join("settings.json"));
+    }
+    let target = targets::target_for(source).ok_or_else(|| {
+        Error::Io(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("no hook target named {source}"),
+        ))
+    })?;
+    if target.root == targets::Root::Home {
+        // `path` starts with the CLI's config directory (`.codex/hooks.json`);
+        // `root` already *is* that directory, so only the tail belongs under it.
+        let tail = target
+            .path
+            .split_once('/')
+            .map_or(target.path, |(_, tail)| tail);
+        return Ok(root.join(tail));
+    }
+    // Grok's path is relative to `$GROK_HOME`, which is the root here.
+    Ok(target.file(root, |key| {
+        (key == "GROK_HOME").then(|| root.display().to_string())
+    }))
+}
+
+/// Install one config-root CLI's hooks into an explicit root. Extra roots
+/// registered in Settings are the same CLI under another `$*_HOME`, so the
+/// events and the file format must stay the target table's — only the root
+/// changes. The shared script and bridge are not touched here.
+pub fn install_in_root(
+    source: &str,
+    root: &Path,
+    stamp: &str,
+    command: &str,
+    version: Option<&str>,
+) -> Result<Option<Report>, Error> {
+    let file = root_hook_file(source, root)?;
+    let existing = read_text(&file)?;
+    let (changed, text) = if source == "claude" {
+        claude_hooks::install(
+            existing.as_deref().filter(|text| !text.is_empty()),
+            command,
+            version,
+        )
+        .map(|outcome| (outcome.changed, outcome.text))
+    } else {
+        let target = targets::target_for(source).expect("root_hook_file found it");
+        targets::install(target, existing.as_deref(), command)
+            .map(|outcome| (outcome.changed, outcome.text))
+    }
+    .ok_or_else(|| Error::UnparseableSettings(file.clone()))?;
+
+    let mut report = Report::default();
+    if changed {
+        if let Some(parent) = file.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if existing.is_some() {
+            report.backup = back_up(&file, stamp)?;
+        }
+        fs::write(&file, &text)?;
+        report.settings_changed = true;
+    }
+    // Codex ignores hooks.json unless this switch is on in the same root.
+    if source == "codex" {
+        let config = root.join("config.toml");
+        let existing = read_text(&config)?.unwrap_or_default();
+        let Some(updated) = codex_config::enabling_hooks(&existing) else {
+            return Err(Error::UnparseableSettings(config));
+        };
+        if updated != existing {
+            fs::create_dir_all(root)?;
+            fs::write(&config, updated)?;
+            report.flag_enabled = true;
+        }
+    }
+    Ok(Some(report))
+}
+
+/// Take one config-root CLI's hooks back out of an explicit root. The shared
+/// script and bridge are left alone: another root may still be using them.
+pub fn uninstall_in_root(source: &str, root: &Path) -> Result<Option<Report>, Error> {
+    let file = root_hook_file(source, root)?;
+    let Some(existing) = read_text(&file)? else {
+        return Ok(None);
+    };
+    let (changed, text) = if source == "claude" {
+        claude_hooks::uninstall(&existing).map(|outcome| (outcome.changed, outcome.text))
+    } else {
+        let target = targets::target_for(source).expect("root_hook_file found it");
+        targets::uninstall(target, &existing).map(|outcome| (outcome.changed, outcome.text))
+    }
+    .ok_or_else(|| Error::UnparseableSettings(file.clone()))?;
+    let mut report = Report::default();
+    if changed {
+        fs::write(&file, &text)?;
+        report.settings_changed = true;
+    }
+    Ok(Some(report))
+}
+
+/// Whether this root's hooks file carries every event of `source`.
+pub fn installed_in_root(source: &str, root: &Path, version: Option<&str>) -> bool {
+    let Ok(file) = root_hook_file(source, root) else {
+        return false;
+    };
+    let Ok(Some(text)) = read_text(&file) else {
+        return false;
+    };
+    if source == "claude" {
+        claude_hooks::is_installed(&text, claude_hooks::HOOK_COMMAND, version)
+    } else {
+        targets::target_for(source).is_some_and(|target| targets::is_installed(target, &text))
+    }
+}
+
 fn cli_dir_exists(paths: &Paths, target: &Target) -> bool {
     // A target that does not hang from the home proves itself by its **root**
     // existing: `$GROK_HOME` is the store, and there is no fixed directory name to

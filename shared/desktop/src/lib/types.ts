@@ -191,12 +191,44 @@ export type YamlStatus = {
   refusal: string | null;
 };
 
+/** The island endpoint, from the same client a hook uses to reach it. */
+export type SocketHealth = {
+  endpoint: string;
+  listening: boolean;
+  /** Empty while listening; otherwise why the probe failed. */
+  detail: string;
+};
+
+/** One of Claude, Codex and Grok, whose config root can be moved. */
+export type ConfigRootStatus = {
+  cli: string;
+  name: string;
+  path: string;
+  ready: boolean;
+  installed: boolean;
+};
+
+/** An extra config root registered in Settings, with its own hook state. */
+export type ExtraConfigDirStatus = {
+  id: string;
+  cli: string;
+  name: string;
+  path: string;
+  enabled: boolean;
+  ready: boolean;
+  installed: boolean;
+  problem: string | null;
+};
+
 export type HooksSnapshot = {
   status: HooksStatus;
   targets: TargetStatus[];
   opencode: OpencodeStatus;
   kimi: KimiStatus;
   yaml: YamlStatus[];
+  socket: SocketHealth;
+  config_roots: ConfigRootStatus[];
+  extra_dirs: ExtraConfigDirStatus[];
   version: string | null;
   note: string | null;
 };
