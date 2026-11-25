@@ -12,6 +12,7 @@
 use std::collections::BTreeSet;
 
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::reduce::{HookEventFacts, SessionSnapshot};
 
@@ -448,6 +449,59 @@ pub struct SoundPreferences {
     pub enabled: bool,
     /// Cues whose own switch is on and which have a sound.
     pub audible_cues: BTreeSet<String>,
+}
+
+/// The Sound page's keys, spelled as Swift `SettingsKey`s. The shell reads them
+/// from the same settings document every other page writes.
+pub mod sound_setting {
+    /// Master switch.
+    pub const ENABLED: &str = "soundEnabled";
+    /// Slider percent, 0–100.
+    pub const VOLUME: &str = "soundVolume";
+    /// Each cue with its own switch, in `SoundManager.eventSounds` order, plus
+    /// the launch chime's own switch.
+    pub const CUES: &[(&str, &str)] = &[
+        ("SessionStart", "soundSessionStart"),
+        ("TaskRoundComplete", "soundTaskComplete"),
+        ("Stop", "soundTaskComplete"),
+        ("StopFailure", "soundTaskError"),
+        ("PermissionRequest", "soundApprovalNeeded"),
+        ("UserPromptSubmit", "soundPromptSubmit"),
+        ("AppLaunch", "soundBoot"),
+    ];
+}
+
+/// Turn the Sound page's settings into what [`audible_sound`] reads. An absent
+/// key means "on": the shell played every cue before the Sound page had
+/// switches, so an upgrade must not go silent for someone who set nothing.
+pub fn sound_preferences(settings: &Value) -> SoundPreferences {
+    let enabled = settings
+        .get(sound_setting::ENABLED)
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let audible_cues = sound_setting::CUES
+        .iter()
+        .filter(|(_, key)| settings.get(*key).and_then(Value::as_bool).unwrap_or(true))
+        .map(|(cue, _)| (*cue).to_owned())
+        .collect();
+    SoundPreferences {
+        enabled,
+        audible_cues,
+    }
+}
+
+/// The volume slider as a percent. A missing or malformed value keeps the
+/// shell's old full-level playback, not macOS's 50 % default, for the same
+/// reason [`sound_preferences`] defaults to "on".
+pub fn sound_volume_percent(settings: &Value) -> u8 {
+    u8::try_from(
+        settings
+            .get(sound_setting::VOLUME)
+            .and_then(Value::as_u64)
+            .unwrap_or(100),
+    )
+    .unwrap_or(100)
+    .min(100)
 }
 
 /// Why event sounds may be held back right now — `SoundHold` in Swift. The

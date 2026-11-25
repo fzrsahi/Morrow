@@ -13,7 +13,7 @@
 //!
 //! Not ported here: the user's sound switches, quiet hours and the turn-failure
 //! debounce. Those are `AttentionPolicy.settle` and belong with the rest of it
-//! (#238); this module only plays what it is handed.
+//! (#238); this module only plays what it is handed, at the volume it is given.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -123,20 +123,46 @@ pub fn player_on_path() -> Option<Player> {
 /// Play a cue. A cue with no sound of its own is silent, and so is a machine
 /// with no player: neither is an error the caller has to handle.
 pub fn play(player: Player, cue: &str) -> Result<(), String> {
-    play_in(player, cue, &sound_dir())
+    play_with_volume(player, cue, 100)
 }
 
-/// The testable core of [`play`]: the destination is injected so no test has
-/// to write into the machine's shared sound directory.
-fn play_in(player: Player, cue: &str, dir: &Path) -> Result<(), String> {
+/// Play a cue at the Sound page's slider position (0–100). 100 is the old
+/// full-level playback, so a preview or a caller with no preference sounds
+/// exactly as it did before the setting existed.
+pub fn play_with_volume(player: Player, cue: &str, volume_percent: u8) -> Result<(), String> {
+    play_in(player, cue, &sound_dir(), volume_percent)
+}
+
+/// The testable core of [`play_with_volume`]: the destination is injected so no
+/// test has to write into the machine's shared sound directory.
+fn play_in(player: Player, cue: &str, dir: &Path, volume_percent: u8) -> Result<(), String> {
     let Some(sound) = cue_sound(cue) else {
         return Ok(());
     };
     let path = materialise(sound, dir)?;
     match player {
-        Player::Tool(program) => spawn(program, &path),
+        Player::Tool(program) => spawn(program, &path, volume_percent),
+        // `PlaySoundW` has no per-sound level; the system mixer stays in charge.
         #[cfg(windows)]
-        Player::System => crate::windows::sound::play(&path),
+        Player::System => {
+            let _ = volume_percent;
+            crate::windows::sound::play(&path)
+        }
+    }
+}
+
+/// Only the players that accept a per-invocation level get one. `canberra` has
+/// no such flag, and 100 % adds no flag at all so a caller with no preference
+/// starts the very same command line as before the setting existed.
+fn volume_args(program: &str, volume_percent: u8) -> Vec<String> {
+    let percent = volume_percent.min(100);
+    if percent == 100 {
+        return Vec::new();
+    }
+    match program {
+        "pw-play" => vec![format!("--volume={}", f32::from(percent) / 100.0)],
+        "paplay" => vec![format!("--volume={percent}%")],
+        _ => Vec::new(),
     }
 }
 
@@ -189,13 +215,14 @@ fn materialise(sound: &Cue, dir: &Path) -> Result<PathBuf, String> {
 /// Start the player and return at once. The child is reaped on its own thread:
 /// waiting here would hold the feed, and not waiting at all would leave a
 /// zombie behind every turn.
-fn spawn(program: &str, path: &Path) -> Result<(), String> {
+fn spawn(program: &str, path: &Path, volume_percent: u8) -> Result<(), String> {
     let mut command = Command::new(program);
     // `canberra` takes the file behind a flag; the PipeWire and PulseAudio
     // players take it as the only argument.
     if program == "canberra-gtk-play" {
         command.arg("-f");
     }
+    command.args(volume_args(program, volume_percent));
     let mut child = command
         .arg(path)
         .stdin(Stdio::null())
@@ -256,6 +283,15 @@ mod tests {
             );
             assert_eq!(&sound.wav[8..12], b"WAVE", "{} is not a WAV", sound.file);
         }
+    }
+
+    #[test]
+    fn the_volume_setting_reaches_the_players_that_accept_one() {
+        assert_eq!(volume_args("pw-play", 50), vec!["--volume=0.5"]);
+        assert_eq!(volume_args("paplay", 25), vec!["--volume=25%"]);
+        assert_eq!(volume_args("paplay", 140), Vec::<String>::new());
+        assert!(volume_args("pw-play", 100).is_empty(), "no flag at full level");
+        assert!(volume_args("canberra-gtk-play", 10).is_empty());
     }
 
     #[test]
