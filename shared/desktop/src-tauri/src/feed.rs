@@ -4,13 +4,13 @@
 //! the hook rate.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use morrow_core::attention::CompletionStyle;
+use morrow_core::attention::{self, CompletionStyle, SoundHold};
 use morrow_core::reduce::SideEffect;
 use morrow_platform::process::Watch;
 use morrow_platform::sound;
@@ -65,6 +65,9 @@ pub struct Feed {
     /// condvar so a single hook cannot wake only the wrong waiter.
     prune_changed: Condvar,
     sound: Option<SoundOutlet>,
+    /// Where the Sound page's settings document lives. `None` in a bare feed
+    /// (tests, smoke) means no preference was ever written, so every cue plays.
+    settings_dir: Option<PathBuf>,
     /// What the last scan read, kept **across** ticks: a cache built inside one
     /// scan would read everything and forget it (#284). On the `Feed` rather than
     /// in `State` because a scan runs outside the state lock and this is
@@ -82,6 +85,7 @@ impl Default for Feed {
             changed: Condvar::new(),
             prune_changed: Condvar::new(),
             sound: None,
+            settings_dir: None,
             scan_cache: morrow_core::scan_policy::TextCache::new(
                 morrow_core::scan_policy::SCAN_CACHE_CAPACITY,
             ),
@@ -204,17 +208,62 @@ impl Feed {
         }
     }
 
-    /// Play one cue through the outlet, or the platform's player when there is
-    /// none. A missing or failing player is a Capability the Settings table
-    /// already states; the feed has nowhere to show it and must not stop.
-    fn emit_sound(&self, cue: &str) {
+    /// A feed that reads the Sound page's switches from `settings_dir` (#462).
+    pub fn with_settings_dir(dir: PathBuf) -> Self {
+        Self {
+            settings_dir: Some(dir),
+            ..Self::default()
+        }
+    }
+
+    /// Both halves in one feed, for a test that writes a settings document.
+    #[cfg(test)]
+    fn with_sound_and_settings(outlet: SoundOutlet, dir: PathBuf) -> Self {
+        Self {
+            sound: Some(outlet),
+            settings_dir: Some(dir),
+            ..Self::default()
+        }
+    }
+
+    /// The standing switches and the slider, read when a cue is about to play
+    /// so a toggle in Settings takes effect without a restart (#202). A file
+    /// that is absent or cannot be read is the same as one with no keys: play
+    /// as before.
+    fn sound_settings(&self) -> (attention::SoundPreferences, u8) {
+        let stored = self
+            .settings_dir
+            .as_ref()
+            .and_then(|dir| morrow_platform::settings::load(dir).ok())
+            .unwrap_or_default();
+        (
+            attention::sound_preferences(&stored),
+            attention::sound_volume_percent(&stored),
+        )
+    }
+
+    /// Settle one cue with the core's rule, then play it through the outlet or
+    /// the platform's player. A missing or failing player is a Capability the
+    /// Settings table already states; the feed has nowhere to show it and must
+    /// not stop.
+    fn emit_sound(&self, cue: &str, sounds: &attention::SoundPreferences, volume: u8) {
+        if attention::audible_sound(Some(cue), sounds, &SoundHold::default()).is_none() {
+            return;
+        }
         if let Some(outlet) = &self.sound {
             outlet(cue);
             return;
         }
         if let Some(player) = sound::player_on_path() {
-            let _ = sound::play(player, cue);
+            let _ = sound::play_with_volume(player, cue, volume);
         }
+    }
+
+    /// The launch chime has no hook to carry it: the shell's own start is the
+    /// event. The same Sound page switches apply as to a hook cue.
+    pub fn play_launch(&self) {
+        let (sounds, volume) = self.sound_settings();
+        self.emit_sound(morrow_core::attention::sound_cue::LAUNCH, &sounds, volume);
     }
 
     /// Reduces one hook into the sessions.
@@ -285,8 +334,9 @@ impl Feed {
         }
         state.dirty = true;
         drop(state);
+        let (sounds, volume) = self.sound_settings();
         for cue in &cues {
-            self.emit_sound(cue);
+            self.emit_sound(cue, &sounds, volume);
         }
         self.changed.notify_one();
         self.prune_changed.notify_one();
@@ -1187,6 +1237,69 @@ mod tests {
         // And the outlet is live again.
         feed.record(&prompt);
         assert_eq!(*played.lock().unwrap(), vec!["UserPromptSubmit".to_owned()]);
+    }
+
+    #[test]
+    fn sound_switches_reach_the_cue_outlet_without_a_restart() {
+        let dir = Scratch::new();
+        let played = Arc::new(Mutex::new(Vec::new()));
+        let recorder = {
+            let played = Arc::clone(&played);
+            Arc::new(move |cue: &str| played.lock().unwrap().push(cue.to_owned()))
+        };
+        let feed = Feed::with_sound_and_settings(recorder, dir.0.clone());
+        let prompt = hook(r#"{"session_id":"a","hook_event_name":"UserPromptSubmit"}"#);
+        let stop = hook(r#"{"session_id":"a","hook_event_name":"Stop"}"#);
+
+        // No document yet: the shell's old behaviour, every cue rings.
+        feed.record(&prompt);
+        feed.record(&stop);
+        assert_eq!(
+            *played.lock().unwrap(),
+            vec!["UserPromptSubmit".to_owned(), "Stop".to_owned()]
+        );
+
+        // A per-event switch mutes only that event, and the very next hook sees it.
+        played.lock().unwrap().clear();
+        morrow_platform::settings::set(&dir.0, "soundPromptSubmit", &serde_json::json!(false))
+            .expect("write setting");
+        feed.record(&prompt);
+        feed.record(&stop);
+        assert_eq!(*played.lock().unwrap(), vec!["Stop".to_owned()]);
+
+        // The master switch mutes the rest, even though their own switches are on.
+        played.lock().unwrap().clear();
+        morrow_platform::settings::set(&dir.0, "soundEnabled", &serde_json::json!(false))
+            .expect("write setting");
+        feed.record(&prompt);
+        feed.record(&stop);
+        assert!(played.lock().unwrap().is_empty(), "sound is off");
+
+        // Turning it back on needs no new feed.
+        morrow_platform::settings::set(&dir.0, "soundEnabled", &serde_json::json!(true))
+            .expect("write setting");
+        feed.record(&stop);
+        assert_eq!(*played.lock().unwrap(), vec!["Stop".to_owned()]);
+    }
+
+    #[test]
+    fn the_launch_chime_obeys_the_same_switches_as_hook_cues() {
+        let dir = Scratch::new();
+        let played = Arc::new(Mutex::new(Vec::new()));
+        let recorder = {
+            let played = Arc::clone(&played);
+            Arc::new(move |cue: &str| played.lock().unwrap().push(cue.to_owned()))
+        };
+        let feed = Feed::with_sound_and_settings(recorder, dir.0.clone());
+
+        feed.play_launch();
+        assert_eq!(*played.lock().unwrap(), vec!["AppLaunch".to_owned()]);
+
+        played.lock().unwrap().clear();
+        morrow_platform::settings::set(&dir.0, "soundBoot", &serde_json::json!(false))
+            .expect("write setting");
+        feed.play_launch();
+        assert!(played.lock().unwrap().is_empty(), "the boot switch is off");
     }
 
     #[test]

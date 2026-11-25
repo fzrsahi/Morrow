@@ -132,7 +132,9 @@ fn main() -> ExitCode {
     )));
     let remote_pump = Arc::clone(&remote);
     let position = position::Store::new(&hooks_site.paths.codeisland_dir);
-    let feed = Arc::new(Feed::default());
+    let feed = Arc::new(Feed::with_settings_dir(
+        hooks_site.paths.codeisland_dir.clone(),
+    ));
     listener::spawn(server, Arc::clone(&feed));
     Feed::spawn_pruner(Arc::clone(&feed));
     // #248: the discovery tick — a visible, unlocked panel looks for sessions the
@@ -146,11 +148,9 @@ fn main() -> ExitCode {
 
     // #241: AppLaunch is the one cue with no hook to carry it — the app's own
     // start is the event. A locked screen stays silent, as it does for hook
-    // cues in `Feed::record`.
+    // cues in `Feed::record`; the Sound page switches apply here too (#462).
     if adapters::screen_locked() != Some(true) {
-        if let Some(player) = morrow_platform::sound::player_on_path() {
-            let _ = morrow_platform::sound::play(player, morrow_core::attention::sound_cue::LAUNCH);
-        }
+        feed.play_launch();
     }
 
     let result = tauri::Builder::default()
