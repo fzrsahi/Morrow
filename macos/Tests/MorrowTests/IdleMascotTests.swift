@@ -47,19 +47,20 @@ final class IdleMascotTests: XCTestCase {
             .environment(\.mascotAnimationsActive, false)
             .environment(\.mascotStaticTime, 1.0)
         let image = try XCTUnwrap(OffscreenRender.rasterize(mascot, scale: 2))
-        XCTAssertGreaterThan(brightPixels(image), 100)
+        XCTAssertGreaterThan(noriCoverage(image).opaque, 100, "Nori must be drawn at 27pt")
     }
 
-    /// Pip was the #44 choice: the vector must still read at the 20pt size used
-    /// by the collapsed pill, without the SVG preview's dark backing rect.
-    func testPipDrawsVisiblePixelsAt20Points() throws {
+    /// Nori is the #44 choice: its dark body and amber eyes must still read at
+    /// the 20pt size used by the collapsed pill, without the SVG preview rect.
+    func testNoriDrawsVisiblePixelsAt20Points() throws {
         let mascot = MascotView(source: IdleMascotSource.morrow, status: .idle, size: 20)
             .environment(\.mascotAnimationsActive, false)
             .environment(\.mascotStaticTime, 1.0)
         let image = try XCTUnwrap(OffscreenRender.rasterize(mascot, scale: 4))
-        let coverage = pipCoverage(image)
-        XCTAssertGreaterThan(coverage.opaque, 500, "Pip must be visible at 20pt")
-        XCTAssertGreaterThan(coverage.warm, 300, "Pip's gold → coral art must survive at 20pt")
+        let coverage = noriCoverage(image)
+        XCTAssertGreaterThan(coverage.opaque, 500, "Nori must be visible at 20pt")
+        XCTAssertGreaterThan(coverage.body, 300, "Nori's navy/indigo body must survive at 20pt")
+        XCTAssertGreaterThan(coverage.eyes, 20, "Nori's amber eyes must stay visible at 20pt")
         XCTAssertTrue(coverage.cornerAlpha.allSatisfy { $0 <= 16 },
                       "the SVG preview's dark backing rect must not be drawn")
     }
@@ -123,8 +124,8 @@ final class IdleMascotTests: XCTestCase {
         return try OffscreenRender.hosted(panel, size: CGSize(width: 400, height: 64), scale: 2)
     }
 
-    /// Opaque coverage, warm (gold/coral) pixels and corner alphas of the Pip render.
-    private func pipCoverage(_ image: CGImage) -> (opaque: Int, warm: Int, cornerAlpha: [Int]) {
+    /// Opaque coverage, navy body, amber eye pixels and corner alphas of Nori.
+    private func noriCoverage(_ image: CGImage) -> (opaque: Int, body: Int, eyes: Int, cornerAlpha: [Int]) {
         let width = image.width, height = image.height
         guard let context = CGContext(
             data: nil,
@@ -134,25 +135,36 @@ final class IdleMascotTests: XCTestCase {
             bytesPerRow: width * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let data = context.data else { return (0, 0, []) }
+        ), let data = context.data else { return (0, 0, 0, []) }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         let pixels = data.assumingMemoryBound(to: UInt8.self)
-        var opaque = 0, warm = 0
-        for offset in stride(from: 0, to: width * height * 4, by: 4) {
-            let alpha = Int(pixels[offset + 3])
-            guard alpha > 16 else { continue }
-            opaque += 1
-            let red = Int(pixels[offset])
-            let green = Int(pixels[offset + 1])
-            let blue = Int(pixels[offset + 2])
-            if red > 180, green > 100, blue < 160 { warm += 1 }
+        let unit = CGFloat(width) / 64
+        var opaque = 0, body = 0, eyes = 0
+        for y in 0..<height {
+            let yUnit = CGFloat(y) / unit
+            for x in 0..<width {
+                let offset = (y * width + x) * 4
+                let alpha = Int(pixels[offset + 3])
+                guard alpha > 16 else { continue }
+                opaque += 1
+                let red = Int(pixels[offset])
+                let green = Int(pixels[offset + 1])
+                let blue = Int(pixels[offset + 2])
+                if (30...110).contains(red), (30...120).contains(green),
+                   (60...170).contains(blue), blue > red + 10 {
+                    body += 1
+                }
+                if red > 180, green > 120, blue < 160, (20...30).contains(yUnit) {
+                    eyes += 1
+                }
+            }
         }
         let corners = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
         let cornerAlpha = corners.map { x, y in Int(pixels[(y * width + x) * 4 + 3]) }
-        return (opaque, warm, cornerAlpha)
+        return (opaque, body, eyes, cornerAlpha)
     }
 
-    /// The notch shell is black; Pip's warm fills read even at idle opacity.
+    /// The notch shell is black; Nori's amber accents read even at idle opacity.
     private func brightPixels(_ image: CGImage) -> Int {
         let width = image.width, height = image.height
         guard let context = CGContext(
