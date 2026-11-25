@@ -118,6 +118,7 @@ struct CompactGitStandbyWingView: View {
     var body: some View {
         let fontSize: CGFloat = isDynamicIslandCompact ? 11 : 10.5
 
+        let keepCompactNonRepo = isDynamicIslandCompact && !isWideMode && displayState == .nonRepo
         Group {
             if isWideMode {
                 wideBody(fontSize: fontSize)
@@ -125,8 +126,13 @@ struct CompactGitStandbyWingView: View {
                 compactBody(fontSize: fontSize)
             }
         }
-        .fixedSize(horizontal: !isWideMode && displayState != .nonRepo, vertical: false)
-        .frame(maxWidth: displayState == .nonRepo ? (isWideMode ? maxContentWidth : .infinity) : (isWideMode ? maxContentWidth : nil), alignment: displayState == .nonRepo ? .center : .trailing)
+        .fixedSize(horizontal: !isWideMode && (displayState != .nonRepo || keepCompactNonRepo), vertical: false)
+        .frame(
+            maxWidth: displayState == .nonRepo
+                ? (isWideMode ? maxContentWidth : (keepCompactNonRepo ? nil : .infinity))
+                : (isWideMode ? maxContentWidth : nil),
+            alignment: displayState == .nonRepo ? .center : .trailing
+        )
         .contentShape(Rectangle())
         .onAppear {
             if workspaceManager.currentCwd.isEmpty || !workspaceManager.isGitRepo {

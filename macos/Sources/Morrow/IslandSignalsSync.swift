@@ -41,6 +41,7 @@ final class IslandSignalsSync {
             nowPlaying.$title.map { _ in () }.eraseToAnyPublisher(),
             nowPlaying.$artist.map { _ in () }.eraseToAnyPublisher(),
             nowPlaying.$lyrics.map { _ in () }.eraseToAnyPublisher(),
+            nowPlaying.$currentLyricIndex.map { _ in () }.eraseToAnyPublisher(),
             nowPlaying.$lyricsLoading.map { _ in () }.eraseToAnyPublisher(),
         ] {
             publisher
@@ -101,6 +102,7 @@ final class IslandSignalsSync {
         for publisher in [
             prayer.$upcomingPrayer.map { _ in () }.eraseToAnyPublisher(),
             prayer.$minutesUntilNextPrayer.map { _ in () }.eraseToAnyPublisher(),
+            prayer.$testWingPrayer.map { _ in () }.eraseToAnyPublisher(),
             nowPlaying.$isPlaying.map { _ in () }.eraseToAnyPublisher(),
         ] {
             publisher
@@ -130,7 +132,13 @@ final class IslandSignalsSync {
         NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refreshQuietHours() }
+            Task { @MainActor in
+                self?.refreshQuietHours()
+                self?.publishPrayerPriority(
+                    isPrayerPrioritized: PrayerTimeManager.shared.isPrayerPrioritized,
+                    isMusicPlaying: NowPlayingManager.shared.isPlaying
+                )
+            }
         }
     }
 
@@ -143,6 +151,11 @@ final class IslandSignalsSync {
             hasLyrics: !nowPlaying.lyrics.isEmpty || nowPlaying.lyricsLoading,
             title: nowPlaying.title,
             artist: nowPlaying.artist
+        )
+        signals.setLyricState(
+            text: nowPlaying.currentLyricText,
+            index: nowPlaying.currentLyricIndex,
+            loading: nowPlaying.lyricsLoading
         )
         signals.setAlbumPalette(
             nowPlaying.albumPalette,

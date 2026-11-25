@@ -262,10 +262,20 @@ final class PanelWindowControllerTests: XCTestCase {
         let flippedFrames = controller.activeSlotFramesForTesting
         let d1Flipped = try XCTUnwrap(flippedFrames["builtin"])
         let d2Flipped = try XCTUnwrap(flippedFrames["EXT-27"])
-        XCTAssertEqual(d1Flipped.maxY, f1.maxY - 20, accuracy: 0.5)
+        XCTAssertEqual(d1Flipped.maxY, f1.maxY - (32 + 20), accuracy: 0.5)
         XCTAssertEqual(d2Flipped.maxY, f2.maxY, accuracy: 0.5)
         XCTAssertEqual(controller.activeSlotModesForTesting["builtin"], .dynamicIsland)
         XCTAssertEqual(controller.activeSlotModesForTesting["EXT-27"], .notch)
+
+        // Adjusting Top Offset on notched display keeps pill anchored below the 32pt physical notch.
+        SettingsManager.shared.setDisplayConfiguration(
+            DisplayConfiguration(enabled: true, displayMode: .dynamicIsland, dynamicIslandTopOffset: 8),
+            for: "builtin",
+            displays: [d1, d2]
+        )
+        controller.syncPanelsForTesting()
+        let d1CompactOffset = try XCTUnwrap(controller.activeSlotFramesForTesting["builtin"])
+        XCTAssertEqual(d1CompactOffset.maxY, f1.maxY - (32 + 8), accuracy: 0.5)
 
         // Disable Display 1 and verify only Display 2 slot remains.
         SettingsManager.shared.setDisplayConfiguration(

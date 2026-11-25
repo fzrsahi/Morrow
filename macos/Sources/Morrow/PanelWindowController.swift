@@ -9,12 +9,14 @@ enum PanelWindowLayout {
         panelHeight: CGFloat,
         displayMode: IslandDisplayMode,
         isFullscreenMode: Bool,
-        topOffset: Double = DynamicIslandTopOffset.defaultValue
+        topOffset: Double = DynamicIslandTopOffset.defaultValue,
+        physicalNotchHeight: CGFloat = 0
     ) -> CGFloat {
         screenMaxY - panelHeight - CGFloat(IslandDisplayMetrics.floatingYOffset(
             displayMode: displayMode,
             isFullscreenMode: isFullscreenMode,
-            customTopOffset: topOffset
+            customTopOffset: topOffset,
+            physicalNotchHeight: Double(physicalNotchHeight)
         ))
     }
 }
@@ -517,6 +519,17 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
+    private func physicalNotchHeight(for entry: ScreenEntry) -> CGFloat {
+        if entry.frameOverride != nil {
+            return entry.descriptor.hasNotch ? 32 : 0
+        }
+        guard ScreenDetector.screenHasNotch(entry.screen) else { return 0 }
+        if #available(macOS 12.0, *) {
+            return entry.screen.safeAreaInsets.top
+        }
+        return 0
+    }
+
     private func makeNotchPanelView(
         for entry: ScreenEntry,
         displayID: String,
@@ -524,13 +537,14 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         isFullscreen: Bool,
         isPrimaryCoordinator: Bool
     ) -> NotchPanelView {
-        let hasNotch = entry.frameOverride != nil ? entry.descriptor.hasNotch : ScreenDetector.screenHasNotch(entry.screen)
+        let physicalHasNotch = entry.frameOverride != nil ? entry.descriptor.hasNotch : ScreenDetector.screenHasNotch(entry.screen)
+        let effectiveHasNotch = (configuration.displayMode == .dynamicIsland) ? false : physicalHasNotch
         let notchHeight = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 32 : 25) : ScreenDetector.topBarHeight(for: entry.screen)
         let notchW = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 185 : min(max(entry.frame.width * 0.14, 160), 240)) : ScreenDetector.notchWidth(for: entry.screen)
 
         return NotchPanelView(
             appState: appState,
-            hasNotch: hasNotch,
+            hasNotch: effectiveHasNotch,
             notchHeight: notchHeight,
             notchW: notchW,
             screenWidth: entry.frame.width,
@@ -656,6 +670,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 let needsViewRefresh = forceRebuild
                     || slot.screenSignature != signature
                     || slot.configuration.displayMode != config.displayMode
+                    || abs(slot.configuration.dynamicIslandTopOffset - config.dynamicIslandTopOffset) > 0.001
                     || slot.isPrimaryCoordinator != isCoordinator
 
                 slot.configuration = config
@@ -791,7 +806,13 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
 
         let x = clampedX(desiredX, panelWidth: size.width, frame: screenFrame)
-        let y = anchoredY(for: size.height, screenMaxY: screenFrame.maxY, configuration: configuration, isFullscreen: isFullscreen)
+        let y = anchoredY(
+            for: size.height,
+            screenMaxY: screenFrame.maxY,
+            configuration: configuration,
+            isFullscreen: isFullscreen,
+            physicalNotchHeight: physicalNotchHeight(for: entry)
+        )
         return NSRect(x: x, y: y, width: size.width, height: size.height)
     }
 
@@ -799,14 +820,16 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         for panelHeight: CGFloat,
         screenMaxY: CGFloat,
         configuration: DisplayConfiguration,
-        isFullscreen: Bool
+        isFullscreen: Bool,
+        physicalNotchHeight: CGFloat
     ) -> CGFloat {
         PanelWindowLayout.anchoredY(
             screenMaxY: screenMaxY,
             panelHeight: panelHeight,
             displayMode: configuration.displayMode,
             isFullscreenMode: isFullscreen,
-            topOffset: configuration.dynamicIslandTopOffset
+            topOffset: configuration.dynamicIslandTopOffset,
+            physicalNotchHeight: physicalNotchHeight
         )
     }
 
@@ -853,7 +876,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                         for: size.height,
                         screenMaxY: entry.frame.maxY,
                         configuration: slot.configuration,
-                        isFullscreen: slot.isFullscreen
+                        isFullscreen: slot.isFullscreen,
+                        physicalNotchHeight: self.physicalNotchHeight(for: entry)
                     )
                     slot.panel.setFrameOrigin(NSPoint(x: newX, y: fixedY))
                 }
@@ -1054,7 +1078,8 @@ class PanelWindowController: NSObject, NSWindowDelegate {
             for: slot.panel.frame.height,
             screenMaxY: entry.frame.maxY,
             configuration: slot.configuration,
-            isFullscreen: slot.isFullscreen
+            isFullscreen: slot.isFullscreen,
+            physicalNotchHeight: physicalNotchHeight(for: entry)
         )
         guard abs(slot.panel.frame.origin.y - expectedY) > 0.5 else { return }
         DispatchQueue.main.async { [weak self] in
