@@ -8,6 +8,7 @@ use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
 use std::os::unix::net::UnixListener;
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use morrow_ipc::unix::{Client, Error, Server};
@@ -133,6 +134,38 @@ fn send_then_wait_is_the_same_round_trip_in_two_steps() {
         pending.wait(None).expect("wait")
     });
     assert_eq!(reply, b"echo:split");
+}
+
+/// An island answers a hook at once and closes its end (#298). The reply is
+/// already in the kernel's buffer when the bridge comes to read it. `None`
+/// means no timeout, so setting one must not be needed to read it: macOS
+/// refuses `SO_RCVTIMEO` of zero on a socket whose peer is gone.
+#[test]
+fn a_blocking_reply_is_read_after_the_island_closed() {
+    let dir = TestDir::new();
+    let endpoint = dir.override_endpoint("closed-first.sock");
+    let server = Server::bind(&endpoint).expect("bind");
+    let (closed_tx, closed_rx) = mpsc::channel();
+
+    let reply = std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let mut connection = server.accept().expect("accept");
+            assert_eq!(
+                connection.read_request().expect("read request"),
+                b"answer me"
+            );
+            // `reply` takes the connection, so it is closed on return.
+            connection.reply(b"the answer").expect("reply");
+            closed_tx.send(()).expect("signal the closed peer");
+        });
+        let pending = Client::connect(&endpoint, CONNECT_TIMEOUT)
+            .expect("connect")
+            .send(b"answer me", None)
+            .expect("send");
+        closed_rx.recv().expect("island answered");
+        pending.wait(None).expect("wait on the closed peer")
+    });
+    assert_eq!(reply, b"the answer");
 }
 
 #[test]
