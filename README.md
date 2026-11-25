@@ -431,6 +431,20 @@ On Windows, use `cargo tauri build --bundles nsis` after the frontend build. Cro
 
 The full guide, including what is still missing on each platform, is in [docs/build-windows-linux.md](docs/build-windows-linux.md).
 
+### Measure peak RAM usage
+
+Peak RSS has to be measured on the host being reported. A cross-build or a container says nothing about memory use on the target OS. Each script below starts an already-built app, samples its resident set every 0.2 s for 10 s, then stops it. Override the window with `BENCH_SECONDS` and `BENCH_INTERVAL`.
+
+| Host | Prerequisites | Command |
+|---|---|---|
+| macOS 14+ | `swift build` in `macos/` or `macos/build.sh`; a desktop session | `./scripts/ci/bench-rss.sh` |
+| Linux X11 | GTK3 + WebKitGTK 4.1 dev libs, `bun run build` in `shared/desktop`, `cargo build -p morrow-app` | `./scripts/ci/bench-rss.sh` |
+| Windows 10+ | WebView2 runtime, PowerShell 5.1+, `bun run build` in `shared\desktop`, `cargo build --release -p morrow-app` | `windows\ci\bench-rss.ps1` |
+
+Set `MORROW_APP=/path/to/app` (or `$env:MORROW_APP` in PowerShell) to measure a binary outside the default paths. Each run prints a dated evidence block with the host, commit, binary, sample count and peak RSS in kB and MiB.
+
+The number is the **main process** RSS only. WebView2 and WebKit child processes are not summed, so treat it as a repeatable baseline rather than a total system footprint. Startup and idle are both inside the window. Compare only numbers from the same host, build type and window. No Windows or Linux result is claimed here until those hosts run the script themselves.
+
 ## Contributing
 
 We welcome contributions from everyone! Please check out [CONTRIBUTING.md](CONTRIBUTING.md) for architecture maps, development tips, and pull request guidelines.
