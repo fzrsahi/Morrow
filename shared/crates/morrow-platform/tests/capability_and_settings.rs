@@ -170,7 +170,6 @@ fn adapters_that_do_not_exist_yet_are_unsupported_everywhere() {
             Feature::PointerMonitor,
             Feature::Fullscreen,
             Feature::SyntheticInput,
-            Feature::SystemStats,
             Feature::Geolocation,
             Feature::Secrets,
             Feature::Ble,
@@ -190,6 +189,34 @@ fn adapters_that_do_not_exist_yet_are_unsupported_everywhere() {
             );
         }
     }
+}
+
+/// #437: the three readings now have a reader, so neither OS may say "no
+/// adapter". A battery-less Linux desktop says Limited, not Not supported.
+#[test]
+fn system_stats_rows_no_longer_claim_a_missing_adapter() {
+    let linux = Feature::SystemStats.probe(&x11(temp("stats-linux")));
+    assert!(
+        !matches!(linux, Capability::Unsupported(_)),
+        "the Linux reader exists: {linux:?}"
+    );
+    assert_eq!(
+        Feature::SystemStats.probe(&windows(temp("stats-windows"))),
+        Capability::Supported
+    );
+    assert_eq!(
+        adapter(Os::Linux, Feature::SystemStats).unwrap().module,
+        "src/system_stats.rs"
+    );
+    assert_eq!(
+        adapter(Os::Windows, Feature::SystemStats).unwrap().module,
+        "src/system_stats.rs"
+    );
+    assert!(
+        table(&x11(temp("stats-table")))
+            .iter()
+            .any(|row| row.feature == Feature::SystemStats.name())
+    );
 }
 
 #[test]
