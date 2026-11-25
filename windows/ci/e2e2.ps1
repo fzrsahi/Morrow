@@ -51,7 +51,7 @@ try {
 
     $installOut = & $app --hooks install claude 2>&1 | Out-String
     Check 'install_claude' { $installOut -match '^claude: changed=' }
-    Check 'settings_written' { (Test-Path $settings) -and ((Get-Content $settings -Raw) -match 'codeisland-hook\.sh') }
+    Check 'settings_written' { (Test-Path $settings) -and ((Get-Content $settings -Raw) -match 'morrow-hook\.cmd') }
     Check 'status_says_installed' { (& $app --hooks status | Out-String) -match '(?m)^claude: installed$' }
 
     # A config the user already had: install must add our hook without touching

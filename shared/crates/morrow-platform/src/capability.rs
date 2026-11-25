@@ -171,12 +171,18 @@ impl Feature {
                     Capability::Unsupported("no window API and no clipboard tool".into())
                 }
             }
-            Self::TerminalVisibility => Capability::Unsupported(if environment.is_x11() {
-                // #235: no reader exists yet, so X11 cannot claim this either.
-                "no terminal-visibility reader yet: _NET_ACTIVE_WINDOW is not queried".into()
-            } else {
-                "needs _NET_ACTIVE_WINDOW, which Wayland lacks".into()
-            }),
+            Self::TerminalVisibility => {
+                if !environment.is_x11() {
+                    Capability::Unsupported("needs _NET_ACTIVE_WINDOW, which Wayland lacks".into())
+                } else if environment.has("xdotool") && environment.has("xprop") {
+                    // #435: app-level only — X11 cannot name the tab or pane.
+                    Capability::Supported
+                } else {
+                    Capability::Degraded(
+                        "needs xdotool and xprop to read the active window's terminal class".into(),
+                    )
+                }
+            }
             // #109: a layer surface on a compositor that has wlr-layer-shell,
             // an always-on-top window on GNOME — stated, never simulated
             // (plan §6.4).
@@ -214,18 +220,26 @@ impl Feature {
                     )
                 }
             }
-            Self::PointerMonitor => Capability::Unsupported(if environment.is_x11() {
-                // #235: no Unix pointer reader is wired into the adapter table.
-                "no pointer reader yet: XQueryPointer is not wired".into()
-            } else {
-                "Wayland gives no global pointer position".into()
-            }),
-            Self::Fullscreen => Capability::Unsupported(if environment.is_x11() {
-                // #235: `fullscreen` answers `false` on every Unix session.
-                "no fullscreen reader yet: _NET_WM_STATE is not queried".into()
-            } else {
-                "needs _NET_WM_STATE_FULLSCREEN on the active window".into()
-            }),
+            Self::PointerMonitor => {
+                if !environment.is_x11() {
+                    Capability::Unsupported("Wayland gives no global pointer position".into())
+                } else if environment.has("xdotool") {
+                    Capability::Supported
+                } else {
+                    Capability::Degraded("needs xdotool to read the pointer position".into())
+                }
+            }
+            Self::Fullscreen => {
+                if !environment.is_x11() {
+                    Capability::Unsupported(
+                        "needs _NET_WM_STATE_FULLSCREEN on an X11 window".into(),
+                    )
+                } else if environment.has("xdotool") && environment.has("xprop") {
+                    Capability::Supported
+                } else {
+                    Capability::Degraded("needs xdotool and xprop to read _NET_WM_STATE".into())
+                }
+            }
             Self::SessionLock => {
                 if environment.has_bus() {
                     Capability::Supported
@@ -243,7 +257,18 @@ impl Feature {
             Self::SyntheticInput => Capability::Unsupported(
                 "no synthetic-input adapter yet: XTEST and the portal are not wired".into(),
             ),
-            Self::SystemStats => Capability::Unsupported(NO_SYSTEM_STATS.into()),
+            Self::SystemStats => {
+                if cfg!(target_os = "linux") {
+                    crate::system_stats::linux_capability(|path| path.is_file())
+                } else {
+                    // The row describes Linux even when tests run elsewhere:
+                    // procfs is always there, and a desktop has no battery.
+                    Capability::Degraded(
+                        "no battery to read on this Linux host: CPU and memory come from /proc"
+                            .into(),
+                    )
+                }
+            }
             Self::Geolocation => Capability::Unsupported(
                 "no geolocation adapter yet: GeoClue and the offline city database are not wired"
                     .into(),
@@ -331,6 +356,11 @@ pub const ADAPTERS: &[Adapter] = &[
     },
     Adapter {
         os: Os::Linux,
+        feature: Feature::TerminalVisibility,
+        module: "src/x11.rs",
+    },
+    Adapter {
+        os: Os::Linux,
         feature: Feature::Anchoring,
         module: "src/compositor.rs",
     },
@@ -344,10 +374,26 @@ pub const ADAPTERS: &[Adapter] = &[
         feature: Feature::ProcessTable,
         module: "src/process.rs",
     },
+    // #437: /proc and /sys on Linux, PowerShell CIM on Windows.
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::SystemStats,
+        module: "src/system_stats.rs",
+    },
     Adapter {
         os: Os::Linux,
         feature: Feature::GlobalHotkey,
         module: "../../desktop/src-tauri/src/hotkey.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::PointerMonitor,
+        module: "src/x11.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Fullscreen,
+        module: "src/x11.rs",
     },
     Adapter {
         os: Os::Linux,
@@ -409,6 +455,11 @@ pub const ADAPTERS: &[Adapter] = &[
         os: Os::Windows,
         feature: Feature::ProcessTable,
         module: "src/windows/process.rs",
+    },
+    Adapter {
+        os: Os::Windows,
+        feature: Feature::SystemStats,
+        module: "src/system_stats.rs",
     },
     Adapter {
         os: Os::Windows,
@@ -474,7 +525,6 @@ pub fn adapter(os: Os, feature: Feature) -> Option<&'static Adapter> {
 /// The reason a row gives while no adapter exists (#235). Shared by the two
 /// arms where the absence is the same on both OSes, so Linux and Windows cannot
 /// drift into describing one missing adapter two different ways.
-const NO_SYSTEM_STATS: &str = "no system-stats adapter yet: CPU, memory and battery are not read";
 const NO_UPDATER: &str = "no updater yet: no update feed is configured";
 
 /// One row of the Settings table.
@@ -534,7 +584,7 @@ fn windows(feature: Feature, environment: &Environment) -> Capability {
         Feature::SyntheticInput => {
             Capability::Unsupported("no synthetic-input adapter yet: SendInput is not wired".into())
         }
-        Feature::SystemStats => Capability::Unsupported(NO_SYSTEM_STATS.into()),
+        Feature::SystemStats => crate::system_stats::windows_capability(),
         Feature::Geolocation => Capability::Unsupported(
             "no geolocation adapter yet: WinRT Geolocation is not called".into(),
         ),
