@@ -13,9 +13,10 @@
   type Props = {
     settings: PrayerSettings;
     cities: PrayerCity[];
+    t: (key: string) => string;
     onChange: (key: string, value: string | number | boolean) => void;
   };
-  let { settings, cities, onChange }: Props = $props();
+  let { settings, cities, t, onChange }: Props = $props();
 
   function pick(key: string) {
     return (event: Event) => onChange(key, (event.currentTarget as HTMLSelectElement).value);
@@ -30,7 +31,7 @@
   }
 </script>
 
-<h2>Prayer times</h2>
+<h2>{t('prayer')}</h2>
 <div class="grp">
   <div>
     <span class="n">City</span>

@@ -36,7 +36,8 @@ describe('the resource macOS and this app both read', () => {
     // macOS falls back to `en`; a key missing there would render as its own name
     // in both apps.
     const base = Object.keys(STRINGS.en);
-    expect(base.length).toBe(601);
+    expect(base.length).toBe(602);
+    expect(base.length).toBe(602);
     for (const language of LANGUAGES) {
       const missing = base.filter((key) => !(key in STRINGS[language]));
       // Only the two Chinese tables may be short, and only by the four keys they

@@ -8,9 +8,10 @@
     capabilities: CapabilityRow[];
     autostart: AutostartStatus | null;
     busy: boolean;
+    t: (key: string) => string;
     onToggleAutostart: () => void;
   };
-  let { capabilities, autostart, busy, onToggleAutostart }: Props = $props();
+  let { capabilities, autostart, busy, t, onToggleAutostart }: Props = $props();
 
   function tone(label: string): string {
     return label === 'Supported' ? 'yes' : label === 'Limited' ? 'lim' : 'no';
@@ -32,7 +33,7 @@
   {/each}
   {#if autostart}
     <div>
-      <span class="n">Start at login</span>
+      <span class="n">{t('launch_at_login')}</span>
       <span class="s" class:yes={autostart.installed}>
         {autostart.installed ? 'Supported · on' : 'Supported · off'}
       </span>

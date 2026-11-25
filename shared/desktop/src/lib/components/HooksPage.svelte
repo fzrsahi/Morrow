@@ -13,6 +13,7 @@
     hooks: HooksSnapshot | null;
     busy: boolean;
     error: string | null;
+    t: (key: string) => string;
     onRunHooks: (command: 'hooks_install' | 'hooks_uninstall') => void;
     onToggleTarget: (row: TargetStatus) => void;
     onToggleOpencode: (row: OpencodeStatus) => void;
@@ -23,6 +24,7 @@
     hooks,
     busy,
     error,
+    t,
     onRunHooks,
     onToggleTarget,
     onToggleOpencode,
@@ -45,7 +47,7 @@
   }
 </script>
 
-<h2>Hooks</h2>
+<h2>{t('hooks')}</h2>
 {#if !hooks}
   <div class="grp"><div><span class="s">Checking…</span></div></div>
 {:else}
@@ -54,7 +56,7 @@
       <span class="n">Claude Code</span>
       <span class="s" class:yes={hooks.status.hooks_installed}>
         {[
-          hooks.status.hooks_installed ? 'Installed' : 'Not installed',
+          hooks.status.hooks_installed ? 'Installed' : t('not_installed'),
           hooks.status.script_installed ? 'script' : '',
           hooks.status.bridge_installed ? 'bridge' : '',
           hooks.version,
@@ -63,7 +65,7 @@
           .join(' · ')}
       </span>
       <button class="b" disabled={busy} onclick={() => onRunHooks('hooks_install')}>
-        {hooks.status.hooks_installed ? 'Repair' : 'Install'}
+        {hooks.status.hooks_installed ? t('reinstall') : 'Install'}
       </button>
     </div>
     <div>
@@ -76,16 +78,16 @@
       <div class:missing={!row.detected}>
         <span class="n">{row.name}</span>
         <span class="s" class:yes={row.installed}>
-          {row.installed ? 'Installed' : row.detected ? 'Not installed' : 'Not detected'}
+          {row.installed ? 'Installed' : row.detected ? t('not_installed') : t('not_detected')}
         </span>
         {#if row.detected}
           <button class="b" disabled={busy} onclick={() => onToggleTarget(row)}>
-            {row.installed ? 'Remove' : 'Install'}
+            {row.installed ? t('uninstall') : 'Install'}
           </button>
         {/if}
       </div>
     {:else}
-      <div><span class="n">Agents</span><span class="s">No other hook targets on this host</span></div>
+      <div><span class="n">{t('agents')}</span><span class="s">No other hook targets on this host</span></div>
     {/each}
   </div>
   <div class="grp">
@@ -95,12 +97,12 @@
         {hooks.opencode.plugin_installed && hooks.opencode.registered
           ? 'Installed'
           : hooks.opencode.detected
-            ? 'Not installed'
-            : 'Not detected'}
+            ? t('not_installed')
+            : t('not_detected')}
       </span>
       {#if hooks.opencode.detected}
         <button class="b" disabled={busy} onclick={() => onToggleOpencode(hooks!.opencode)}>
-          {hooks.opencode.plugin_installed ? 'Remove' : 'Install'}
+          {hooks.opencode.plugin_installed ? t('uninstall') : 'Install'}
         </button>
       {/if}
     </div>
@@ -111,12 +113,12 @@
           {hooks.kimi.installed
             ? 'Installed'
             : hooks.kimi.detected
-              ? 'Not installed'
-              : 'Not detected'}
+              ? t('not_installed')
+              : t('not_detected')}
         </span>
         {#if hooks.kimi.detected}
           <button class="b" disabled={busy} onclick={() => onToggleKimi(hooks!.kimi)}>
-            {hooks.kimi.installed ? 'Remove' : 'Install'}
+            {hooks.kimi.installed ? t('uninstall') : 'Install'}
           </button>
         {/if}
       </div>
@@ -130,12 +132,12 @@
             : row.installed
               ? 'Installed'
               : row.detected
-                ? 'Not installed'
-                : 'Not detected'}
+                ? t('not_installed')
+                : t('not_detected')}
         </span>
         {#if row.detected && !row.refusal}
           <button class="b" disabled={busy} onclick={() => onToggleYaml(row)}>
-            {row.installed ? 'Remove' : 'Install'}
+            {row.installed ? t('uninstall') : 'Install'}
           </button>
         {/if}
       </div>

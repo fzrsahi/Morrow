@@ -611,6 +611,7 @@ extension L10n {
         "music_player_hud": "Music Player HUD",
         "floating_synced_lyrics": "Floating Synced Lyrics (Below Notch)",
         "retro_sound_pack": "Retro Sound Pack",
+        "unavailable_platform_notice": "Not available on this platform yet.",
     ]
 
     static let zh: [String: String] = [
@@ -1211,6 +1212,7 @@ extension L10n {
         "music_player_hud": "音乐播放器 HUD",
         "floating_synced_lyrics": "浮动同步歌词（刘海下方）",
         "retro_sound_pack": "复古音效包",
+        "unavailable_platform_notice": "此平台尚不可用。",
     ]
 
     static let zhHant: [String: String] = [
@@ -1811,6 +1813,7 @@ extension L10n {
         "music_player_hud": "音樂播放器 HUD",
         "floating_synced_lyrics": "浮動同步歌詞（劉海下方）",
         "retro_sound_pack": "復古音效包",
+        "unavailable_platform_notice": "此平台尚不可用。",
     ]
 
     static let de: [String: String] = [
@@ -2415,6 +2418,7 @@ extension L10n {
         "music_player_hud": "Musikplayer-HUD",
         "floating_synced_lyrics": "Schwebende synchronisierte Lyrics (unter dem Notch)",
         "retro_sound_pack": "Retro-Sound-Paket",
+        "unavailable_platform_notice": "Auf dieser Plattform noch nicht verfügbar.",
     ]
 
     static let ja: [String: String] = [
@@ -3019,6 +3023,7 @@ extension L10n {
         "music_player_hud": "ミュージックプレーヤー HUD",
         "floating_synced_lyrics": "フローティング同期歌詞 (ノッチ下)",
         "retro_sound_pack": "レトロサウンドパック",
+        "unavailable_platform_notice": "このプラットフォームではまだ利用できません。",
     ]
 
     static let ko: [String: String] = [
@@ -3623,6 +3628,7 @@ extension L10n {
         "music_player_hud": "음악 플레이어 HUD",
         "floating_synced_lyrics": "플로팅 동기화 가사 (노치 아래)",
         "retro_sound_pack": "레트로 사운드 팩",
+        "unavailable_platform_notice": "이 플랫폼에서는 아직 사용할 수 없습니다.",
     ]
 
     static let tr: [String: String] = [
@@ -4227,5 +4233,6 @@ extension L10n {
         "music_player_hud": "Müzik Oynatıcı HUD",
         "floating_synced_lyrics": "Yüzen Eşitlenmiş Şarkı Sözleri (Notch altında)",
         "retro_sound_pack": "Retro Ses Paketi",
+        "unavailable_platform_notice": "Bu platformda henüz kullanılamıyor.",
     ]
 }

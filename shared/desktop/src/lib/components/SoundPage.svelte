@@ -10,12 +10,13 @@
     cues: SoundCue[];
     supported: boolean;
     busy: boolean;
+    t: (key: string) => string;
     onPreview: (cue: string) => void;
   };
-  let { cues, supported, busy, onPreview }: Props = $props();
+  let { cues, supported, busy, t, onPreview }: Props = $props();
 </script>
 
-<h2>Sound</h2>
+<h2>{t('sound')}</h2>
 <div class="grp">
   {#each cues as cue (cue.name)}
     <div>
