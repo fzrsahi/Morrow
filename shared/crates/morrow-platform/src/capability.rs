@@ -171,12 +171,18 @@ impl Feature {
                     Capability::Unsupported("no window API and no clipboard tool".into())
                 }
             }
-            Self::TerminalVisibility => Capability::Unsupported(if environment.is_x11() {
-                // #235: no reader exists yet, so X11 cannot claim this either.
-                "no terminal-visibility reader yet: _NET_ACTIVE_WINDOW is not queried".into()
-            } else {
-                "needs _NET_ACTIVE_WINDOW, which Wayland lacks".into()
-            }),
+            Self::TerminalVisibility => {
+                if !environment.is_x11() {
+                    Capability::Unsupported("needs _NET_ACTIVE_WINDOW, which Wayland lacks".into())
+                } else if environment.has("xdotool") && environment.has("xprop") {
+                    // #435: app-level only — X11 cannot name the tab or pane.
+                    Capability::Supported
+                } else {
+                    Capability::Degraded(
+                        "needs xdotool and xprop to read the active window's terminal class".into(),
+                    )
+                }
+            }
             // #109: a layer surface on a compositor that has wlr-layer-shell,
             // an always-on-top window on GNOME — stated, never simulated
             // (plan §6.4).
@@ -214,18 +220,26 @@ impl Feature {
                     )
                 }
             }
-            Self::PointerMonitor => Capability::Unsupported(if environment.is_x11() {
-                // #235: `pointer_position` answers `None` on every Unix session.
-                "no pointer reader yet: XQueryPointer is not wired".into()
-            } else {
-                "Wayland gives no global pointer position".into()
-            }),
-            Self::Fullscreen => Capability::Unsupported(if environment.is_x11() {
-                // #235: `fullscreen` answers `false` on every Unix session.
-                "no fullscreen reader yet: _NET_WM_STATE is not queried".into()
-            } else {
-                "needs _NET_WM_STATE_FULLSCREEN on the active window".into()
-            }),
+            Self::PointerMonitor => {
+                if !environment.is_x11() {
+                    Capability::Unsupported("Wayland gives no global pointer position".into())
+                } else if environment.has("xdotool") {
+                    Capability::Supported
+                } else {
+                    Capability::Degraded("needs xdotool to read the pointer position".into())
+                }
+            }
+            Self::Fullscreen => {
+                if !environment.is_x11() {
+                    Capability::Unsupported(
+                        "needs _NET_WM_STATE_FULLSCREEN on an X11 window".into(),
+                    )
+                } else if environment.has("xdotool") && environment.has("xprop") {
+                    Capability::Supported
+                } else {
+                    Capability::Degraded("needs xdotool and xprop to read _NET_WM_STATE".into())
+                }
+            }
             Self::SessionLock => {
                 if environment.has_bus() {
                     Capability::Supported
@@ -331,6 +345,11 @@ pub const ADAPTERS: &[Adapter] = &[
     },
     Adapter {
         os: Os::Linux,
+        feature: Feature::TerminalVisibility,
+        module: "src/x11.rs",
+    },
+    Adapter {
+        os: Os::Linux,
         feature: Feature::Anchoring,
         module: "src/compositor.rs",
     },
@@ -348,6 +367,16 @@ pub const ADAPTERS: &[Adapter] = &[
         os: Os::Linux,
         feature: Feature::GlobalHotkey,
         module: "../../desktop/src-tauri/src/hotkey.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::PointerMonitor,
+        module: "src/x11.rs",
+    },
+    Adapter {
+        os: Os::Linux,
+        feature: Feature::Fullscreen,
+        module: "src/x11.rs",
     },
     Adapter {
         os: Os::Linux,

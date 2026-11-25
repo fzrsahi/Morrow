@@ -45,4 +45,5 @@ pub mod terminal;
 #[cfg(windows)]
 pub mod windows;
 pub mod windows_rules;
+pub mod x11;
 pub mod yaml_hooks;
