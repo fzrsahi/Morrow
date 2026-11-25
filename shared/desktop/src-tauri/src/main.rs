@@ -6,6 +6,7 @@ mod adapters;
 mod cli;
 mod commands;
 mod completion;
+mod diagnostics;
 mod discovery;
 mod feed;
 mod hooks;
@@ -196,6 +197,8 @@ fn main() -> ExitCode {
             settings::settings_path,
             settings::shortcut_list,
             settings::shortcut_set,
+            diagnostics::diagnostics_export,
+            diagnostics::diagnostics_suggested_name,
             prayer::prayer_settings_set,
             prayer::prayer_cities,
             prayer::prayer_next,

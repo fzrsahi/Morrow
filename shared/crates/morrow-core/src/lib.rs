@@ -27,6 +27,8 @@
 //!   refresh policy, with the clock and credentials handed in.
 //! - [`power_banner`]: the charging banner's thresholds, adapter classification
 //!   and text, from the power-source reading the shell hands in.
+//! - [`diagnostics`]: what a bug-report bundle may contain, with secrets
+//!   redacted, from the settings and sessions the shell hands in.
 #![forbid(unsafe_code)]
 
 pub mod agent_process;
@@ -37,6 +39,7 @@ pub mod buddy;
 pub mod codex_rules;
 pub mod config_roots;
 pub mod digest;
+pub mod diagnostics;
 pub mod discovery;
 pub mod display_only_wait;
 pub mod follow_up;

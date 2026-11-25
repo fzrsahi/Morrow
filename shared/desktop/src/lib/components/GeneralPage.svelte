@@ -1,16 +1,29 @@
 <script lang="ts">
-  // #462 — the one General control this shell obeys: the UI language. The tag
-  // is written through the same settings_set command as every other page, and
-  // the caller's translator is built from resolveLanguage, so the window
-  // redraws in the new language without a restart.
+  // #462/#465 — the General controls this shell obeys. The language tag is
+  // written through settings_set and redraws the window; the two island
+  // position switches are the Swift `SettingsKey` spellings and defaults, and
+  // `allowHorizontalDrag` is already read by App.svelte's DragGate.
   import { isLanguage, LANGUAGES, type Language } from '../strings';
 
+  type DragField = 'allowHorizontalDrag' | 'avoidMenuBarIcons';
   type Props = {
     stored: string;
+    allowHorizontalDrag: boolean;
+    avoidMenuBarIcons: boolean;
     t: (key: string) => string;
     onChange: (tag: string) => void;
+    onBehaviorChange: (field: DragField, value: boolean) => void;
+    onDragDisabled: () => void;
   };
-  let { stored, t, onChange }: Props = $props();
+  let {
+    stored,
+    allowHorizontalDrag,
+    avoidMenuBarIcons,
+    t,
+    onChange,
+    onBehaviorChange,
+    onDragDisabled,
+  }: Props = $props();
 
   // Endonyms, not translated labels: macOS's Picker names every language in its
   // own words so the list stays readable whatever the current UI language is.
@@ -29,6 +42,14 @@
   ]);
   // A malformed stored tag must not leave the picker with no visible selection.
   const selected = $derived(stored === 'system' || isLanguage(stored) ? stored : 'system');
+
+  function toggleDrag() {
+    const next = !allowHorizontalDrag;
+    onBehaviorChange('allowHorizontalDrag', next);
+    // Swift's onChange resets panelHorizontalOffset when the switch goes off.
+    // Here the equivalent store is the per-monitor island position.
+    if (!next) onDragDisabled();
+  }
 </script>
 
 <h2>{t('general')}</h2>
@@ -47,6 +68,33 @@
       </select>
     </span>
   </div>
+  <div>
+    <span class="n">{t('allow_horizontal_drag')}</span>
+    <span class="s">{t('allow_horizontal_drag_desc')}</span>
+    <button
+      class="sw"
+      class:off={!allowHorizontalDrag}
+      role="switch"
+      aria-checked={allowHorizontalDrag}
+      aria-label={t('allow_horizontal_drag')}
+      onclick={toggleDrag}
+    ></button>
+  </div>
+  <div>
+    <span class="n">{t('avoid_menu_bar_icons')}</span>
+    <span class="s">
+      {t('avoid_menu_bar_icons_desc')} Windows and Linux have no third-party menu-bar icon layer
+      to dodge, so this preference is stored but has no host effect (#240).
+    </span>
+    <button
+      class="sw"
+      class:off={!avoidMenuBarIcons}
+      role="switch"
+      aria-checked={avoidMenuBarIcons}
+      aria-label={t('avoid_menu_bar_icons')}
+      onclick={() => onBehaviorChange('avoidMenuBarIcons', !avoidMenuBarIcons)}
+    ></button>
+  </div>
 </div>
 
 <style>
@@ -59,5 +107,8 @@
     color: #fff;
     font: inherit;
     font-size: 12px;
+  }
+  .grp > div .s {
+    line-height: 1.4;
   }
 </style>

@@ -59,6 +59,7 @@
     SETTINGS_KEY_FOLLOW_UP_MINUTES,
   } from './lib/reminders';
   import { cssVariables } from './lib/tokens';
+  import { APP_VERSION } from './lib/version';
   import type {
     AutostartStatus,
     CapabilityRow,
@@ -371,9 +372,23 @@
       {:else if page === 'workspace'}
         <WorkspacePage settings={workspace} onChange={saveWorkspace} />
       {:else if page === 'about'}
-        <AboutPage {settingsFile} {t} />
+        <AboutPage
+          {settingsFile}
+          version={APP_VERSION}
+          {t}
+          onExport={(destination) =>
+            invoke<string>('diagnostics_export', { destination })}
+        />
       {:else if page === 'general'}
-        <GeneralPage stored={appearance.language} {t} onChange={saveLanguage} />
+        <GeneralPage
+          stored={appearance.language}
+          allowHorizontalDrag={behavior.allowHorizontalDrag}
+          avoidMenuBarIcons={behavior.avoidMenuBarIcons}
+          {t}
+          onChange={saveLanguage}
+          onBehaviorChange={saveBehaviorSetting}
+          onDragDisabled={() => run(() => invoke('reset_island_position'))}
+        />
       {:else}
         <!-- The remaining pages with no controls: an argument, not a blank pane. -->
         <UnavailablePage title={pendingPage?.label ?? ''} reason={pendingPage?.reason ?? ''} {t} />

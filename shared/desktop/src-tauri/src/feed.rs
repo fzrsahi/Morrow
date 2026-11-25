@@ -139,7 +139,7 @@ impl Default for State {
 }
 
 /// `~/.morrow`, unless `MORROW_SESSIONS_DIR` (or the old name) says otherwise.
-fn sessions_directory(home: &Path) -> std::path::PathBuf {
+pub(crate) fn sessions_directory(home: &Path) -> std::path::PathBuf {
     let override_dir = std::env::var("MORROW_SESSIONS_DIR")
         .ok()
         .or_else(|| std::env::var("CODEISLAND_SESSIONS_DIR").ok());
