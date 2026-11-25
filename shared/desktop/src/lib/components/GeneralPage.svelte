@@ -14,6 +14,10 @@
     onChange: (tag: string) => void;
     onBehaviorChange: (field: DragField, value: boolean) => void;
     onDragDisabled: () => void;
+    islandEnabled: boolean;
+    displaySummaryText: string;
+    onIslandEnabled: (enabled: boolean) => void;
+    onConfigureDisplays: () => void;
   };
   let {
     stored,
@@ -23,6 +27,10 @@
     onChange,
     onBehaviorChange,
     onDragDisabled,
+    islandEnabled,
+    displaySummaryText,
+    onIslandEnabled,
+    onConfigureDisplays,
   }: Props = $props();
 
   // Endonyms, not translated labels: macOS's Picker names every language in its
@@ -96,8 +104,33 @@
     ></button>
   </div>
 </div>
+<h3>{t('displays_section')}</h3>
+<div class="grp">
+  <div>
+    <span class="n">{t('island_enabled')}</span>
+    <span class="s">{displaySummaryText}</span>
+    <button
+      class="sw"
+      class:off={!islandEnabled}
+      role="switch"
+      aria-checked={islandEnabled}
+      aria-label={t('island_enabled')}
+      onclick={() => onIslandEnabled(!islandEnabled)}
+    ></button>
+  </div>
+  <div>
+    <span class="n">{t('active_displays')}</span>
+    <span class="s">{displaySummaryText}</span>
+    <button class="b" onclick={onConfigureDisplays}>{t('configure_displays')}</button>
+  </div>
+</div>
 
 <style>
+  h3 {
+    margin: 14px 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
   select {
     max-width: 100%;
     border: 1px solid rgba(255, 255, 255, 0.14);

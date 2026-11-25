@@ -4,6 +4,15 @@
   // values survive an app upgrade.
   import { SETTINGS_KEYS, type AppearanceSettings } from '../settings';
   import { ACCENTS, isAccent } from '../tokens';
+  import {
+    TOP_OFFSET_DEFAULT,
+    TOP_OFFSET_MAX,
+    TOP_OFFSET_MIN,
+    clampTopOffset,
+    displayMetadata,
+    displayTitle,
+    type DisplaySnapshot,
+  } from '../display';
 
   type Props = {
     appearance: AppearanceSettings;
@@ -13,8 +22,23 @@
     // for *this* monitor and re-fits. Resetting the `position` key alone left the
     // island where it was, which is what the old button actually did.
     onResetPosition: () => void;
+    // #465: the per-display rows mirror Swift's DisplayConfigRow. The shell
+    // resolves the stored map against the connected screens before it gets here.
+    displays: DisplaySnapshot;
+    onDisplaySet: (id: string, enabled: boolean, mode: string, offset: number) => void;
+    onDisplayActivate: (id: string) => void;
+    onIslandEnabled: (enabled: boolean) => void;
   };
-  let { appearance, t, onChange, onResetPosition }: Props = $props();
+  let {
+    appearance,
+    t,
+    onChange,
+    onResetPosition,
+    displays,
+    onDisplaySet,
+    onDisplayActivate,
+    onIslandEnabled,
+  }: Props = $props();
 
   const sizes = [11, 12, 14, 16] as const;
   const accents = Object.keys(ACCENTS) as Array<keyof typeof ACCENTS>;
@@ -127,7 +151,115 @@
   </div>
 </div>
 
+<h3>{t('displays_section')}</h3>
+<div class="grp">
+  <div>
+    <span class="n">{t('island_enabled')}</span>
+    <span class="s">{t('active_displays')}: {displays.displays.length}</span>
+    <button
+      class="sw"
+      class:off={!displays.islandEnabled}
+      role="switch"
+      aria-checked={displays.islandEnabled}
+      aria-label={t('island_enabled')}
+      onclick={() => onIslandEnabled(!displays.islandEnabled)}
+    ></button>
+  </div>
+</div>
+{#each displays.displays as display (display.id)}
+  {@const config = displays.configs[display.id] ?? {
+    enabled: false,
+    displayMode: appearance.displayMode,
+    dynamicIslandTopOffset: TOP_OFFSET_DEFAULT,
+  }}
+  <div class="grp display">
+    <div>
+      <span class="n">{displayTitle(display, t)}</span>
+      <span class="s">{displayMetadata(display, t)}</span>
+      <button
+        class="sw"
+        class:off={!config.enabled}
+        role="switch"
+        aria-checked={config.enabled}
+        aria-label={displayTitle(display, t)}
+        onclick={() =>
+          onDisplaySet(
+            display.id,
+            !config.enabled,
+            config.displayMode,
+            config.dynamicIslandTopOffset,
+          )}
+      ></button>
+    </div>
+    {#if config.enabled}
+      <div>
+        <span class="n">{t('display_mode')}</span>
+        <span class="s">
+          <span class="seg2">
+            <button
+              class:on={config.displayMode === 'notch'}
+              aria-pressed={config.displayMode === 'notch'}
+              onclick={() => onDisplaySet(display.id, true, 'notch', config.dynamicIslandTopOffset)}
+            >{t('display_mode_notch')}</button>
+            <button
+              class:on={config.displayMode === 'dynamicIsland'}
+              aria-pressed={config.displayMode === 'dynamicIsland'}
+              onclick={() => onDisplaySet(display.id, true, 'dynamicIsland', config.dynamicIslandTopOffset)}
+            >{t('display_mode_dynamic_island')}</button>
+          </span>
+        </span>
+      </div>
+      {#if config.displayMode === 'dynamicIsland'}
+        <div>
+          <span class="n">{t('dynamic_island_top_offset')}</span>
+          <span class="s">
+            <input
+              type="range"
+              min={TOP_OFFSET_MIN}
+              max={TOP_OFFSET_MAX}
+              step="1"
+              value={clampTopOffset(config.dynamicIslandTopOffset)}
+              aria-label={t('dynamic_island_top_offset')}
+              oninput={(event) =>
+                onDisplaySet(
+                  display.id,
+                  true,
+                  config.displayMode,
+                  clampTopOffset(Number(event.currentTarget.value)),
+                )}
+            />
+            {clampTopOffset(config.dynamicIslandTopOffset)}pt
+          </span>
+        </div>
+      {/if}
+      <div>
+        <span class="n">{t('display')}</span>
+        <span class="s">
+          {#if displays.primaryEnabledDisplayId === display.id}Active{:else}Available{/if}
+        </span>
+        <button class="b" onclick={() => onDisplayActivate(display.id)}>Move island here</button>
+      </div>
+    {:else}
+      <div>
+        <span class="s">{t('display_hidden_hint').replace('%d', String(display.index + 1))}</span>
+      </div>
+    {/if}
+  </div>
+{:else}
+  <div class="grp"><div><span class="s">{displays.readerReason ?? t('active_displays')}</span></div></div>
+{/each}
+
 <style>
+  h3 {
+    margin: 14px 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+  }
+  .display input[type='range'] {
+    width: 130px;
+    vertical-align: middle;
+    margin-right: 6px;
+  }
   .dot {
     display: inline-block;
     width: 8px;

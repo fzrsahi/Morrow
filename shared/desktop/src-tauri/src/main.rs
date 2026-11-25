@@ -8,6 +8,7 @@ mod commands;
 mod completion;
 mod diagnostics;
 mod discovery;
+mod display;
 mod feed;
 mod hooks;
 mod hotkey;
@@ -199,6 +200,10 @@ fn main() -> ExitCode {
             settings::shortcut_set,
             diagnostics::diagnostics_export,
             diagnostics::diagnostics_suggested_name,
+            display::display_snapshot,
+            display::display_set,
+            display::display_island_enabled,
+            display::display_activate,
             prayer::prayer_settings_set,
             prayer::prayer_cities,
             prayer::prayer_next,

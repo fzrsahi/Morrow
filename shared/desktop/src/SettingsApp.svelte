@@ -60,6 +60,7 @@
   } from './lib/reminders';
   import { cssVariables } from './lib/tokens';
   import { APP_VERSION } from './lib/version';
+  import { displaySummary, type DisplaySnapshot } from './lib/display';
   import type {
     AutostartStatus,
     CapabilityRow,
@@ -93,6 +94,16 @@
   // #462: the editable chords, read from the same settings document the
   // grabber uses. A write reloads them so the badge reflects the saved state.
   let shortcuts = $state<ShortcutBinding[]>([]);
+  // #465: the connected screens and their resolved per-display rows. The shell
+  // resolves legacy keys and migration before sending this snapshot.
+  let displays = $state<DisplaySnapshot>({
+    displays: [],
+    configs: {},
+    islandEnabled: true,
+    displayChoice: 'auto',
+    primaryEnabledDisplayId: null,
+    readerReason: null,
+  });
   // #448: hosts and their tunnel status. Status arrives as an event from the
   // shell's pump, so the card never polls ssh or reaches the network itself.
   let hosts = $state<RemoteHost[]>([]);
@@ -142,7 +153,7 @@
 
   async function load() {
     try {
-      const [h, c, a, stored, availableCities, sound, file, remoteHosts, remoteStatuses, shortcutRows] =
+      const [h, c, a, stored, availableCities, sound, file, remoteHosts, remoteStatuses, shortcutRows, displayRows] =
         await Promise.all([
           invoke<HooksSnapshot>('hooks_status'),
           invoke<CapabilityRow[]>('capabilities'),
@@ -154,12 +165,14 @@
           invoke<RemoteHost[]>('remote_hosts'),
           invoke<RemoteStatuses>('remote_status'),
           invoke<ShortcutBinding[]>('shortcut_list'),
+          invoke<DisplaySnapshot>('display_snapshot'),
         ]);
       hooks = h;
       capabilities = c;
       autostart = a;
       cues = sound;
       shortcuts = shortcutRows;
+      displays = displayRows;
       settingsFile = file;
       appearance = appearanceFromSettings(stored);
       gestures = gesturesFromSettings(stored);
@@ -250,6 +263,20 @@
   function saveWorkspace(key: string, value: string | boolean) {
     workspace = applyWorkspaceSetting(workspace, key, value);
     void run(() => invoke('settings_set', { key, value }), false);
+  }
+
+  // #465: the per-display rows go through the shell's command, not a raw key
+  // write, so the planner can keep the "at least one island" rule on reload.
+  function saveDisplay(id: string, enabled: boolean, displayMode: string, topOffset: number) {
+    void run(() => invoke('display_set', { id, enabled, displayMode, topOffset }));
+  }
+
+  function activateDisplay(id: string) {
+    void run(() => invoke('display_activate', { id }));
+  }
+
+  function setIslandEnabled(enabled: boolean) {
+    void run(() => invoke('display_island_enabled', { enabled }));
   }
 
   onMount(() => {
@@ -345,7 +372,16 @@
           onSet={(action, chord) => run(() => invoke('shortcut_set', { action, chord }))}
         />
       {:else if page === 'appearance'}
-        <AppearancePage {appearance} {t} onChange={saveSetting} onResetPosition={resetPosition} />
+        <AppearancePage
+          {appearance}
+          {t}
+          onChange={saveSetting}
+          onResetPosition={resetPosition}
+          {displays}
+          onDisplaySet={saveDisplay}
+          onDisplayActivate={activateDisplay}
+          onIslandEnabled={setIslandEnabled}
+        />
       {:else if page === 'prayer'}
         <PrayerPage
           settings={prayer}
@@ -388,6 +424,10 @@
           onChange={saveLanguage}
           onBehaviorChange={saveBehaviorSetting}
           onDragDisabled={() => run(() => invoke('reset_island_position'))}
+          islandEnabled={displays.islandEnabled}
+          displaySummaryText={displaySummary(displays, t)}
+          onIslandEnabled={setIslandEnabled}
+          onConfigureDisplays={() => (page = 'appearance')}
         />
       {:else}
         <!-- The remaining pages with no controls: an argument, not a blank pane. -->

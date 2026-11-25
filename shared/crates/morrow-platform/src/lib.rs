@@ -24,6 +24,7 @@ pub mod autostart;
 pub mod bridge;
 pub mod capability;
 pub mod compositor;
+pub mod display;
 pub mod git;
 pub mod hooks;
 pub mod hooks_windows;

@@ -41,6 +41,7 @@ pub mod config_roots;
 pub mod digest;
 pub mod diagnostics;
 pub mod discovery;
+pub mod display;
 pub mod display_only_wait;
 pub mod follow_up;
 pub mod git;
