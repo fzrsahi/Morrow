@@ -582,5 +582,22 @@
   "reply_complete_placeholder": "Antwort abgeschlossen",
   "reply_failed_placeholder": "Antwort fehlgeschlagen",
   "reply_aborted_placeholder": "Antwort abgebrochen",
-  "hosted_by_harness_hint": "Läuft unter %@"
+  "hosted_by_harness_hint": "Läuft unter %@",
+  "custom_agent_commands": "Benutzerdefinierte Agentenbefehle & Aliase",
+  "cyber_theme_engine": "Cyber-Theme-Engine",
+  "dynamic_island_notification_previews": "Dynamic-Island-Benachrichtigungsvorschauen",
+  "notch_gestures": "Notch-Gesten",
+  "agents_tab_theme": "Agents-Tab-Design",
+  "display_typography": "Anzeige & Typografie",
+  "agent_details_cards": "Agent-Details & Karten",
+  "claude_plan_limits": "Claude-Plan-Limits & Kontingent",
+  "workspace_hud": "Workspace-HUD",
+  "monitored_repositories": "Überwachte Repositories & Dateien",
+  "right_wing_preview": "Rechte Flügelvorschau (10 s)",
+  "gameplay": "Spielablauf",
+  "scoreboard": "Bestenliste",
+  "controls": "Steuerung",
+  "music_player_hud": "Musikplayer-HUD",
+  "floating_synced_lyrics": "Schwebende synchronisierte Lyrics (unter dem Notch)",
+  "retro_sound_pack": "Retro-Sound-Paket"
 }

@@ -582,5 +582,22 @@
   "reply_complete_placeholder": "Yanıt tamamlandı",
   "reply_failed_placeholder": "Yanıt başarısız",
   "reply_aborted_placeholder": "Yanıt kesildi",
-  "hosted_by_harness_hint": "%@ altında çalışıyor"
+  "hosted_by_harness_hint": "%@ altında çalışıyor",
+  "custom_agent_commands": "Özel Ajan Komutları ve Takma Adlar",
+  "cyber_theme_engine": "Siber Tema Motoru",
+  "dynamic_island_notification_previews": "Dynamic Island Bildirim Önizlemeleri",
+  "notch_gestures": "Notch Hareketleri",
+  "agents_tab_theme": "Ajanlar Sekmesi Teması",
+  "display_typography": "Görünüm ve Tipografi",
+  "agent_details_cards": "Ajan Ayrıntıları ve Kartlar",
+  "claude_plan_limits": "Claude Plan Sınırları ve Kota",
+  "workspace_hud": "Çalışma Alanı HUD",
+  "monitored_repositories": "İzlenen Depolar ve Dosyalar",
+  "right_wing_preview": "Sağ Kanat Önizlemesi (10 sn)",
+  "gameplay": "Oynanış",
+  "scoreboard": "Puan Tablosu",
+  "controls": "Kontroller",
+  "music_player_hud": "Müzik Oynatıcı HUD",
+  "floating_synced_lyrics": "Yüzen Eşitlenmiş Şarkı Sözleri (Notch altında)",
+  "retro_sound_pack": "Retro Ses Paketi"
 }

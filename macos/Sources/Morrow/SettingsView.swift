@@ -78,7 +78,7 @@ private struct SidebarGroup: Hashable {
 private let sidebarGroups: [SidebarGroup] = [
     SidebarGroup(title: "System", pages: [.general, .appearance, .mascots, .sound, .shortcuts]),
     SidebarGroup(title: "Features & HUD", pages: [.agents, .workspace, .music, .prayer, .mail, .game]),
-    SidebarGroup(title: "CodeIsland", pages: [.behavior, .remote, .hooks, .buddy, .about]),
+    SidebarGroup(title: "Morrow", pages: [.behavior, .remote, .hooks, .buddy, .about]),
 ]
 
 // MARK: - Main View
@@ -300,7 +300,7 @@ private struct RemoteHostRow: View {
                 .onChange(of: host.cwdFilter) { _, newValue in cwdFilterDraft = newValue }
                 .onSubmit { saveCwdFilter() }
 
-            // Who may use CodeIsland's socket on the host; a connected host
+            // Who may use Morrow's socket on the host; a connected host
             // reconnects to apply it.
             Toggle(l10n["remote_other_users"], isOn: Binding(
                 get: { host.agentsRunAsOtherUsers },
@@ -1098,8 +1098,8 @@ private struct HooksPage: View {
                 }
             }
 
-            Section("Custom Agent Commands & Aliases") {
-                Text("Configure custom CLI commands, wrappers, or environment aliases (such as claude-govtech, claude-mantiq, or enterprise agent wrappers) so CodeIsland tracks them in the Notch Island with automatic hooks and session detection.")
+            Section(l10n["custom_agent_commands"]) {
+                Text("Configure custom CLI commands, wrappers, or environment aliases (such as claude-govtech, claude-mantiq, or enterprise agent wrappers) so Morrow tracks them in the Notch Island with automatic hooks and session detection.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1910,7 +1910,7 @@ private struct AppearancePage: View {
         let sid = "preview-question"
         var s = SessionSnapshot()
         s.status = .waitingQuestion
-        s.cwd = "/Users/dev/CodeIsland"
+        s.cwd = "/Users/dev/Morrow"
         s.model = "claude-opus-4-20250514"
         s.source = "claude"
         s.termApp = "iTerm.app"
@@ -1974,7 +1974,7 @@ private struct AppearancePage: View {
                 Text(l10n["displays_section"])
             }
 
-            Section("Cyber Theme Engine") {
+            Section(l10n["cyber_theme_engine"]) {
                 VStack(alignment: .leading, spacing: 3) {
                     Picker("Island UI Theme", selection: $islandUITheme) {
                         ForEach(IslandUITheme.allCases) { theme in
@@ -2114,7 +2114,7 @@ private struct AppearancePage: View {
                 }
             }
 
-            Section("Dynamic Island Notification Previews") {
+            Section(l10n["dynamic_island_notification_previews"]) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Test and preview all Dynamic Island notification banners rolling down from under the notch. All notifications automatically adapt to your active theme (Pixel Retro 16-Bit vs. Modern Clean).")
                         .font(.system(size: 11))
@@ -2344,7 +2344,7 @@ private struct AppearancePage: View {
                 }
             }
 
-            Section("Notch Gestures") {
+            Section(l10n["notch_gestures"]) {
                 VStack(alignment: .leading, spacing: 2) {
                     Toggle("Scroll on Notch for Volume Control", isOn: $notchScrollVolumeControl)
                     Text("Adjust macOS system volume by scrolling with trackpad or mouse wheel over the notch.")
@@ -2430,7 +2430,7 @@ private struct AgentsSettingsPage: View {
                     )
                 }
 
-                Section("Agents Tab Theme") {
+                Section(l10n["agents_tab_theme"]) {
                     VStack(alignment: .leading, spacing: 3) {
                         Picker("Card Theme", selection: $agentsHUDTheme) {
                             ForEach(AgentsHUDTheme.allCases) { theme in
@@ -2445,7 +2445,7 @@ private struct AgentsSettingsPage: View {
                     }
                 }
 
-                Section("Display & Typography") {
+                Section(l10n["display_typography"]) {
                     Picker(l10n["content_font_size"], selection: $contentFontSize) {
                         ForEach(ContentFontSize.choices, id: \.self) { size in
                             Text(size == SettingsDefaults.contentFontSize ? l10n["11pt_default"] : "\(size)pt")
@@ -2483,7 +2483,7 @@ private struct AgentsSettingsPage: View {
                     }
                 }
 
-                Section("Agent Details & Cards") {
+                Section(l10n["agent_details_cards"]) {
                     Toggle(l10n["show_agent_details"], isOn: $showAgentDetails)
                     Toggle(l10n["show_tool_status"], isOn: $showToolStatus)
                     VStack(alignment: .leading, spacing: 2) {
@@ -2506,7 +2506,7 @@ private struct AgentsSettingsPage: View {
                     }
                 }
 
-                Section("Claude Plan Limits & Quota") {
+                Section(l10n["claude_plan_limits"]) {
                     VStack(alignment: .leading, spacing: 2) {
                         Toggle(l10n["show_usage_stats"], isOn: $showUsageStats)
                         Text(l10n["show_usage_stats_desc"])
@@ -2554,7 +2554,7 @@ private struct WorkspaceSettingsPage: View {
             }
 
             Group {
-                Section("Workspace HUD") {
+                Section(l10n["workspace_hud"]) {
                     VStack(alignment: .leading, spacing: 3) {
                         Picker("Workspace HUD Theme", selection: $workspaceHUDTheme) {
                             ForEach(WorkspaceHUDTheme.allCases) { theme in
@@ -2590,9 +2590,9 @@ private struct WorkspaceSettingsPage: View {
                     }
                 }
 
-                Section("Monitored Repositories & Files") {
+                Section(l10n["monitored_repositories"]) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("CodeIsland automatically synchronizes with the active terminal working directory. When you switch projects in your terminal or IDE, the Workspace tab automatically discovers git branches, staged/modified files, and recent commits.")
+                        Text("Morrow automatically synchronizes with the active terminal working directory. When you switch projects in your terminal or IDE, the Workspace tab automatically discovers git branches, staged/modified files, and recent commits.")
                             .font(.system(size: 11))
                             .foregroundStyle(.secondary)
                     }
@@ -2600,7 +2600,7 @@ private struct WorkspaceSettingsPage: View {
             }
             .disabled(!workspaceEnabled)
 
-            Section("Right Wing Preview (10s)") {
+            Section(l10n["right_wing_preview"]) {
                 HStack(spacing: 8) {
                     Button {
                         WorkspaceMonitorManager.shared.triggerRightWingPreview(.nonGitIdle)
@@ -2652,6 +2652,7 @@ private struct WorkspaceSettingsPage: View {
 }
 
 private struct GameSettingsPage: View {
+    @ObservedObject private var l10n = L10n.shared
     @AppStorage(SettingsKey.gameEnabled) private var gameEnabled = SettingsDefaults.gameEnabled
     @AppStorage(SettingsKey.notchHoopsHighScore) private var highScore = SettingsDefaults.notchHoopsHighScore
     @AppStorage(SettingsKey.notchHoopsPositionMode) private var positionMode = SettingsDefaults.notchHoopsPositionMode
@@ -2677,7 +2678,7 @@ private struct GameSettingsPage: View {
             }
 
             Group {
-                Section("Gameplay") {
+                Section(l10n["gameplay"]) {
                     VStack(alignment: .leading, spacing: 3) {
                         Picker("Default Shooting Position", selection: $positionMode) {
                             ForEach(NotchHoopsEngine.PositionMode.allCases, id: \.self) { mode in
@@ -2694,7 +2695,7 @@ private struct GameSettingsPage: View {
                     Toggle("Sound Effects", isOn: $soundEnabled)
                 }
 
-                Section("Scoreboard") {
+                Section(l10n["scoreboard"]) {
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Best Score")
@@ -2715,7 +2716,7 @@ private struct GameSettingsPage: View {
                     .disabled(highScore == 0)
                 }
 
-                Section("Controls") {
+                Section(l10n["controls"]) {
                     Text("Click and drag upward toward the hoop inside the court to aim and shoot. Swish or bank shots score +1, +2, or +3 based on distance.")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
@@ -2755,7 +2756,7 @@ private struct MusicSettingsPage: View {
             }
 
             Group {
-                Section("Music Player HUD") {
+                Section(l10n["music_player_hud"]) {
                     VStack(alignment: .leading, spacing: 3) {
                         Picker("Music HUD Theme", selection: $musicHUDTheme) {
                             ForEach(MusicHUDTheme.allCases) { theme in
@@ -2784,7 +2785,7 @@ private struct MusicSettingsPage: View {
                     }
                 }
 
-                Section("Floating Synced Lyrics (Below Notch)") {
+                Section(l10n["floating_synced_lyrics"]) {
                     VStack(alignment: .leading, spacing: 2) {
                         Toggle("Show Synced Lyrics Below Notch", isOn: $showCompactLyrics)
                         Text("Display a floating lyric ticker directly beneath the notch cutout during playback.")
@@ -3345,7 +3346,7 @@ private struct SoundPage: View {
             }
 
             if soundEnabled {
-                Section("Retro Sound Pack") {
+                Section(l10n["retro_sound_pack"]) {
                     Picker("Sound Pack", selection: $soundPackManager.currentPackRaw) {
                         ForEach(SoundPack.allCases) { pack in
                             Text(pack.title).tag(pack.rawValue)
@@ -3884,7 +3885,7 @@ private struct AboutPage: View {
                 AppLogoView(size: 100)
 
                 VStack(spacing: 6) {
-                    Text("CodeIsland")
+                    Text("Morrow")
                         .font(.system(size: 26, weight: .bold))
                     Text("Version \(AppVersion.current)")
                         .font(.system(size: 13))
@@ -4975,6 +4976,7 @@ private struct PrayerSettingsPage: View {
 // MARK: - Mail Settings Page
 
 private struct MailSettingsPage: View {
+    @ObservedObject private var l10n = L10n.shared
     @ObservedObject private var mailManager = MailManager.shared
     @AppStorage(SettingsKey.mailIntegrationEnabled) private var mailEnabled = SettingsDefaults.mailIntegrationEnabled
     @AppStorage(SettingsKey.mailAutoPeekNewEmail) private var autoPeek = SettingsDefaults.mailAutoPeekNewEmail
@@ -4985,7 +4987,7 @@ private struct MailSettingsPage: View {
         Form {
             Section {
                 Toggle("Enable Apple Mail Integration", isOn: $mailEnabled)
-                Text("Connects CodeIsland to macOS Apple Mail.app securely via local AppleScript. Zero credentials or passwords are ever stored.")
+                Text("Connects Morrow to macOS Apple Mail.app securely via local AppleScript. Zero credentials or passwords are ever stored.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

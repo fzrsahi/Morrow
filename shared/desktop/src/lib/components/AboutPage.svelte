@@ -36,9 +36,9 @@
     Talks to agents over a Unix socket or a named pipe
   </p>
   <div class="links">
-    <a href="https://github.com/amaldevice/CodeIsland" target="_blank" rel="noreferrer">GitHub</a>
-    <a href="https://github.com/amaldevice/CodeIsland/issues" target="_blank" rel="noreferrer">Issues</a>
-    <a href="https://github.com/amaldevice/CodeIsland/releases" target="_blank" rel="noreferrer">What's New</a>
+    <a href="https://github.com/fzrsahi/Morrow" target="_blank" rel="noreferrer">GitHub</a>
+    <a href="https://github.com/fzrsahi/Morrow/issues" target="_blank" rel="noreferrer">Issues</a>
+    <a href="https://github.com/fzrsahi/Morrow/releases" target="_blank" rel="noreferrer">What's New</a>
   </div>
   {#if settingsFile}
     <div class="file">
