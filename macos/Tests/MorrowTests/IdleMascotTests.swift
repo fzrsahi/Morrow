@@ -60,6 +60,8 @@ final class IdleMascotTests: XCTestCase {
         let coverage = pipCoverage(image)
         XCTAssertGreaterThan(coverage.opaque, 500, "Pip must be visible at 20pt")
         XCTAssertGreaterThan(coverage.warm, 300, "Pip's gold → coral art must survive at 20pt")
+        XCTAssertTrue(coverage.cornerAlpha.allSatisfy { $0 <= 16 },
+                      "the SVG preview's dark backing rect must not be drawn")
     }
 
     /// Default behaviour stays intact: agents on keeps the configured idle mascot.
@@ -121,8 +123,8 @@ final class IdleMascotTests: XCTestCase {
         return try OffscreenRender.hosted(panel, size: CGSize(width: 400, height: 64), scale: 2)
     }
 
-    /// Opaque coverage and warm (gold/coral) pixels of the Pip render.
-    private func pipCoverage(_ image: CGImage) -> (opaque: Int, warm: Int) {
+    /// Opaque coverage, warm (gold/coral) pixels and corner alphas of the Pip render.
+    private func pipCoverage(_ image: CGImage) -> (opaque: Int, warm: Int, cornerAlpha: [Int]) {
         let width = image.width, height = image.height
         guard let context = CGContext(
             data: nil,
@@ -132,7 +134,7 @@ final class IdleMascotTests: XCTestCase {
             bytesPerRow: width * 4,
             space: CGColorSpace(name: CGColorSpace.sRGB)!,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ), let data = context.data else { return (0, 0) }
+        ), let data = context.data else { return (0, 0, []) }
         context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
         let pixels = data.assumingMemoryBound(to: UInt8.self)
         var opaque = 0, warm = 0
@@ -145,7 +147,9 @@ final class IdleMascotTests: XCTestCase {
             let blue = Int(pixels[offset + 2])
             if red > 180, green > 100, blue < 160 { warm += 1 }
         }
-        return (opaque, warm)
+        let corners = [(0, 0), (width - 1, 0), (0, height - 1), (width - 1, height - 1)]
+        let cornerAlpha = corners.map { x, y in Int(pixels[(y * width + x) * 4 + 3]) }
+        return (opaque, warm, cornerAlpha)
     }
 
     /// The notch shell is black; Pip's warm fills read even at idle opacity.
