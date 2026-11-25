@@ -80,6 +80,57 @@ public enum PowerBannerState: Sendable, Equatable {
     }
 }
 
+/// The pure rules behind the charging banner, with the IOKit reads reduced to
+/// values. `SystemMonitorManager` feeds these from its power-source snapshot;
+/// the Rust core's `power_banner` module mirrors them for the other shell.
+public enum PowerBannerResolver {
+    /// The state a power-source reading resolves to. Kept separate from
+    /// `readPowerStatus` so the thresholds are testable without a charger and
+    /// can be exported as a Swift conformance fixture.
+    public static func state(
+        kind: PowerSourceKind,
+        isCharging: Bool,
+        isAC: Bool,
+        isCharged: Bool,
+        batteryLevel: Int,
+        adapterWatts: Int?,
+        rawTimeToFullMinutes: Int?
+    ) -> PowerBannerState {
+        let timeToFull = (rawTimeToFullMinutes ?? -1) > 0 ? rawTimeToFullMinutes : nil
+        if !isCharging && isAC && (isCharged || batteryLevel >= 99) {
+            return .fullyCharged(kind: kind)
+        } else if !isCharging && isAC {
+            return .onHold(kind: kind)
+        } else if !isCharging && !isAC && batteryLevel <= 20 {
+            return .lowBattery(percent: batteryLevel)
+        }
+        return .charging(kind: kind, watts: adapterWatts, timeToFullMinutes: timeToFull)
+    }
+
+    /// The adapter-name rules from `readExternalAdapterDetails`. `magSafeConnected`
+    /// is the one IOKit fact that cannot be read from the dictionary, so it is
+    /// handed in alongside the three strings and the adapter family.
+    public static func adapterKind(
+        name: String?,
+        source: String?,
+        description: String?,
+        family: Int,
+        magSafeConnected: Bool
+    ) -> PowerSourceKind {
+        let lowerName = (name ?? source ?? "").lowercased()
+        let lowerDescription = (description ?? "").lowercased()
+        let combined = "\(lowerName) \(lowerDescription)"
+        if magSafeConnected || combined.contains("magsafe") {
+            return .magSafe
+        } else if combined.contains("usb") || combined.contains("pd") || combined.contains("type-c") {
+            return .usbC
+        }
+        // Apple Silicon adapters with family code 0xE000400A / 0xE0004007 are
+        // USB-PD unless named MagSafe.
+        return (family == 0xE000400A || family == 0xE0004007) ? .usbC : .magSafe
+    }
+}
+
 public struct SystemMetrics: Sendable, Equatable {
     public var cpuUsagePercent: Double = 0.0
     public var memoryUsedGB: Double = 0.0
@@ -374,20 +425,18 @@ public final class SystemMonitorManager: ObservableObject {
             let isCharging = desc[kIOPSIsChargingKey as String] as? Bool ?? false
             let isCharged = desc[kIOPSIsChargedKey as String] as? Bool ?? false
             let rawTimeToFull = desc[kIOPSTimeToFullChargeKey as String] as? Int
-            let timeToFull = (rawTimeToFull ?? -1) > 0 ? rawTimeToFull : nil
             let powerSourceState = desc[kIOPSPowerSourceStateKey as String] as? String
             let isAC = (powerSourceState == (kIOPSACPowerValue as String))
 
-            let bannerState: PowerBannerState
-            if !isCharging && isAC && (isCharged || curCapacity >= 99) {
-                bannerState = .fullyCharged(kind: adapterKind)
-            } else if !isCharging && isAC {
-                bannerState = .onHold(kind: adapterKind)
-            } else if !isCharging && !isAC && curCapacity <= 20 {
-                bannerState = .lowBattery(percent: curCapacity)
-            } else {
-                bannerState = .charging(kind: adapterKind, watts: adapterWatts, timeToFullMinutes: timeToFull)
-            }
+            let bannerState = PowerBannerResolver.state(
+                kind: adapterKind,
+                isCharging: isCharging,
+                isAC: isAC,
+                isCharged: isCharged,
+                batteryLevel: curCapacity,
+                adapterWatts: adapterWatts,
+                rawTimeToFullMinutes: rawTimeToFull
+            )
             return (curCapacity, isCharging, isAC, bannerState)
         }
 
@@ -435,20 +484,13 @@ public final class SystemMonitorManager: ObservableObject {
             return (magSafeConnected ? .magSafe : .usbC, nil)
         }
         let watts = details[kIOPSPowerAdapterWattsKey as String] as? Int
-        let name = (details["Name"] as? String ?? details[kIOPSPowerAdapterSourceKey as String] as? String ?? "").lowercased()
-        let desc = (details["Description"] as? String ?? "").lowercased()
-        let combined = "\(name) \(desc)"
-
-        let kind: PowerSourceKind
-        if magSafeConnected || combined.contains("magsafe") {
-            kind = .magSafe
-        } else if combined.contains("usb") || combined.contains("pd") || combined.contains("type-c") {
-            kind = .usbC
-        } else {
-            // Apple Silicon adapters with family code 0xE000400A / 0xE0004007 are USB-PD unless named MagSafe
-            let family = details[kIOPSPowerAdapterFamilyKey as String] as? Int ?? 0
-            kind = (family == 0xE000400A || family == 0xE0004007) ? .usbC : .magSafe
-        }
+        let kind = PowerBannerResolver.adapterKind(
+            name: details["Name"] as? String,
+            source: details[kIOPSPowerAdapterSourceKey as String] as? String,
+            description: details["Description"] as? String,
+            family: details[kIOPSPowerAdapterFamilyKey as String] as? Int ?? 0,
+            magSafeConnected: magSafeConnected
+        )
         return (kind, watts)
     }
 

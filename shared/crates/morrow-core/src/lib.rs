@@ -25,6 +25,8 @@
 //!   the day, coordinates, offset and method handed in.
 //! - [`quota`]: the Claude plan-limit model, usage-response parser and pure
 //!   refresh policy, with the clock and credentials handed in.
+//! - [`power_banner`]: the charging banner's thresholds, adapter classification
+//!   and text, from the power-source reading the shell hands in.
 #![forbid(unsafe_code)]
 
 pub mod agent_process;
@@ -48,6 +50,7 @@ pub mod music;
 pub mod prayer;
 pub mod quota;
 pub mod path_identity;
+pub mod power_banner;
 pub mod push;
 pub mod push_channel;
 pub mod push_policy;
