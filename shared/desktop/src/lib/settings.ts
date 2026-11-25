@@ -176,14 +176,10 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
   {
     group: 'Features',
     items: [
-      {
-        id: 'agents',
-        label: 'Agents',
-        icon: 'agents',
-        available: false,
-        reason:
-          'Per-agent switches are not a setting this shell reads: detection comes from the 13 readers in discovery, and which ones found something is on Hooks. A toggle here would write a key nothing consults.',
-      },
+      // #465: the Agents page writes the same Swift keys the panel reads for
+      // theme, font, density, row limit and card details. Quota and usage have
+      // no shell reader and the page says so instead of drawing an empty chip.
+      { id: 'agents', label: 'Agents', icon: 'agents', available: true },
       {
         id: 'music',
         label: 'Music',

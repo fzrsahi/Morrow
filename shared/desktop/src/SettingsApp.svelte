@@ -10,6 +10,7 @@
   import HooksPage from './lib/components/HooksPage.svelte';
   import RemotePage from './lib/components/RemotePage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
+  import AgentsPage from './lib/components/AgentsPage.svelte';
   import AppearancePage from './lib/components/AppearancePage.svelte';
   import PrayerPage from './lib/components/PrayerPage.svelte';
   import BehaviorPage from './lib/components/BehaviorPage.svelte';
@@ -37,6 +38,12 @@
     type ShortcutBinding,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
+  import {
+    AGENT_KEYS,
+    DEFAULT_AGENTS,
+    agentsFromSettings,
+    type AgentsSettings,
+  } from './lib/agents-settings';
   import {
     BEHAVIOR_KEYS,
     DEFAULT_BEHAVIOR,
