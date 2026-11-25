@@ -56,18 +56,10 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
   {
     group: 'System',
     items: [
-      {
-        id: 'general',
-        label: 'General',
-        icon: 'settings',
-        available: false,
-        // Measured against the shell: `settings_set` stores any key, but nothing
-        // reads a language, a profile or an onboarding flag. The one general
-        // setting that *is* obeyed — start at login — is on Capabilities, next to
-        // the adapter that answers for it.
-        reason:
-          'Nothing here is obeyed yet. macOS General holds the language (no translation exists — see #239 AC 4), the profile and the onboarding reset; the shell reads none of those keys. Start at login lives on Capabilities, beside the adapter that answers for it.',
-      },
+      // #462: General is back. The language tag it writes is read by
+      // `resolveLanguage` in the Settings shell, so the window really changes
+      // language. The profile and onboarding reset are still macOS only.
+      { id: 'general', label: 'General', icon: 'settings', available: true },
       { id: 'appearance', label: 'Appearance', icon: 'settings', available: true },
       {
         id: 'mascots',
@@ -127,7 +119,7 @@ export const SETTINGS_KEYS = {
   expandOnHover: 'expandOnHover',
   collapseOnLeave: 'collapseOnLeave',
   /** #185: the filter choice and row density live in the same document. */
-  /** Same key as Swift `SettingsKey.appLanguage`; `system` resolves to one. */
+  /** #462: same key as Swift `SettingsKey.appLanguage`; `system` resolves to one. */
   language: 'appLanguage',
   sessionFilter: 'sessionFilter',
   sessionDensity: 'sessionDensity',
@@ -149,7 +141,7 @@ export type AppearanceSettings = {
   position: string;
   expandOnHover: boolean;
   collapseOnLeave: boolean;
-  /** #239 AC 4: a stored tag, or `system` to follow the desktop. */
+  /** #239 AC 4: a stored tag, or `system` to follow the desktop. #462: written by General. */
   language: string;
 };
 

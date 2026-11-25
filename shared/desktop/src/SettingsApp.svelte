@@ -6,6 +6,7 @@
   import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import PixelIcon from './lib/components/PixelIcon.svelte';
+  import GeneralPage from './lib/components/GeneralPage.svelte';
   import HooksPage from './lib/components/HooksPage.svelte';
   import RemotePage from './lib/components/RemotePage.svelte';
   import CapabilitiesPage from './lib/components/CapabilitiesPage.svelte';
@@ -164,6 +165,14 @@
     void run(() => invoke('settings_set', { key, value }), false);
   }
 
+  // #462: the stored key is `appLanguage`, the local field is `language`. Set
+  // both so the derived translator redraws this window as soon as the choice
+  // changes, while the settings file keeps the key Swift reads.
+  function saveLanguage(tag: string) {
+    appearance = { ...appearance, language: tag };
+    void run(() => invoke('settings_set', { key: SETTINGS_KEYS.language, value: tag }), false);
+  }
+
   // #239 AC 1: the island's offset is per monitor and lives in the shell's own
   // store, so the settings key alone cannot move it back. Both are reset: the key
   // is what the page reads, the store is what the window obeys.
@@ -276,8 +285,10 @@
         <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
       {:else if page === 'about'}
         <AboutPage {settingsFile} />
+      {:else if page === 'general'}
+        <GeneralPage stored={appearance.language} {t} onChange={saveLanguage} />
       {:else}
-        <!-- The five pages with no controls: an argument, not a blank pane. -->
+        <!-- The remaining pages with no controls: an argument, not a blank pane. -->
         <UnavailablePage title={pendingPage?.label ?? ''} reason={pendingPage?.reason ?? ''} />
       {/if}
     </div>
