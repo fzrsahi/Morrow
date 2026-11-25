@@ -37,6 +37,8 @@
     sessions: Session[];
     filter: SessionFilter;
     density?: SessionDensity;
+    maxVisible?: number;
+    details?: import('../agents-settings').CardDetails;
     onDelete: (sessionId: string) => void;
     onOpenSettings: () => void;
     /** Pending, non-hidden requests (#approval-queue: inline in the list). */
@@ -48,6 +50,8 @@
     sessions,
     filter,
     density = 'compact',
+    maxVisible = 8,
+    details,
     onDelete,
     onOpenSettings,
     approvals = [],

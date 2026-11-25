@@ -5,11 +5,14 @@
   import PixelIcon from './PixelIcon.svelte';
   import LineIcon from './LineIcon.svelte';
   import { PALETTE, type Theme } from '../tokens';
+  import { visiblePanelTabs } from '../gestures';
   import type { PanelTab, PanelVariant, SessionFilter } from '../panel';
 
   type Props = {
     theme?: Theme;
     tab: PanelTab;
+    /** #465: the Agents switch hides this tab rather than leaving a dead one. */
+    agentsEnabled?: boolean;
     filter: SessionFilter;
     muted: boolean;
     quitArmed: boolean;
@@ -23,6 +26,7 @@
   let {
     theme = 'pixel',
     tab,
+    agentsEnabled = true,
     filter,
     muted,
     quitArmed,
@@ -34,10 +38,18 @@
     onQuit,
   }: Props = $props();
 
-  const tabs: Array<{ id: PanelTab; label: string; icon: string; line: 'cpu' | 'note'; modern: string }> = [
+  const allTabs: Array<{
+    id: PanelTab;
+    label: string;
+    icon: string;
+    line: 'cpu' | 'note';
+    modern: string;
+  }> = [
     { id: 'agents', label: 'AGENTS', icon: 'agents', line: 'cpu', modern: 'Agents' },
     { id: 'music', label: 'MUSIC', icon: 'music', line: 'note', modern: 'Music' },
   ];
+  const visible = $derived(new Set(visiblePanelTabs(agentsEnabled)));
+  const tabs = $derived(allTabs.filter((item) => visible.has(item.id)));
   const filters: Array<{ id: SessionFilter; label: string; modern: string }> = [
     { id: 'all', label: 'ALL', modern: 'All' },
     { id: 'sta', label: 'STA', modern: 'Status' },

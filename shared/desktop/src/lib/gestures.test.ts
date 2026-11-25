@@ -8,9 +8,18 @@ import {
   SWIPE_THRESHOLD_PX,
   SwipeGate,
   cycleTab,
+  visiblePanelTabs,
   wheelDeltaPx,
   wheelVolumePercent,
 } from './gestures';
+
+describe('visible tabs (#465)', () => {
+  test('disabling the Agents feature leaves only the Music tab to cycle', () => {
+    expect(visiblePanelTabs(true)).toEqual(['agents', 'music']);
+    expect(visiblePanelTabs(false)).toEqual(['music']);
+    expect(cycleTab('music', 1, visiblePanelTabs(false))).toBe('music');
+  });
+});
 
 describe('wheel volume', () => {
   test('scrolling up raises the level and scrolling down lowers it', () => {

@@ -122,6 +122,16 @@ export function sessionViewportLimit(density: SessionDensity, maxVisibleSessions
   return Math.max(1, maxVisibleSessions);
 }
 
+/** The subset of Agents switches the session cards actually render. */
+export type CardDetails = {
+  showDetails: boolean;
+  showToolStatus: boolean;
+  showTaskProgress: boolean;
+  showRecap: boolean;
+  showModelLabel: boolean;
+  replyLines: ReplyLines;
+};
+
 /** The Agents tab has its own theme switch; it uses the same two panel themes. */
 export function agentsTheme(theme: AgentsHUDTheme): 'pixel' | 'modern' {
   return theme === 'modern' ? 'modern' : 'pixel';

@@ -76,6 +76,7 @@
   import {
     SwipeGate,
     cycleTab,
+    visiblePanelTabs,
     wheelDeltaPx,
     wheelVolumePercent,
   } from './lib/gestures';
@@ -92,6 +93,13 @@
   } from './lib/settings';
   import { activeSession, collapsedWidth } from './lib/session-cards';
   import type { TerminalOutcome } from './lib/terminal-jump';
+  import {
+    DEFAULT_AGENTS,
+    agentsFromSettings,
+    agentsTheme,
+    sessionViewportLimit,
+    type AgentsSettings,
+  } from './lib/agents-settings';
   import {
     DEFAULT_BEHAVIOR,
     behaviorFromSettings,
@@ -131,8 +139,18 @@
   // #202: the theme is a view state, not a URL flag. It loads from the same
   // settings document as the filter and changes live when Settings writes it.
   let theme = $state<Theme>('pixel');
+  let agents = $state<AgentsSettings>({ ...DEFAULT_AGENTS });
+  let cardDetails = $derived({
+    showDetails: agents.showAgentDetails,
+    showToolStatus: agents.showToolStatus,
+    showTaskProgress: agents.showTaskProgress,
+    showRecap: agents.showSessionRecap,
+    showModelLabel: agents.showModelLabel,
+    replyLines: agents.aiMessageLines,
+  });
+  let cardTheme = $derived(agentsTheme(agents.agentsHUDTheme));
   const style = $derived([
-    ...Object.entries(cssVariables(11, theme)).map(([key, value]) => `${key}:${value}`),
+    ...Object.entries(cssVariables(agents.contentFontSize, theme)).map(([key, value]) => `${key}:${value}`),
     `--open-dur:${OPEN_TRANSITION.durationMs}ms`,
     `--open-ease:${OPEN_TRANSITION.css}`,
     `--close-dur:${CLOSE_TRANSITION.durationMs}ms`,
@@ -178,6 +196,8 @@
   // #465: the island obeys the presentation keys from the same document the
   // Behaviour and General pages write, live through settings-changed.
   let behavior = $state<BehaviorSettings>({ ...DEFAULT_BEHAVIOR });
+  // #465: the Agents page writes these keys; the session cards and font read
+  // them on the next settings-changed event, without a restart.
   const swipeGate = new SwipeGate();
   let filter = $state<SessionFilter>('all');
   // #185: #183's cards stay reachable; a fresh install uses compact rows.
@@ -692,7 +712,7 @@
       if (direction !== null) {
         event.preventDefault();
         if (!expanded) openPanel();
-        tab = cycleTab(tab, direction);
+        tab = cycleTab(tab, direction, visiblePanelTabs(agents.agentsEnabled));
       }
       return;
     }
@@ -964,6 +984,12 @@
   // measured size so card rectangles and the tight-fit chain stay intact. A
   // locked screen is different: the window stays drawn, only content probes
   // (including transcript tails in the shell) stop until it unlocks (#197).
+  // #465: turning the Agents feature off hides its tab; keep the panel on a
+  // tab the user can still see rather than showing an unreachable one.
+  $effect(() => {
+    if (!agents.agentsEnabled && tab === 'agents') tab = 'music';
+  });
+
   $effect(() => {
     const hidden = islandHidden({
       ambient,
@@ -1030,6 +1056,7 @@
         density = sessionDensityFromSettings(stored);
         gestures = gesturesFromSettings(stored);
         behavior = behaviorFromSettings(stored);
+        agents = agentsFromSettings(stored);
         const appearance = appearanceFromSettings(stored);
         theme = appearance.theme;
         displayMode = appearance.displayMode;
@@ -1048,6 +1075,7 @@
       const appearance = appearanceFromSettings(event.payload);
       gestures = gesturesFromSettings(event.payload);
       behavior = behaviorFromSettings(event.payload);
+      agents = agentsFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
       // City/method/correction changes invalidate the card's schedule.
@@ -1130,7 +1158,7 @@
   // Content changes while the panel is open need one fit; the controller
   // ignores the frames produced by the width/height animation itself.
   $effect(() => {
-    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${track?.title ?? ''}|${lyrics?.length ?? 0}|${completion ? completionKey(completion) : ''}|${prayer?.next?.epoch_seconds ?? ''}|${prayer?.in_minutes ?? ''}|${prayerLayout}`;
+    const content = `${sessionContent}|${cardContent}|${cards.length}|${gone.length}|${tab}|${filter}|${density}|${agents.maxVisibleSessions}|${JSON.stringify(cardDetails)}|${agents.contentFontSize}|${track?.title ?? ''}|${lyrics?.length ?? 0}|${completion ? completionKey(completion) : ''}|${prayer?.next?.epoch_seconds ?? ''}|${prayer?.in_minutes ?? ''}|${prayerLayout}`;
     if (!expanded) return;
     void content;
     void tick().then(() => {
@@ -1207,6 +1235,7 @@
     <Header
       {theme}
       {tab}
+      agentsEnabled={agents.agentsEnabled}
       {filter}
       {muted}
       {quitArmed}
@@ -1230,10 +1259,12 @@
           />
         {:else}
           <SessionList
-            {theme}
+            theme={cardTheme}
             {sessions}
             {filter}
             {density}
+            maxVisible={sessionViewportLimit(density, agents.maxVisibleSessions)}
+            details={cardDetails}
             approvals={liveCards}
             onAnswer={answer}
             onDelete={deleteSession}

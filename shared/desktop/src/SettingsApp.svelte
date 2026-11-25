@@ -125,6 +125,8 @@
   // #465: all Swift Behaviour keys, in one state object. A write goes through
   // the same settings_set command as the appearance and gesture controls.
   let behavior = $state<BehaviorSettings>({ ...DEFAULT_BEHAVIOR });
+  // #465: the Agents page and the panel read the same Swift settings keys.
+  let agents = $state<AgentsSettings>({ ...DEFAULT_AGENTS });
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -158,6 +160,7 @@
       appearance = appearanceFromSettings(stored);
       gestures = gesturesFromSettings(stored);
       behavior = behaviorFromSettings(stored);
+      agents = agentsFromSettings(stored);
       prayer = prayerSettingsFromSettings(stored);
       cities = availableCities;
       hosts = remoteHosts;
@@ -199,6 +202,11 @@
   function saveLanguage(tag: string) {
     appearance = { ...appearance, language: tag };
     void run(() => invoke('settings_set', { key: SETTINGS_KEYS.language, value: tag }), false);
+  }
+
+  function saveAgentSetting(field: keyof typeof AGENT_KEYS, value: string | number | boolean) {
+    agents = { ...agents, [field]: value } as AgentsSettings;
+    void run(() => invoke('settings_set', { key: AGENT_KEYS[field], value }), false);
   }
 
   // #239 AC 1: the island's offset is per monitor and lives in the shell's own
@@ -349,6 +357,8 @@
           onGestureChange={saveGestureSetting}
           onBehaviorChange={saveBehaviorSetting}
         />
+      {:else if page === 'agents'}
+        <AgentsPage settings={agents} {t} onChange={saveAgentSetting} />
       {:else if page === 'about'}
         <AboutPage {settingsFile} {t} />
       {:else if page === 'general'}

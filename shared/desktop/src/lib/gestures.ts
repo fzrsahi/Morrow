@@ -8,6 +8,13 @@ import type { PanelTab } from './panel';
 /** The tabs `Header.svelte` draws, in the order a forward swipe visits them. */
 export const PANEL_TABS: readonly PanelTab[] = ['agents', 'music'];
 
+/** #465: turning the Agents feature off leaves one reachable tab. Both the
+ *  header and the swipe cycle use this list, so a swipe cannot land on a tab
+ *  the user cannot see. */
+export function visiblePanelTabs(agentsEnabled: boolean): readonly PanelTab[] {
+  return agentsEnabled ? PANEL_TABS : ['music'];
+}
+
 /** One wheel notch steps by the same five percent as the meter's arrow keys. */
 export const WHEEL_VOLUME_STEP = 5;
 
