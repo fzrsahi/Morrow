@@ -70,6 +70,10 @@ final class DynamicIslandModeTests: XCTestCase {
             968
         )
         XCTAssertEqual(
+            PanelWindowLayout.anchoredY(screenMaxY: screenMaxY, panelHeight: panelHeight, displayMode: .notch, isFullscreenMode: true),
+            968
+        )
+        XCTAssertEqual(
             PanelWindowLayout.anchoredY(screenMaxY: screenMaxY, panelHeight: panelHeight, displayMode: .dynamicIsland, isFullscreenMode: false),
             958
         )
@@ -239,6 +243,83 @@ final class DynamicIslandModeTests: XCTestCase {
         XCTAssertLessThan(expandedPill.topRowWidthPt, expandedPill.midRowWidthPt - 10)
         XCTAssertLessThan(expandedPill.bottomRowWidthPt, expandedPill.midRowWidthPt - 10)
         XCTAssertGreaterThan(expandedPill.midRowWidthPt, 660)
+    }
+
+    func testNotchModePreservesConcaveTopEarsAndTopDockingInFullscreen() throws {
+        NowPlayingManager.shared.isPlaying = false
+        IslandSignals.shared.setMusic(isPlaying: false, showToast: false, hasTitle: false, hasLyrics: false, title: "", artist: "")
+
+        let notchedState = makeAgentState(status: .processing)
+        notchedState.isFullscreenMode = true
+        let notchedCollapsed = try renderScene(
+            displayMode: .notch,
+            hasNotch: true,
+            state: notchedState,
+            canvasWidth: 620,
+            canvasHeight: 72,
+            isFullscreenOverride: true,
+            saveName: "notch-fullscreen-notched-collapsed"
+        )
+        XCTAssertEqual(notchedCollapsed.topGapPt, 0, accuracy: 1.0, "Notch mode must remain flush at top edge in fullscreen")
+        XCTAssertGreaterThan(
+            notchedCollapsed.topRowWidthPt,
+            notchedCollapsed.midRowWidthPt + 6,
+            "Notch mode must keep concave top ears in fullscreen on notched displays"
+        )
+
+        let nonNotchState = makeAgentState(status: .processing)
+        nonNotchState.isFullscreenMode = true
+        let nonNotchCollapsed = try renderScene(
+            displayMode: .notch,
+            hasNotch: false,
+            state: nonNotchState,
+            canvasWidth: 620,
+            canvasHeight: 72,
+            isFullscreenOverride: true,
+            saveName: "notch-fullscreen-nonnotch-collapsed"
+        )
+        XCTAssertEqual(nonNotchCollapsed.topGapPt, 0, accuracy: 1.0, "Notch mode must remain flush at top edge in fullscreen on non-notch displays")
+        XCTAssertGreaterThan(
+            nonNotchCollapsed.topRowWidthPt,
+            nonNotchCollapsed.midRowWidthPt + 6,
+            "Notch mode must keep concave top ears in fullscreen on non-notch displays"
+        )
+
+        let expandedState = makeAgentState(status: .processing, surface: .sessionList)
+        expandedState.isFullscreenMode = true
+        let expandedNotch = try renderScene(
+            displayMode: .notch,
+            hasNotch: true,
+            state: expandedState,
+            canvasWidth: 760,
+            canvasHeight: 380,
+            isFullscreenOverride: true,
+            saveName: "notch-fullscreen-notched-expanded"
+        )
+        XCTAssertEqual(expandedNotch.topGapPt, 0, accuracy: 1.0, "Expanded Notch mode must remain flush at top edge in fullscreen")
+        XCTAssertGreaterThan(
+            expandedNotch.topRowWidthPt,
+            expandedNotch.midRowWidthPt + 14,
+            "Expanded Notch mode must keep concave top ears in fullscreen"
+        )
+
+        let islandState = makeAgentState(status: .processing)
+        islandState.isFullscreenMode = true
+        let islandFullscreen = try renderScene(
+            displayMode: .dynamicIsland,
+            hasNotch: false,
+            state: islandState,
+            canvasWidth: 620,
+            canvasHeight: 72,
+            isFullscreenOverride: true,
+            saveName: "dynamic-island-fullscreen-collapsed"
+        )
+        XCTAssertGreaterThanOrEqual(islandFullscreen.topGapPt, 9.0, "Dynamic Island mode must remain floating in fullscreen")
+        XCTAssertLessThan(
+            islandFullscreen.topRowWidthPt,
+            islandFullscreen.midRowWidthPt - 6,
+            "Dynamic Island mode must keep rounded pill top corners in fullscreen"
+        )
     }
 
     func testNonNotchIdleToastBannerKeepsFullWidthInDynamicIslandMode() throws {
@@ -590,6 +671,7 @@ final class DynamicIslandModeTests: XCTestCase {
         canvasWidth: CGFloat,
         canvasHeight: CGFloat,
         showCompactLyrics: Bool = false,
+        isFullscreenOverride: Bool? = nil,
         saveName: String
     ) throws -> SceneMetrics {
         suite.removePersistentDomain(forName: suiteName)
@@ -614,7 +696,8 @@ final class DynamicIslandModeTests: XCTestCase {
                 hasNotch: hasNotch,
                 notchHeight: notchHeight,
                 notchW: notchW,
-                screenWidth: screenWidth
+                screenWidth: screenWidth,
+                isFullscreenOverride: isFullscreenOverride
             )
             .environment(\.mascotStaticTime, 5.2)
             .defaultAppStorage(suite)
