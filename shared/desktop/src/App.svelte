@@ -93,6 +93,13 @@
   import { activeSession, collapsedWidth } from './lib/session-cards';
   import type { TerminalOutcome } from './lib/terminal-jump';
   import {
+    DEFAULT_BEHAVIOR,
+    behaviorFromSettings,
+    hoverDelayMs,
+    islandHidden,
+    type BehaviorSettings,
+  } from './lib/behavior';
+  import {
     COLLAPSED_MUSIC_WIDTH,
     LyricCache,
     controls,
@@ -103,7 +110,7 @@
     type LyricLine,
     type Track,
   } from './lib/music';
-  import { MOTION, PALETTE, cssVariables, type Theme } from './lib/tokens';
+  import { PALETTE, cssVariables, type Theme } from './lib/tokens';
   import { VOLUME_HUD_MS, VolumeHudGate, setVolumePlan, volumeSupported, type Volume } from './lib/volume';
   import type {
     CapabilityRow,
@@ -168,6 +175,9 @@
   // Parity #3: wheel-over-island volume and horizontal swipe tabs, both
   // switchable in Settings → Behavior. Defaults are read from settings.json.
   let gestures = $state<GestureSettings>({ ...DEFAULT_GESTURES });
+  // #465: the island obeys the presentation keys from the same document the
+  // Behaviour and General pages write, live through settings-changed.
+  let behavior = $state<BehaviorSettings>({ ...DEFAULT_BEHAVIOR });
   const swipeGate = new SwipeGate();
   let filter = $state<SessionFilter>('all');
   // #185: #183's cards stay reachable; a fresh install uses compact rows.
@@ -439,6 +449,9 @@
         pid: session.cli_pid,
       });
       jumpOutcomes = { ...jumpOutcomes, [session.session_id]: outcome };
+      // #465: Swift's autoCollapseAfterSessionJump. The click keeps the panel
+      // open by default; opting in closes it once the terminal was raised.
+      if (behavior.autoCollapseAfterSessionJump && expanded) await tick().then(closePanel);
     } catch (error) {
       hooksError = String(error);
     }
@@ -581,7 +594,7 @@
     if (fit.phase === 'collapsed') {
       prehover = true;
       clearTimeout(hoverTimer);
-      hoverTimer = setTimeout(openPanel, MOTION.dwell * 1000);
+      hoverTimer = setTimeout(openPanel, hoverDelayMs(behavior.hoverExpandDelay));
     }
   }
 
@@ -589,6 +602,8 @@
     if (dragging) return;
     clearTimeout(hoverTimer);
     prehover = false;
+    // #465: the same switch Swift checks before scheduling a close.
+    if (!behavior.collapseOnMouseLeave) return;
     collapseGate.leave(performance.now());
     if (completionGate.active) completionGate.leave(performance.now());
     collapseTimer = setTimeout(() => {
@@ -611,6 +626,12 @@
   }
 
   function onBarPointerMove(event: PointerEvent) {
+    // #465: horizontal drag is opt-in, as in Swift. A vertical drag still moves
+    // the island, and a drag already under way is not turned around mid-gesture.
+    const moved = drag.delta(event.clientX, event.clientY);
+    if (!behavior.allowHorizontalDrag && !drag.dragging && Math.abs(moved.x) > Math.abs(moved.y)) {
+      return;
+    }
     if (!drag.move(event.clientX, event.clientY)) return;
     if (!dragging) {
       // A dwell timer from pointerenter may already be in flight: the drag
@@ -927,6 +948,9 @@
       return;
     }
     const key = completionKey(next);
+    // #465: Glance and Off keep the compact dot and never open the panel; the
+    // three-way style supersedes macOS's old autoExpandOnCompletion boolean.
+    if (behavior.completionNotificationStyle !== 'expand') return;
     if (!shouldAutoOpen(next, seenCompletion)) return;
     seenCompletion = key;
     completionGate.begin(key);
@@ -941,7 +965,13 @@
   // locked screen is different: the window stays drawn, only content probes
   // (including transcript tails in the shell) stop until it unlocks (#197).
   $effect(() => {
-    const hidden = view.hidden;
+    const hidden = islandHidden({
+      ambient,
+      support,
+      sessionCount: sessions.length,
+      expanded,
+      behavior,
+    });
     invoke('island_visible', { visible: !hidden }).catch(() => {});
     invoke('set_probes_active', { active: probesActive(view) }).catch(() => {});
   });
@@ -999,6 +1029,7 @@
         filter = sessionFilterFromSettings(stored);
         density = sessionDensityFromSettings(stored);
         gestures = gesturesFromSettings(stored);
+        behavior = behaviorFromSettings(stored);
         const appearance = appearanceFromSettings(stored);
         theme = appearance.theme;
         displayMode = appearance.displayMode;
@@ -1016,6 +1047,7 @@
     void listen<unknown>(SETTINGS_CHANGED_EVENT, (event) => {
       const appearance = appearanceFromSettings(event.payload);
       gestures = gesturesFromSettings(event.payload);
+      behavior = behaviorFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
       // City/method/correction changes invalidate the card's schedule.

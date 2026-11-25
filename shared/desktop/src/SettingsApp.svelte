@@ -37,6 +37,12 @@
     type ShortcutBinding,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
+  import {
+    BEHAVIOR_KEYS,
+    DEFAULT_BEHAVIOR,
+    behaviorFromSettings,
+    type BehaviorSettings,
+  } from './lib/behavior';
   import { REMOTE_STATUS_EVENT, type RemoteStatuses } from './lib/remote';
   import { resolveLanguage, translator, type Language } from './lib/strings';
   import {
@@ -109,6 +115,9 @@
   });
   let followUpMinutes = $state(1);
   let gestures = $state<GestureSettings>({ ...DEFAULT_GESTURES });
+  // #465: all Swift Behaviour keys, in one state object. A write goes through
+  // the same settings_set command as the appearance and gesture controls.
+  let behavior = $state<BehaviorSettings>({ ...DEFAULT_BEHAVIOR });
   let busy = $state(false);
   let error = $state<string | null>(null);
 
@@ -141,6 +150,7 @@
       settingsFile = file;
       appearance = appearanceFromSettings(stored);
       gestures = gesturesFromSettings(stored);
+      behavior = behaviorFromSettings(stored);
       prayer = prayerSettingsFromSettings(stored);
       cities = availableCities;
       hosts = remoteHosts;
@@ -205,6 +215,16 @@
   function saveGestureSetting(key: string, value: boolean) {
     gestures = { ...gestures, [key]: value };
     void run(() => invoke('settings_set', { key, value }), false);
+  }
+
+  // #465: one writer for every Behaviour control. The state field name is the
+  // key name, so the Swift spelling lives in exactly one table (BEHAVIOR_KEYS).
+  function saveBehaviorSetting(
+    field: keyof typeof BEHAVIOR_KEYS,
+    value: string | number | boolean,
+  ) {
+    behavior = { ...behavior, [field]: value } as BehaviorSettings;
+    void run(() => invoke('settings_set', { key: BEHAVIOR_KEYS[field], value }), false);
   }
 
   onMount(() => {
@@ -317,8 +337,10 @@
           {t}
           minutes={followUpMinutes}
           {gestures}
+          {behavior}
           onChange={saveFollowUpMinutes}
           onGestureChange={saveGestureSetting}
+          onBehaviorChange={saveBehaviorSetting}
         />
       {:else if page === 'about'}
         <AboutPage {settingsFile} {t} />
