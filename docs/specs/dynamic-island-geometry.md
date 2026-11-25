@@ -45,6 +45,7 @@ This specification is normative when creating or modifying Dynamic Island UI in 
 
 - Inherits hardware notch cutout and strict left/right wing symmetry from [notch-geometry.md](notch-geometry.md) (`leftWidth == rightWidth`, `centerShift == 0`, center gap `>= notchW`).
 - Uses Dynamic Island floating Y-offset (`10 pt`), chrome stroke (`1.2 pt`), and the Shape Decision Rule in Section 4 (e.g., Connected Chin Lyrics uses `notchHeight + 26 pt` with `RoundedRectangle(cornerRadius: 18, style: .continuous)`).
+- Once `topOffset >= physicalNotchHeight` (`IslandDisplayMetrics.intersectsHardwareNotch == false`), the floating pill clears the physical camera housing and uses the compact non-notch Dynamic Island geometry (Sections 1–4: `34 pt` `Capsule`, Balanced Twin, centered Inline Lyrics, unified `32 pt` expanded header).
 
 ## 6. Calculate Before Modifying UI
 

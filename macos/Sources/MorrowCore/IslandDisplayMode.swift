@@ -72,6 +72,22 @@ public enum IslandDisplayMetrics {
             : 0.0
     }
 
+    /// Whether a floating Dynamic Island vertically intersects the physical hardware notch cutout.
+    /// Once `topOffset >= physicalNotchHeight`, the pill sits completely below the camera housing
+    /// and uses the compact single-row Dynamic Island layout (Balanced Twin + centered Inline Lyrics).
+    public static func intersectsHardwareNotch(
+        displayMode: IslandDisplayMode,
+        hasNotch: Bool,
+        topOffset: Double,
+        physicalNotchHeight: Double
+    ) -> Bool {
+        guard hasNotch else { return false }
+        guard displayMode == .dynamicIsland else { return true }
+        let effectiveOffset = DynamicIslandTopOffset.clamp(topOffset)
+        let notchH = max(0.0, physicalNotchHeight)
+        return effectiveOffset < notchH
+    }
+
     /// Center cutout / gap width reserved between left and right collapsed wings.
     public static func centerGapWidth(
         notchWidth: Double,

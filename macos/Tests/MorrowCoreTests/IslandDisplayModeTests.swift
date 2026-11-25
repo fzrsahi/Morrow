@@ -37,6 +37,57 @@ final class IslandDisplayModeTests: XCTestCase {
         XCTAssertEqual(IslandDisplayMetrics.floatingYOffset(displayMode: .notch, isFullscreenMode: false, customTopOffset: 24), 0)
     }
 
+    func testIntersectsHardwareNotchClearsWhenFloatingBelowPhysicalNotch() {
+        XCTAssertFalse(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: false,
+                topOffset: 10,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertTrue(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .notch,
+                hasNotch: true,
+                topOffset: 40,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertTrue(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 10,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertTrue(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 31,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 32,
+                physicalNotchHeight: 32
+            )
+        )
+        XCTAssertFalse(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 40,
+                physicalNotchHeight: 32
+            )
+        )
+    }
+
     func testCenterGapCollapsesDeadSpaceInDynamicIslandOnNonNotchScreens() {
         // Notch mode preserves simulated notch scaling
         XCTAssertEqual(

@@ -524,13 +524,28 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         isFullscreen: Bool,
         isPrimaryCoordinator: Bool
     ) -> NotchPanelView {
-        let hasNotch = entry.frameOverride != nil ? entry.descriptor.hasNotch : ScreenDetector.screenHasNotch(entry.screen)
+        let physicalHasNotch = entry.frameOverride != nil ? entry.descriptor.hasNotch : ScreenDetector.screenHasNotch(entry.screen)
+        let physicalNotchHeight: CGFloat = {
+            if entry.frameOverride != nil {
+                return entry.descriptor.hasNotch ? 32 : 0
+            }
+            if #available(macOS 12.0, *) {
+                return entry.screen.safeAreaInsets.top
+            }
+            return 0
+        }()
+        let effectiveHasNotch = IslandDisplayMetrics.intersectsHardwareNotch(
+            displayMode: configuration.displayMode,
+            hasNotch: physicalHasNotch,
+            topOffset: configuration.dynamicIslandTopOffset,
+            physicalNotchHeight: Double(physicalNotchHeight)
+        )
         let notchHeight = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 32 : 25) : ScreenDetector.topBarHeight(for: entry.screen)
         let notchW = entry.frameOverride != nil ? (entry.descriptor.hasNotch ? 185 : min(max(entry.frame.width * 0.14, 160), 240)) : ScreenDetector.notchWidth(for: entry.screen)
 
         return NotchPanelView(
             appState: appState,
-            hasNotch: hasNotch,
+            hasNotch: effectiveHasNotch,
             notchHeight: notchHeight,
             notchW: notchW,
             screenWidth: entry.frame.width,
@@ -656,6 +671,7 @@ class PanelWindowController: NSObject, NSWindowDelegate {
                 let needsViewRefresh = forceRebuild
                     || slot.screenSignature != signature
                     || slot.configuration.displayMode != config.displayMode
+                    || abs(slot.configuration.dynamicIslandTopOffset - config.dynamicIslandTopOffset) > 0.001
                     || slot.isPrimaryCoordinator != isCoordinator
 
                 slot.configuration = config

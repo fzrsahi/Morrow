@@ -267,6 +267,24 @@ final class PanelWindowControllerTests: XCTestCase {
         XCTAssertEqual(controller.activeSlotModesForTesting["builtin"], .dynamicIsland)
         XCTAssertEqual(controller.activeSlotModesForTesting["EXT-27"], .notch)
 
+        // Move Display 1 Dynamic Island below the 32pt hardware notch and verify frame & rootView update.
+        SettingsManager.shared.setDisplayConfiguration(
+            DisplayConfiguration(enabled: true, displayMode: .dynamicIsland, dynamicIslandTopOffset: 36),
+            for: "builtin",
+            displays: [d1, d2]
+        )
+        controller.syncPanelsForTesting()
+        let d1BelowNotch = try XCTUnwrap(controller.activeSlotFramesForTesting["builtin"])
+        XCTAssertEqual(d1BelowNotch.maxY, f1.maxY - 36, accuracy: 0.5)
+        XCTAssertFalse(
+            IslandDisplayMetrics.intersectsHardwareNotch(
+                displayMode: .dynamicIsland,
+                hasNotch: true,
+                topOffset: 36,
+                physicalNotchHeight: 32
+            )
+        )
+
         // Disable Display 1 and verify only Display 2 slot remains.
         SettingsManager.shared.setDisplayConfiguration(
             DisplayConfiguration(enabled: false, displayMode: .dynamicIsland, dynamicIslandTopOffset: 20),
