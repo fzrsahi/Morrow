@@ -981,14 +981,27 @@ class PanelWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Collapsed island with nothing running — the state a Mac spends most of
+    /// Pure helper for `isIslandSettled()`, exposed for unit tests.
+    ///
+    /// Collapsed island with no active sessions — the state a Mac spends most of
     /// its day in, and the one where a live mascot timeline costs real CPU for
-    /// motion nobody is looking at (#299). Any expanded surface, any session
-    /// that is not idle, or a playing track keeps the island animating.
+    /// motion nobody is looking at (#299). Playing music alone does not unsettle
+    /// the island (the `.music` animation class runs independently while the
+    /// idle mascot stays still). Any expanded surface or any non-idle session
+    /// unsettles the island so mascots animate immediately, even while music plays.
+    nonisolated static func isIslandSettled(
+        isExpanded: Bool,
+        sessionStatuses: some Sequence<AgentStatus>
+    ) -> Bool {
+        guard !isExpanded else { return false }
+        return sessionStatuses.allSatisfy { $0 == .idle }
+    }
+
     private func isIslandSettled() -> Bool {
-        guard !appState.surface.isExpanded else { return false }
-        guard !NowPlayingManager.shared.isPlaying else { return false }
-        return appState.sessions.values.allSatisfy { $0.status == .idle }
+        Self.isIslandSettled(
+            isExpanded: appState.surface.isExpanded,
+            sessionStatuses: appState.sessions.values.map(\.status)
+        )
     }
 
     /// A session parked on an approval or a question is waiting for the user.
