@@ -1,0 +1,12 @@
+{
+  "name": "morrow-website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "astro build",
+    "dev": "astro dev"
+  },
+  "devDependencies": {
+    "astro": "^5.13.0"
+  }
+}

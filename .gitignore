@@ -100,3 +100,8 @@ tickets.md
 # Local developer handoffs and research
 docs-dev/
 .signing.local
+
+# Website build output and local tooling
+web/node_modules/
+dist-web/
+.taste-skill/
