@@ -83,6 +83,28 @@ final class NotchMusicThinkingLayoutTests: XCTestCase {
         }
     }
 
+    /// Regression for #77: prayer priority, whether stale or genuine, must not
+    /// take the right wing away from a playing track.
+    func testPlayingMusicKeepsRightWingWhenPrayerIsPrioritized() throws {
+        configureMusic(title: "Midnight City", artworkColor: NSColor(srgbRed: 0.0, green: 0.25, blue: 1.0, alpha: 1.0))
+        configureDefaults(theme: .pixel, widthScale: 100)
+        IslandSignals.shared.setPrayerPrioritized(true)
+        defer { IslandSignals.shared.setPrayerPrioritized(false) }
+
+        for status in [AgentStatus.idle, .processing] {
+            let render = try renderCollapsedBar(
+                state: makeAgentState(status: status),
+                hasNotch: true,
+                saveName: nil
+            )
+            let tag = "status=\(String(describing: status))"
+            XCTAssertNil(render.intrusion, "\(tag): music + prayer priority drew under the notch")
+            let album = try XCTUnwrap(render.rightAlbumRange, "\(tag): music artwork was replaced by the prayer clock")
+            let viz = try XCTUnwrap(render.rightVisualizerRange, "\(tag): music visualizer was replaced by the prayer clock")
+            XCTAssertLessThanOrEqual(album.upperBound, viz.lowerBound, "\(tag): album overlapped visualizer")
+        }
+    }
+
     func testThinkingAndGermanThinkingClearNotchAcrossScalesWithoutMusic() throws {
         let cases: [(theme: IslandUITheme, lang: String, scale: Int, quiet: Bool)] = [
             (.modern, "en", 100, false),
