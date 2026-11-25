@@ -28,6 +28,11 @@
     groupSessions,
     splitOverflow,
   } from '../session-list';
+  import {
+    DEFAULT_AGENTS,
+    replyLineClamp,
+    type CardDetails,
+  } from '../agents-settings';
   import type { SessionDensity, SessionFilter } from '../panel';
   import { PALETTE, type Theme } from '../tokens';
   import type { Card, Decision, Session } from '../types';
