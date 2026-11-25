@@ -69,6 +69,10 @@ impl Client {
     /// and half-closes, each write bounded by `write_timeout`. A caller
     /// with a deadline for the send but none for the reply (a hook that
     /// waits for the user) lifts its deadline in between.
+    ///
+    /// `None` leaves the fresh socket as it is: blocking, with no timeout.
+    /// Setting `SO_SNDTIMEO` to zero is both unnecessary and unsafe here;
+    /// macOS refuses it with `EINVAL` once the peer has closed (#298).
     pub fn send(
         mut self,
         request: &[u8],
@@ -76,9 +80,11 @@ impl Client {
     ) -> Result<PendingReply, Error> {
         let path = self.path.as_str();
         let io = |op| move |source| io_error(op, path, source);
-        self.stream
-            .set_write_timeout(write_timeout)
-            .map_err(io("set write timeout on"))?;
+        if let Some(timeout) = write_timeout {
+            self.stream
+                .set_write_timeout(Some(timeout))
+                .map_err(io("set write timeout on"))?;
+        }
         self.stream.write_all(request).map_err(io("write to"))?;
         self.stream
             .shutdown(Shutdown::Write)
@@ -101,12 +107,18 @@ impl PendingReply {
     /// Reads the reply until the island closes, each read bounded by
     /// `read_timeout` (`None`: as long as it takes). An empty reply is a
     /// valid answer.
+    ///
+    /// With `None` the socket keeps its blocking default. macOS refuses
+    /// `setsockopt(SO_RCVTIMEO, 0)` with `EINVAL` when the island has already
+    /// closed its end, which would lose a reply it had already sent (#298).
     pub fn wait(mut self, read_timeout: Option<Duration>) -> Result<Vec<u8>, Error> {
         let path = self.path.as_str();
         let io = |op| move |source| io_error(op, path, source);
-        self.stream
-            .set_read_timeout(read_timeout)
-            .map_err(io("set read timeout on"))?;
+        if let Some(timeout) = read_timeout {
+            self.stream
+                .set_read_timeout(Some(timeout))
+                .map_err(io("set read timeout on"))?;
+        }
         let mut reply = Vec::new();
         self.stream
             .read_to_end(&mut reply)
