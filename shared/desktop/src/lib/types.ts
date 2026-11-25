@@ -138,6 +138,8 @@ export type PrayerSnapshot = {
   city_name: string;
   method: string;
   correction_minutes: number;
+  /** #462 — `compact` or `panoramic`, from `prayerCardDisplayMode`. */
+  card_mode: string;
   hijri: string;
   times: PrayerTime[];
   next: PrayerTime | null;

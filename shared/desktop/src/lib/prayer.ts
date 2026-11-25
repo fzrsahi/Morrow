@@ -19,6 +19,24 @@ export const HIJRI_SOURCES = [
   { value: 'neoMABIMS', label: 'Takwim Kemenag (Neo-MABIMS)' },
 ] as const;
 
+// #462 — the remaining macOS controls that work without OS permissions.
+export const PRAYER_CARD_MODES = [
+  { value: 'compact', label: 'Compact' },
+  { value: 'panoramic', label: 'Panoramic (expanded day list)' },
+] as const;
+
+export const PRAYER_LOCATION_MODES = [
+  { value: 'manual', label: 'Manual city' },
+  { value: 'automatic', label: 'Automatic (unavailable)' },
+] as const;
+
+/** #443 — shown beside the disabled Automatic option, not hidden in a tooltip. */
+export const AUTOMATIC_LOCATION_REASON =
+  'Automatic location needs an OS permission flow (GeoClue on Linux, WinRT on Windows) this shell does not have yet (#443). The offline city picker below is the supported path.';
+
+/** Only manual can be selected. A stored "automatic" never claims to work. */
+const AVAILABLE_LOCATION_MODES = [{ value: 'manual' }] as const;
+
 export const PRAYER_WARNING_MINUTES = 15;
 
 export type PrayerCity = { id: string; name: string; province: string };
@@ -28,6 +46,11 @@ export type PrayerSettings = {
   method: string;
   correctionMinutes: number;
   hijriSource: string;
+  enabled: boolean;
+  cardMode: (typeof PRAYER_CARD_MODES)[number]['value'];
+  hijriDayOffset: number;
+  locationMode: (typeof AVAILABLE_LOCATION_MODES)[number]['value'];
+  soundEnabled: boolean;
 };
 
 export const DEFAULT_PRAYER_SETTINGS: PrayerSettings = {
@@ -35,10 +58,20 @@ export const DEFAULT_PRAYER_SETTINGS: PrayerSettings = {
   method: 'kemenag',
   correctionMinutes: 0,
   hijriSource: 'khgt',
+  // The card has always appeared once a prayer key was saved. Defaulting on
+  // keeps that behaviour for documents written before #462.
+  enabled: true,
+  cardMode: 'compact',
+  hijriDayOffset: 0,
+  locationMode: 'manual',
+  soundEnabled: false,
 };
 
-const allowed = (value: unknown, options: readonly { value: string }[], fallback: string) =>
-  options.some((option) => option.value === value) ? (value as string) : fallback;
+const allowed = <T extends string>(
+  value: unknown,
+  options: readonly { value: T }[],
+  fallback: T,
+): T => (options.some((option) => option.value === value) ? (value as T) : fallback);
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -46,12 +79,16 @@ function object(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** Read the four prayer keys from the settings document, with the same
- *  fallbacks the shell uses. */
+/** Read the prayer keys from the settings document, with the same fallbacks
+ *  the shell uses. Values the shell cannot honour fall back instead of being
+ *  shown as a working choice. */
 export function prayerSettingsFromSettings(value: unknown): PrayerSettings {
   const stored = object(value) ?? {};
   const cityId = stored[SETTINGS_KEYS.prayerCityId];
   const minutes = stored[SETTINGS_KEYS.prayerCorrectionMinutes];
+  const offset = stored[SETTINGS_KEYS.prayerHijriOffset];
+  const enabled = stored[SETTINGS_KEYS.prayerEnabled];
+  const soundEnabled = stored[SETTINGS_KEYS.prayerSoundEnabled];
   return {
     cityId: typeof cityId === 'string' && cityId ? cityId : DEFAULT_PRAYER_SETTINGS.cityId,
     method: allowed(stored[SETTINGS_KEYS.prayerMethod], PRAYER_METHODS, DEFAULT_PRAYER_SETTINGS.method),
@@ -64,6 +101,23 @@ export function prayerSettingsFromSettings(value: unknown): PrayerSettings {
       HIJRI_SOURCES,
       DEFAULT_PRAYER_SETTINGS.hijriSource,
     ),
+    enabled: typeof enabled === 'boolean' ? enabled : DEFAULT_PRAYER_SETTINGS.enabled,
+    cardMode: allowed(
+      stored[SETTINGS_KEYS.prayerCardMode],
+      PRAYER_CARD_MODES,
+      DEFAULT_PRAYER_SETTINGS.cardMode,
+    ),
+    hijriDayOffset:
+      typeof offset === 'number' && Number.isFinite(offset)
+        ? Math.max(-2, Math.min(2, Math.trunc(offset)))
+        : DEFAULT_PRAYER_SETTINGS.hijriDayOffset,
+    locationMode: allowed(
+      stored[SETTINGS_KEYS.prayerLocationMode],
+      AVAILABLE_LOCATION_MODES,
+      DEFAULT_PRAYER_SETTINGS.locationMode,
+    ),
+    soundEnabled:
+      typeof soundEnabled === 'boolean' ? soundEnabled : DEFAULT_PRAYER_SETTINGS.soundEnabled,
   };
 }
 
@@ -71,6 +125,7 @@ export type PrayerCardModel = {
   cityName: string;
   method: string;
   correctionMinutes: number;
+  cardMode: (typeof PRAYER_CARD_MODES)[number]['value'];
   hijri: string;
   nextName: string;
   nextTime: string;
@@ -105,6 +160,7 @@ export function prayerCardModel(prayer: PrayerSnapshot | null | undefined): Pray
     cityName: prayer.city_name || '',
     method: prayer.method || '',
     correctionMinutes: prayer.correction_minutes,
+    cardMode: prayer.card_mode === 'panoramic' ? 'panoramic' : 'compact',
     hijri: prayer.hijri || '',
     nextName: prayer.next.name || '',
     nextTime: prayer.next.time,

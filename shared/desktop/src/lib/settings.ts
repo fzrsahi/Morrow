@@ -131,6 +131,13 @@ export const SETTINGS_KEYS = {
   prayerMethod: 'prayerCalculationMethod',
   prayerCorrectionMinutes: 'prayerCorrectionMinutes',
   prayerHijriSource: 'prayerHijriCalendarSource',
+  /** #462 — the same names as Swift `SettingsKey`s, minus precise coordinates
+   *  and last-known location: those only exist for automatic location (#443). */
+  prayerEnabled: 'prayerEnabled',
+  prayerCardMode: 'prayerCardDisplayMode',
+  prayerHijriOffset: 'prayerHijriDayOffset',
+  prayerLocationMode: 'prayerLocationMode',
+  prayerSoundEnabled: 'prayerSoundEnabled',
 } as const;
 
 export type AppearanceSettings = {
