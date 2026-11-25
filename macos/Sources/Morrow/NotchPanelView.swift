@@ -251,6 +251,7 @@ struct NotchPanelView: View {
     @AppStorage(SettingsKey.showAgentDetails) private var showAgentDetails = SettingsDefaults.showAgentDetails
     @AppStorage(SettingsKey.smartSuppress) private var smartSuppress = SettingsDefaults.smartSuppress
     @AppStorage(SettingsKey.hideWhenNoSession) private var hideWhenNoSession = SettingsDefaults.hideWhenNoSession
+    @AppStorage(SettingsKey.agentsEnabled) private var agentsEnabled = SettingsDefaults.agentsEnabled
     @AppStorage(SettingsKey.showToolStatus) private var showToolStatus = SettingsDefaults.showToolStatus
     @AppStorage(SettingsKey.collapsedWidthScale) private var collapsedWidthScale = SettingsDefaults.collapsedWidthScale
     @AppStorage(SettingsKey.islandDisplayMode) private var islandDisplayModeRaw = SettingsDefaults.islandDisplayMode
@@ -341,7 +342,8 @@ struct NotchPanelView: View {
             if !src.isEmpty { return src }
             if !session.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return session.source }
         }
-        return appState.status == .idle ? settingsDefaultSource : appState.primarySource
+        let fallback = appState.status == .idle ? settingsDefaultSource : appState.primarySource
+        return IdleMascotSource.resolved(agentsEnabled: agentsEnabled, defaultSource: fallback)
     }
     private var collapsedMascotStatus: MascotAgentStatus {
         isThinking ? .processing : appState.status
@@ -474,11 +476,15 @@ struct NotchPanelView: View {
         }
     }
 
-    private var isActive: Bool { !appState.sessions.isEmpty || signals.isPlaying || nowPlaying.isPlaying }
+    private var isActive: Bool {
+        (agentsEnabled && !appState.sessions.isEmpty) || signals.isPlaying || nowPlaying.isPlaying
+    }
     /// First launch / no-session state should still render a visible marker so the app
-    /// doesn't disappear completely behind the physical notch.
+    /// doesn't disappear completely behind the physical notch. With agents switched
+    /// off (#44) the Morrow mascot is that marker even if sessions are still tracked.
     private var showIdleIndicator: Bool {
         if workspaceManager.testWingPreview == .emptyIdle { return true }
+        if !agentsEnabled { return true }
         return !isActive && !hideWhenNoSession
     }
     /// Whether the bar content should be visible (respects hideWhenNoSession)
@@ -2462,6 +2468,7 @@ private struct CompactLeftWing: View {
     // Bound via @AppStorage so flipping the default mascot in Settings rerenders this view
     // even when AppState.primarySource wasn't recomputed (no session mutations in flight).
     @AppStorage(SettingsKey.defaultSource) private var settingsDefaultSource = SettingsDefaults.defaultSource
+    @AppStorage(SettingsKey.agentsEnabled) private var agentsEnabled = SettingsDefaults.agentsEnabled
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
 
     private var isPixel: Bool {
@@ -2516,6 +2523,7 @@ private struct CompactLeftWing: View {
     }
 
     private var displaySession: SessionSnapshot? {
+        guard agentsEnabled else { return nil }
         if let sid = appState.rotatingSessionId, let s = appState.sessions[sid] {
             return s
         }
@@ -2546,7 +2554,7 @@ private struct CompactLeftWing: View {
             }
         }
         if displayStatus == .idle && !isThinking && shownTool == nil {
-            return settingsDefaultSource
+            return IdleMascotSource.resolved(agentsEnabled: agentsEnabled, defaultSource: settingsDefaultSource)
         }
         return appState.primarySource
     }
@@ -2564,7 +2572,8 @@ private struct CompactLeftWing: View {
         switch (workspaceManager ?? .shared).testWingPreview {
         case .nonGitIdle: return false
         case .nonGitThinking: return true
-        case .emptyIdle, .none: return appState.isThinking || PrayerTimeManager.shared.testWingThinking
+        case .emptyIdle, .none:
+            return (agentsEnabled && appState.isThinking) || PrayerTimeManager.shared.testWingThinking
         }
     }
     private var liveTool: String? { displaySession?.currentTool }
@@ -2633,7 +2642,7 @@ private struct CompactLeftWing: View {
                         ? max(0, leftInnerBudget - mascotSize - 12)
                         : 110)
 
-                if let tool = shownTool, showToolStatus && showAgentDetails {
+                if let tool = shownTool, agentsEnabled, showToolStatus, showAgentDetails {
                     if availableForTool >= 14 {
                         HStack(spacing: 3) {
                             Image(systemName: "wrench.and.screwdriver.fill")
@@ -2695,7 +2704,7 @@ private struct CompactLeftWing: View {
                         .fixedSize(horizontal: true, vertical: false)
                         .transition(.opacity)
                     }
-                } else if !nowPlaying.isPlaying && showAgentDetails,
+                } else if agentsEnabled, !nowPlaying.isPlaying, showAgentDetails,
                           let limit = QuotaChip.limit(appState: appState, enabled: showClaudeQuota, modeRaw: claudeQuotaChip),
                           let snapshot = appState.claudeQuota.snapshot {
                     // Plan-limit chip takes the tool slot while no tool is
@@ -4598,6 +4607,7 @@ private struct IdleIndicatorBar: View {
     var onExpand: (() -> Void)? = nil
     var onOpenMail: (() -> Void)? = nil
     @AppStorage(SettingsKey.defaultSource) private var defaultSource = SettingsDefaults.defaultSource
+    @AppStorage(SettingsKey.agentsEnabled) private var agentsEnabled = SettingsDefaults.agentsEnabled
     @AppStorage(SettingsKey.islandUITheme) private var islandUITheme = SettingsDefaults.islandUITheme
     @AppStorage(SettingsKey.musicHUDProgressColor) private var musicHUDProgressColor = SettingsDefaults.musicHUDProgressColor
     @AppStorage(SettingsKey.syncThemeWithAlbumArt) private var syncThemeWithAlbumArt = SettingsDefaults.syncThemeWithAlbumArt
@@ -4612,6 +4622,10 @@ private struct IdleIndicatorBar: View {
     }
 
     static let idlePrayerWingMinWidth: CGFloat = 56
+
+    private var idleSource: String {
+        IdleMascotSource.resolved(agentsEnabled: agentsEnabled, defaultSource: defaultSource)
+    }
 
     static func wingWidth(compactWingWidth: CGFloat, hovered: Bool, prayerEnabled: Bool) -> CGFloat {
         let base = hovered ? (compactWingWidth + 6) : compactWingWidth
@@ -4643,7 +4657,7 @@ private struct IdleIndicatorBar: View {
         Group {
             if displayMode == .dynamicIsland && !hasNotch {
                 HStack(spacing: 10) {
-                    MascotView(source: defaultSource, status: .idle, size: mascotSize)
+                    MascotView(source: idleSource, status: .idle, size: mascotSize)
                         .frame(width: mascotSize, height: mascotSize)
                         .fixedSize()
                         .opacity(hovered ? 0.95 : 0.72)
@@ -4703,7 +4717,7 @@ private struct IdleIndicatorBar: View {
                     // Left Wing: mascot tightly hugging its own wing width
                     HStack {
                         Spacer(minLength: 0)
-                        MascotView(source: defaultSource, status: .idle, size: mascotSize)
+                        MascotView(source: idleSource, status: .idle, size: mascotSize)
                             .opacity(hovered ? 0.95 : 0.65)
                         Spacer(minLength: 0)
                     }
