@@ -87,4 +87,5 @@ The NSIS bundle is configured for a per-user install. Beta builds are unsigned, 
 - `.agents/memory/` for the packaging and signing decisions.
 - `docs/windows-adapters.md` for the capability table per OS.
 - `shared/desktop/README.md` for the panel and its hook wire format.
+- The README section "Measure peak RAM usage" for the per-host RSS scripts and their prerequisites.
 - `AGENTS.md` section 2 before touching `.woodpecker/` or any runner script. Those files belong to @aazhrt.
