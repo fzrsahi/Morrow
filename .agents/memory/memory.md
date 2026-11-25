@@ -15,6 +15,7 @@ This folder replaces the old implementation plans and progress boards. Those doc
 | [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), Dynamic Island geometry, clipping, and state reactivity (#444), and Dynamic Island Pixel/Modern visual polish and notification previews (#445). |
 | [2026-11-25.md](2026-11-25.md) | Desktop Settings page localization (#463, Refs #462): translator threading and one new shared string for the Unavailable page. |
 | [2026-11-25.md](2026-11-25.md) | Dead `pointer_position` cleanup (#399), remote installer core (#233), Dynamic Island geometry, clipping, and state reactivity (#444), Dynamic Island Pixel/Modern visual polish and notification previews (#445), and editable desktop shortcut bindings (#462). |
+| [2026-11-25.md](2026-11-25.md) | RAM and idle-wakeup audit: remote pump and peer-check intervals, bounded desktop lyric cache, and the untouched SwiftUI and poll-loop candidates. |
 
 > Format: `date | what landed | why it matters`. Update this index when you create or modify a memory file. Older entries keep their original text; if a decision changed, append `Superseded on YYYY-MM-DD` to that entry instead of rewriting it.
 
