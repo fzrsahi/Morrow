@@ -110,7 +110,24 @@ if [ -n "$RUST_FILES" ] && [ -f "Cargo.toml" ] && command -v cargo >/dev/null 2>
     }
 fi
 
-# 6. String resource drift (#239 AC 4): the JSON is the source of truth, and both
+# 6. Frontend gate (Svelte 5 + TypeScript): the same four steps CI will run
+# (oxlint, svelte-check, bun test, vite build), via the standalone script in
+# shared/ci/. Only pays that cost when a desktop source file changed. A checkout
+# without bun or installed deps skips with a notice, like the Swift gate above.
+FRONTEND_FILES=$(echo "$TARGET_FILES" | grep -E '^shared/desktop/(src/|package\.json$|bun\.lock$|tsconfig\.json$|vite\.config\.js$|scripts/)' || true)
+if [ -n "$FRONTEND_FILES" ]; then
+    if command -v bun >/dev/null 2>&1 && [ -d "shared/desktop/node_modules" ]; then
+        echo "==> Verifying desktop shell (lint, types, tests, build)..."
+        ./shared/ci/desktop-check.sh || {
+            echo "ERROR: desktop shell check failed — run ./shared/ci/desktop-check.sh for the full log."
+            exit 1
+        }
+    else
+        echo "Notice: 'bun' or shared/desktop/node_modules missing. Skipping desktop shell check."
+    fi
+fi
+
+# 7. String resource drift (#239 AC 4): the JSON is the source of truth, and both
 # readers are generated from it. Editing one side only fails here, before the push
 # turns into a review comment.
 if echo "$TARGET_FILES" | grep -qE '(^|/)L10n(\+Strings)?\.swift$|strings\.generated\.ts$|contract/strings/'; then
@@ -122,7 +139,7 @@ if echo "$TARGET_FILES" | grep -qE '(^|/)L10n(\+Strings)?\.swift$|strings\.gener
     fi
 fi
 
-# 7. Crate dependency boundaries (.agents/docs/ownership.md and rust-purity.sh)
+# 8. Crate dependency boundaries (.agents/docs/ownership.md and rust-purity.sh)
 if [ -x "shared/ci/check-crate-boundaries.sh" ]; then
     ./shared/ci/check-crate-boundaries.sh >/dev/null || {
         echo "ERROR: crate dependency boundaries violated. Run ./shared/ci/check-crate-boundaries.sh"
