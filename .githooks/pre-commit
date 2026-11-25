@@ -1,5 +1,0 @@
-#!/bin/sh
-# Morrow Local Pre-Commit Verification Hook
-# Invokes scripts/ci/verify-local.sh as single source of truth for local guardrails.
-
-exec ./scripts/ci/verify-local.sh
