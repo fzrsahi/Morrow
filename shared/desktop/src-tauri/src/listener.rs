@@ -18,8 +18,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(2);
 /// After an accept that failed for a reason other than the peer, so a
 /// persistent error (out of descriptors) does not spin.
 const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
-/// How often a held request checks that its hook is still there.
-const PEER_CHECK: Duration = Duration::from_millis(100);
+/// How often a held request checks that its hook is still there. `recv_timeout`
+/// still wakes immediately on an answer, so this only moves the cleanup of a
+/// hook that vanished; a quarter second is enough for a permission card.
+const PEER_CHECK: Duration = Duration::from_millis(250);
 
 // `mut` is for the Windows `accept`, which takes the pipe by `&mut`.
 #[allow(unused_mut)]

@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use morrow_core::remote::host::SshHost;
 use morrow_core::remote::tunnel::TunnelStatus;
@@ -31,6 +32,13 @@ const PLUGIN_SOURCE: &str =
 
 pub const KEY_REMOTE_HOSTS: &str = "remoteHosts";
 pub const REMOTE_STATUS_EVENT: &str = "remote-status-changed";
+
+/// The pump exists only to notice an ssh exit: connect, disconnect and install
+/// failures publish their status from the command that caused them. One second
+/// still clears a dead tunnel well inside a user's attention span, while waking
+/// the process 2.5x less often than the old 400 ms tick on an idle Settings
+/// window.
+const STATUS_POLL: Duration = Duration::from_millis(1_000);
 
 /// What the card draws. `Failed` carries the engine's message, including the
 /// folder/socket refusal details, unmodified.
@@ -358,7 +366,7 @@ pub fn remote_disconnect(
 pub fn spawn_status_pump(app: AppHandle, manager: Arc<Mutex<RemoteManager>>) {
     thread::spawn(move || {
         loop {
-            thread::sleep(std::time::Duration::from_millis(400));
+            thread::sleep(STATUS_POLL);
             let Ok(mut state) = lock(&manager) else {
                 continue;
             };
