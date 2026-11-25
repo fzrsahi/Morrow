@@ -459,11 +459,25 @@ mod tests {
         let command = windows_battery_command();
         assert!(command.contains("-in 6,7,8,9"), "status 6 is Charging");
         assert!(command.contains("-in 2,3,6,7,8,9,11"), "status 2 is AC");
+    }
+
+    #[test]
+    fn windows_battery_parser_reads_status_6_and_2_output() {
+        // Win32_Battery status 6 (Charging) emits "level,True,True".
         assert_eq!(
-            parse_windows_battery("60,True,True\r\n"),
+            parse_windows_battery("55,True,True\r\n"),
             Some(Battery {
-                level: 60,
+                level: 55,
                 charging: true,
+                ac_connected: true
+            })
+        );
+        // Win32_Battery status 2 (AC power, no discharge) emits "level,False,True".
+        assert_eq!(
+            parse_windows_battery("100,False,True\r\n"),
+            Some(Battery {
+                level: 100,
+                charging: false,
                 ac_connected: true
             })
         );
