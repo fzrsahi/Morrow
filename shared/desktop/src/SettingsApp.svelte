@@ -18,6 +18,7 @@
   import ShortcutsPage from './lib/components/ShortcutsPage.svelte';
   import UnavailablePage from './lib/components/UnavailablePage.svelte';
   import SoundPage from './lib/components/SoundPage.svelte';
+  import WorkspacePage from './lib/components/WorkspacePage.svelte';
   import {
     DEFAULT_PRAYER_SETTINGS,
     prayerSettingsFromSettings,
@@ -52,6 +53,7 @@
   } from './lib/behavior';
   import { REMOTE_STATUS_EVENT, type RemoteStatuses } from './lib/remote';
   import { resolveLanguage, translator, type Language } from './lib/strings';
+  import { applyWorkspaceSetting, workspaceFromSettings, type WorkspaceSettings } from './lib/workspace';
   import {
     followUpMinutesFromSettings,
     SETTINGS_KEY_FOLLOW_UP_MINUTES,
@@ -83,6 +85,7 @@
   let capabilities = $state<CapabilityRow[]>([]);
   let autostart = $state<AutostartStatus | null>(null);
   let appearance = $state<AppearanceSettings>({ ...DEFAULT_APPEARANCE });
+  let workspace = $state<WorkspaceSettings>(workspaceFromSettings({}));
   let prayer = $state<PrayerSettings>({ ...DEFAULT_PRAYER_SETTINGS });
   let cities = $state<PrayerCity[]>([]);
   let cues = $state<SoundCue[]>([]);
@@ -161,6 +164,7 @@
       gestures = gesturesFromSettings(stored);
       behavior = behaviorFromSettings(stored);
       agents = agentsFromSettings(stored);
+      workspace = workspaceFromSettings(stored);
       prayer = prayerSettingsFromSettings(stored);
       cities = availableCities;
       hosts = remoteHosts;
@@ -240,6 +244,11 @@
   ) {
     behavior = { ...behavior, [field]: value } as BehaviorSettings;
     void run(() => invoke('settings_set', { key: BEHAVIOR_KEYS[field], value }), false);
+  }
+
+  function saveWorkspace(key: string, value: string | boolean) {
+    workspace = applyWorkspaceSetting(workspace, key, value);
+    void run(() => invoke('settings_set', { key, value }), false);
   }
 
   onMount(() => {
@@ -359,6 +368,8 @@
         />
       {:else if page === 'agents'}
         <AgentsPage settings={agents} {t} onChange={saveAgentSetting} />
+      {:else if page === 'workspace'}
+        <WorkspacePage settings={workspace} onChange={saveWorkspace} />
       {:else if page === 'about'}
         <AboutPage {settingsFile} {t} />
       {:else if page === 'general'}

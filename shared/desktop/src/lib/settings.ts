@@ -16,6 +16,7 @@ export type SettingsPageId =
   | 'sound'
   | 'shortcuts'
   | 'agents'
+  | 'workspace'
   | 'music'
   | 'prayer'
   | 'behavior'
@@ -177,9 +178,9 @@ export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
     group: 'Features',
     items: [
       // #465: the Agents page writes the same Swift keys the panel reads for
-      // theme, font, density, row limit and card details. Quota and usage have
-      // no shell reader and the page says so instead of drawing an empty chip.
+      // theme, font, density, row limit and card details.
       { id: 'agents', label: 'Agents', icon: 'agents', available: true },
+      { id: 'workspace', label: 'Workspace', icon: 'workspace', available: true },
       {
         id: 'music',
         label: 'Music',

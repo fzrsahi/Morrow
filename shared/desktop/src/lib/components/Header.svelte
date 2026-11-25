@@ -14,6 +14,8 @@
     /** #465: the Agents switch hides this tab rather than leaving a dead one. */
     agentsEnabled?: boolean;
     filter: SessionFilter;
+    /** #462: the Workspace tab follows the same key as macOS's panel. */
+    workspaceEnabled?: boolean;
     muted: boolean;
     quitArmed: boolean;
     variant: PanelVariant;
@@ -28,6 +30,7 @@
     tab,
     agentsEnabled = true,
     filter,
+    workspaceEnabled = true,
     muted,
     quitArmed,
     variant,
@@ -42,14 +45,16 @@
     id: PanelTab;
     label: string;
     icon: string;
-    line: 'cpu' | 'note';
+    line: 'cpu' | 'branch' | 'note';
     modern: string;
   }> = [
     { id: 'agents', label: 'AGENTS', icon: 'agents', line: 'cpu', modern: 'Agents' },
+    { id: 'workspace', label: 'WORKSPACE', icon: 'workspace', line: 'branch', modern: 'Workspace' },
     { id: 'music', label: 'MUSIC', icon: 'music', line: 'note', modern: 'Music' },
   ];
   const visible = $derived(new Set(visiblePanelTabs(agentsEnabled)));
   const tabs = $derived(allTabs.filter((item) => visible.has(item.id)));
+  const shownTabs = $derived(tabs.filter((item) => item.id !== 'workspace' || workspaceEnabled));
   const filters: Array<{ id: SessionFilter; label: string; modern: string }> = [
     { id: 'all', label: 'ALL', modern: 'All' },
     { id: 'sta', label: 'STA', modern: 'Status' },
@@ -60,7 +65,7 @@
 
 <header class="hdr" class:edge={variant !== 'B'} class:modern={theme === 'modern'} data-header={tab}>
   <div class="tabs" role="tablist" aria-label="Island tabs">
-    {#each tabs as item (item.id)}
+    {#each shownTabs as item (item.id)}
       <button
         class="tab"
         class:on={tab === item.id}

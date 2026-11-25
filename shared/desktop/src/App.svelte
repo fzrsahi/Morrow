@@ -120,6 +120,13 @@
   } from './lib/music';
   import { PALETTE, cssVariables, type Theme } from './lib/tokens';
   import { VOLUME_HUD_MS, VolumeHudGate, setVolumePlan, volumeSupported, type Volume } from './lib/volume';
+  import {
+    workspaceFromSettings,
+    workspaceState,
+    workspaceTheme,
+    type WorkspaceSettings,
+  } from './lib/workspace';
+  import WorkspaceDeck from './lib/components/WorkspaceDeck.svelte';
   import type {
     CapabilityRow,
     Card,
@@ -128,6 +135,7 @@
     PrayerSnapshot,
     Session,
     Snapshot,
+    WorkspaceStatus,
   } from './lib/types';
 
   // The display mode mirrors Swift's IslandDisplayMode: `.dynamicIsland` is
@@ -159,6 +167,7 @@
   ].join(';'));
 
   let sessions = $state<Session[]>([]);
+  let workspaceCwd = $derived((activeSession(sessions) ?? sessions[0])?.cwd ?? '');
   let cards = $state<Card[]>([]);
   // #186: Hide keeps the request pending but out of the card stack; a click
   // on a request the shell no longer holds shows a notice before it drops.
@@ -200,6 +209,21 @@
   // them on the next settings-changed event, without a restart.
   const swipeGate = new SwipeGate();
   let filter = $state<SessionFilter>('all');
+  // #462: the Workspace tab reads only while open. A null snapshot is an answer
+  // ("not a checkout"), not a missing one; errors stay separate from it.
+  let workspace = $state<WorkspaceStatus | null>(null);
+  let workspaceLoading = $state(false);
+  let workspaceError = $state<string | null>(null);
+  let workspaceSettings = $state<WorkspaceSettings>({
+    enabled: true,
+    hudTheme: 'modern',
+    syncAlbumArt: false,
+    showProjectName: true,
+    showGitBranch: true,
+  });
+  let workspaceGeneration = 0;
+  let workspaceReadCwd = '';
+  let workspaceDeckTheme = $derived(workspaceTheme(theme, workspaceSettings));
   // #185: #183's cards stay reachable; a fresh install uses compact rows.
   let density = $state<SessionDensity>('compact');
   let muted = $state(false);
@@ -878,6 +902,46 @@
     };
   });
 
+  // #462: one git read per open Workspace tab, plus a slow re-read while the
+  // tab stays open. A closed tab, a locked screen or no session runs no scans.
+  const WORKSPACE_REFRESH_MS = 15_000;
+  async function readWorkspace() {
+    const mine = ++workspaceGeneration;
+    const cwd = workspaceCwd;
+    if (!cwd.trim()) {
+      workspace = null;
+      workspaceReadCwd = '';
+      workspaceError = null;
+      workspaceLoading = false;
+      return;
+    }
+    // A new checkout invalidates the old snapshot; a timed re-read does not
+    // blank the rows the user is looking at.
+    if (cwd !== workspaceReadCwd) {
+      workspace = null;
+      workspaceReadCwd = cwd;
+    }
+    workspaceLoading = workspace === null;
+    try {
+      const next = await invoke<WorkspaceStatus | null>('workspace_status', { cwd });
+      if (mine !== workspaceGeneration) return;
+      workspace = next;
+      workspaceError = null;
+    } catch (error) {
+      if (mine !== workspaceGeneration) return;
+      workspaceError = String(error);
+    } finally {
+      if (mine === workspaceGeneration) workspaceLoading = false;
+    }
+  }
+
+  $effect(() => {
+    if (tab !== 'workspace' || !expanded || !probesActive(view)) return;
+    void readWorkspace();
+    const timer = setInterval(() => void readWorkspace(), WORKSPACE_REFRESH_MS);
+    return () => clearInterval(timer);
+  });
+
   async function loadCapabilities() {
     try {
       // #199: the table itself lives in the Settings window; the island only
@@ -1057,6 +1121,8 @@
         gestures = gesturesFromSettings(stored);
         behavior = behaviorFromSettings(stored);
         agents = agentsFromSettings(stored);
+        workspaceSettings = workspaceFromSettings(stored);
+        if (!workspaceSettings.enabled && tab === 'workspace') tab = 'agents';
         const appearance = appearanceFromSettings(stored);
         theme = appearance.theme;
         displayMode = appearance.displayMode;
@@ -1078,6 +1144,8 @@
       agents = agentsFromSettings(event.payload);
       theme = appearance.theme;
       displayMode = appearance.displayMode;
+      workspaceSettings = workspaceFromSettings(event.payload);
+      if (!workspaceSettings.enabled && tab === 'workspace') tab = 'agents';
       // City/method/correction changes invalidate the card's schedule.
       void readPrayer();
       reminders.configure(
@@ -1237,6 +1305,7 @@
       {tab}
       agentsEnabled={agents.agentsEnabled}
       {filter}
+      workspaceEnabled={workspaceSettings.enabled}
       {muted}
       {quitArmed}
       {variant}
@@ -1272,6 +1341,13 @@
           />
         {/if}
       </div>
+    {:else if tab === 'workspace'}
+      <WorkspaceDeck
+        theme={workspaceDeckTheme}
+        state={workspaceState(workspace, workspaceLoading, workspaceError, workspaceCwd !== '')}
+        settings={workspaceSettings}
+        onRefresh={readWorkspace}
+      />
     {:else}
       <MusicDeck
         {theme}

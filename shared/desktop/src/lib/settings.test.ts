@@ -155,6 +155,7 @@ describe('appearance settings', () => {
       'sound',
       'shortcuts',
       'agents',
+      'workspace',
       'music',
       'prayer',
       'behavior',
@@ -206,15 +207,12 @@ describe('the pages that have no controls say why', () => {
     }
   });
 
-  test('two pages are still empty and eleven are built', () => {
-    // Measured, not assumed: #239 counted seven empty pages; Sound (#241),
-    // Shortcuts (#239), Prayer/Behavior (#307/#376), Remote (#448), General's
-    // language picker (#462) and Agents (#465) are built, so two remain.
+  test('two pages are still empty and twelve are built', () => {
     expect(items.filter((entry) => !entry.available).map((entry) => entry.id)).toEqual([
       'mascots',
       'music',
     ]);
-    expect(items.filter((entry) => entry.available).length).toBe(11);
+    expect(items.filter((entry) => entry.available).length).toBe(12);
   });
 
   test('the shortcut the page prints is the one the shell registers', () => {
