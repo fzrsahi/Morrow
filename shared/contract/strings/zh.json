@@ -578,5 +578,6 @@
   "reply_complete_placeholder": "回复完成",
   "reply_failed_placeholder": "回复失败",
   "reply_aborted_placeholder": "回复已中断",
-  "hosted_by_harness_hint": "运行在 %@ 中"
+  "hosted_by_harness_hint": "运行在 %@ 中",
+  "unavailable_platform_notice": "此平台尚不可用。"
 }

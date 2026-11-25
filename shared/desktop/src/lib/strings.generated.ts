@@ -591,6 +591,7 @@ export const STRINGS: Record<string, Strings> = {
     "reply_failed_placeholder": "Reply failed",
     "reply_aborted_placeholder": "Reply interrupted",
     "hosted_by_harness_hint": "Running under %@",
+    "unavailable_platform_notice": "Not available on this platform yet.",
   },
   "zh": {
     "general": "通用",
@@ -1173,6 +1174,7 @@ export const STRINGS: Record<string, Strings> = {
     "reply_failed_placeholder": "回复失败",
     "reply_aborted_placeholder": "回复已中断",
     "hosted_by_harness_hint": "运行在 %@ 中",
+    "unavailable_platform_notice": "此平台尚不可用。",
   },
   "zh-Hant": {
     "general": "一般",
@@ -1755,6 +1757,7 @@ export const STRINGS: Record<string, Strings> = {
     "reply_failed_placeholder": "回覆失敗",
     "reply_aborted_placeholder": "回覆已中斷",
     "hosted_by_harness_hint": "執行於 %@ 中",
+    "unavailable_platform_notice": "此平台尚不可用。",
   },
   "de": {
     "general": "Allgemein",
@@ -2341,6 +2344,7 @@ export const STRINGS: Record<string, Strings> = {
     "reply_failed_placeholder": "Antwort fehlgeschlagen",
     "reply_aborted_placeholder": "Antwort abgebrochen",
     "hosted_by_harness_hint": "Läuft unter %@",
+    "unavailable_platform_notice": "Auf dieser Plattform noch nicht verfügbar.",
   },
   "ja": {
     "general": "一般",
@@ -2927,6 +2931,7 @@ export const STRINGS: Record<string, Strings> = {
     "reply_failed_placeholder": "返信失敗",
     "reply_aborted_placeholder": "返信中断",
     "hosted_by_harness_hint": "%@ 上で実行中",
+    "unavailable_platform_notice": "このプラットフォームではまだ利用できません。",
   },
   "ko": {
     "general": "일반",
@@ -3513,6 +3518,7 @@ export const STRINGS: Record<string, Strings> = {
     "reply_failed_placeholder": "답변 실패",
     "reply_aborted_placeholder": "답변 중단",
     "hosted_by_harness_hint": "%@에서 실행 중",
+    "unavailable_platform_notice": "이 플랫폼에서는 아직 사용할 수 없습니다.",
   },
   "tr": {
     "general": "Genel",
@@ -4099,5 +4105,6 @@ export const STRINGS: Record<string, Strings> = {
     "reply_failed_placeholder": "Yanıt başarısız",
     "reply_aborted_placeholder": "Yanıt kesildi",
     "hosted_by_harness_hint": "%@ altında çalışıyor",
+    "unavailable_platform_notice": "Bu platformda henüz kullanılamıyor.",
   },
 };

@@ -582,5 +582,6 @@
   "reply_complete_placeholder": "Yanıt tamamlandı",
   "reply_failed_placeholder": "Yanıt başarısız",
   "reply_aborted_placeholder": "Yanıt kesildi",
-  "hosted_by_harness_hint": "%@ altında çalışıyor"
+  "hosted_by_harness_hint": "%@ altında çalışıyor",
+  "unavailable_platform_notice": "Bu platformda henüz kullanılamıyor."
 }

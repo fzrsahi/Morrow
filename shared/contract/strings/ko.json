@@ -582,5 +582,6 @@
   "reply_complete_placeholder": "답변 완료",
   "reply_failed_placeholder": "답변 실패",
   "reply_aborted_placeholder": "답변 중단",
-  "hosted_by_harness_hint": "%@에서 실행 중"
+  "hosted_by_harness_hint": "%@에서 실행 중",
+  "unavailable_platform_notice": "이 플랫폼에서는 아직 사용할 수 없습니다."
 }

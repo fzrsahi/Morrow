@@ -6,18 +6,19 @@
 
   type Props = {
     appearance: AppearanceSettings;
+    t: (key: string) => string;
     onChange: (key: string, value: string | number | boolean) => void;
     // #239 AC 1: the shell's `reset_island_position` forgets the offset stored
     // for *this* monitor and re-fits. Resetting the `position` key alone left the
     // island where it was, which is what the old button actually did.
     onResetPosition: () => void;
   };
-  let { appearance, onChange, onResetPosition }: Props = $props();
+  let { appearance, t, onChange, onResetPosition }: Props = $props();
 
   const sizes = [11, 12, 14, 16] as const;
 </script>
 
-<h2>Appearance</h2>
+<h2>{t('appearance')}</h2>
 <div class="grp">
   <div>
     <span class="n">Theme</span>
@@ -29,7 +30,7 @@
     </span>
   </div>
   <div>
-    <span class="n">Content font size</span>
+    <span class="n">{t('content_font_size')}</span>
     <span class="s">
       <span class="seg2">
         {#each sizes as size}
@@ -43,15 +44,15 @@
     </span>
   </div>
   <div><span class="n">Accent</span><span class="s">Cyan</span></div>
-  <div><span class="n">Animation speed</span><span class="s">{appearance.animationSpeed.toFixed(1)}×</span></div>
+  <div><span class="n">{t('notch_animation_speed')}</span><span class="s">{appearance.animationSpeed.toFixed(1)}×</span></div>
 </div>
 <div class="grp">
   <div>
-    <span class="n">Display mode</span>
+    <span class="n">{t('display_mode')}</span>
     <span class="s">
       <span class="seg2">
-        <button class:on={appearance.displayMode === 'notch'} aria-pressed={appearance.displayMode === 'notch'} onclick={() => onChange(SETTINGS_KEYS.displayMode, 'notch')}>Notch</button>
-        <button class:on={appearance.displayMode === 'dynamicIsland'} aria-pressed={appearance.displayMode === 'dynamicIsland'} onclick={() => onChange(SETTINGS_KEYS.displayMode, 'dynamicIsland')}>Dynamic Island</button>
+        <button class:on={appearance.displayMode === 'notch'} aria-pressed={appearance.displayMode === 'notch'} onclick={() => onChange(SETTINGS_KEYS.displayMode, 'notch')}>{t('display_mode_notch')}</button>
+        <button class:on={appearance.displayMode === 'dynamicIsland'} aria-pressed={appearance.displayMode === 'dynamicIsland'} onclick={() => onChange(SETTINGS_KEYS.displayMode, 'dynamicIsland')}>{t('display_mode_dynamic_island')}</button>
       </span>
     </span>
   </div>
@@ -73,12 +74,12 @@
     </span>
   </div>
   <div>
-    <span class="n">Collapse when the pointer leaves</span>
+    <span class="n">{t('collapse_on_mouse_leave')}</span>
     <span class="s">
       <button
         class="sw"
         class:off={!appearance.collapseOnLeave}
-        aria-label="Collapse when the pointer leaves"
+        aria-label={t('collapse_on_mouse_leave')}
         aria-pressed={appearance.collapseOnLeave}
         onclick={() => onChange(SETTINGS_KEYS.collapseOnLeave, !appearance.collapseOnLeave)}
       ></button>

@@ -582,5 +582,6 @@
   "reply_complete_placeholder": "返信完了",
   "reply_failed_placeholder": "返信失敗",
   "reply_aborted_placeholder": "返信中断",
-  "hosted_by_harness_hint": "%@ 上で実行中"
+  "hosted_by_harness_hint": "%@ 上で実行中",
+  "unavailable_platform_notice": "このプラットフォームではまだ利用できません。"
 }

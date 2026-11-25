@@ -223,6 +223,7 @@
           {hooks}
           {busy}
           {error}
+          {t}
           onRunHooks={(command) => run(() => invoke(command))}
           onToggleTarget={(row) =>
             run(() =>
@@ -252,6 +253,7 @@
           {capabilities}
           {autostart}
           {busy}
+          {t}
           onToggleAutostart={() =>
             run(() => invoke('autostart_set', { enabled: !autostart?.installed }))}
         />
@@ -260,25 +262,27 @@
           {cues}
           supported={soundSupported}
           {busy}
+          {t}
           onPreview={(cue) => run(() => invoke('sound_preview', { cue }), false)}
         />
       {:else if page === 'shortcuts'}
-        <ShortcutsPage hotkeySupported={hotkeySupported} hotkeyDetail={hotkeyDetail} />
+        <ShortcutsPage {t} hotkeySupported={hotkeySupported} hotkeyDetail={hotkeyDetail} />
       {:else if page === 'appearance'}
-        <AppearancePage {appearance} onChange={saveSetting} onResetPosition={resetPosition} />
+        <AppearancePage {appearance} {t} onChange={saveSetting} onResetPosition={resetPosition} />
       {:else if page === 'prayer'}
         <PrayerPage
           settings={prayer}
           {cities}
+          {t}
           onChange={(key, value) => run(() => invoke('prayer_settings_set', { key, value }))}
         />
       {:else if page === 'behavior'}
-        <BehaviorPage minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
+        <BehaviorPage {t} minutes={followUpMinutes} onChange={saveFollowUpMinutes} />
       {:else if page === 'about'}
-        <AboutPage {settingsFile} />
+        <AboutPage {settingsFile} {t} />
       {:else}
         <!-- The five pages with no controls: an argument, not a blank pane. -->
-        <UnavailablePage title={pendingPage?.label ?? ''} reason={pendingPage?.reason ?? ''} />
+        <UnavailablePage title={pendingPage?.label ?? ''} reason={pendingPage?.reason ?? ''} {t} />
       {/if}
     </div>
   </div>

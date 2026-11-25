@@ -8,8 +8,9 @@
   // and it needs no desktop-integration plugin.
   type Props = {
     settingsFile: string;
+    t: (key: string) => string;
   };
-  let { settingsFile }: Props = $props();
+  let { settingsFile, t }: Props = $props();
   const VERSION = '0.1.0';
 
   let copied = $state(false);
@@ -26,7 +27,7 @@
   }
 </script>
 
-<h2>About</h2>
+<h2>{t('about')}</h2>
 <div class="about">
   <div class="mark"><span><i></i><i></i></span></div>
   <div class="name">Morrow</div>
@@ -48,7 +49,7 @@
     </div>
   {/if}
   <button class="b" disabled title="Updates are handled by the package manager on this platform">
-    Check for Updates…
+    {t('check_for_updates')}
   </button>
 </div>
 <style>

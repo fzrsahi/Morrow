@@ -582,5 +582,6 @@
   "reply_complete_placeholder": "Antwort abgeschlossen",
   "reply_failed_placeholder": "Antwort fehlgeschlagen",
   "reply_aborted_placeholder": "Antwort abgebrochen",
-  "hosted_by_harness_hint": "Läuft unter %@"
+  "hosted_by_harness_hint": "Läuft unter %@",
+  "unavailable_platform_notice": "Auf dieser Plattform noch nicht verfügbar."
 }

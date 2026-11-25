@@ -9,14 +9,15 @@
     hotkeySupported: boolean;
     /** The composer's answer when it did not, so the page can name the fallback. */
     hotkeyDetail: string | null;
+    t: (key: string) => string;
   };
-  let { hotkeySupported, hotkeyDetail }: Props = $props();
+  let { hotkeySupported, hotkeyDetail, t }: Props = $props();
 </script>
 
-<h2>Shortcuts</h2>
+<h2>{t('shortcuts')}</h2>
 <div class="grp">
   <div>
-    <span class="n">Show / hide the island</span>
+    <span class="n">{t('shortcut_togglePanel')}</span>
     <span class="s">
       {#if hotkeySupported}
         <kbd>{DEFAULT_HOTKEY}</kbd>
@@ -38,7 +39,7 @@
   {#if hotkeyDetail}
     <div><span class="n">Why not</span><span class="s">{hotkeyDetail}</span></div>
   {/if}
-  <div><span class="n">Answer a question</span><span class="s"><kbd>1</kbd>–<kbd>9</kbd></span></div>
+  <div><span class="n">{t('question_answer')}</span><span class="s"><kbd>1</kbd>–<kbd>9</kbd></span></div>
   <div>
     <span class="n">Toggle a row</span>
     <span class="s">the same <kbd>1</kbd>–<kbd>9</kbd>, on a multi-select or wizard card</span>

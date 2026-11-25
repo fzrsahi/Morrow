@@ -582,5 +582,6 @@
   "reply_complete_placeholder": "Reply complete",
   "reply_failed_placeholder": "Reply failed",
   "reply_aborted_placeholder": "Reply interrupted",
-  "hosted_by_harness_hint": "Running under %@"
+  "hosted_by_harness_hint": "Running under %@",
+  "unavailable_platform_notice": "Not available on this platform yet."
 }

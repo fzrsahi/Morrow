@@ -7,13 +7,14 @@
   type Props = {
     title: string;
     reason: string;
+    t: (key: string) => string;
   };
-  let { title, reason }: Props = $props();
+  let { title, reason, t }: Props = $props();
 </script>
 
 <h2>{title}</h2>
 <div class="empty">
-  <p class="why">Not available on this platform yet.</p>
+  <p class="why">{t('unavailable_platform_notice')}</p>
   <p class="reason">{reason}</p>
 </div>
 
