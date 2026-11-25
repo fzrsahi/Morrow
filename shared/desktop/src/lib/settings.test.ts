@@ -3,12 +3,16 @@ import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_HOTKEY,
   appearanceFromSettings,
+  canonicalChord,
+  chordFromEvent,
+  conflictingBinding,
   describeCapability,
   sessionDensityFromSettings,
   sessionFilterFromSettings,
   SETTINGS_KEYS,
   SETTINGS_NAV,
 } from './settings';
+import type { ShortcutBinding } from './settings';
 import type { CapabilityRow } from './types';
 
 describe('capability table', () => {
@@ -200,5 +204,55 @@ describe('the pages that have no controls say why', () => {
   test('the shortcut the page prints is the one the shell registers', () => {
     // Two copies of a binding drift; `hotkey.rs` names this string once.
     expect(DEFAULT_HOTKEY).toBe('Super+Space');
+  });
+});
+
+describe('editable shortcut bindings', () => {
+  const rows: ShortcutBinding[] = [
+    { action: 'toggleIsland', label: 'Show / hide the island', default: DEFAULT_HOTKEY, chord: DEFAULT_HOTKEY },
+    { action: 'openSettings', label: 'Open Settings', default: null, chord: 'Ctrl+K' },
+  ];
+
+  test('a chord written two ways is still one binding', () => {
+    expect(canonicalChord('Super+Space')).toBe('Super+Space');
+    expect(canonicalChord('ctrl + a')).toBe('Ctrl+A');
+    expect(canonicalChord('SHIFT+CTRL+K')).toBe('Ctrl+Shift+K');
+    expect(canonicalChord('Ctrl')).toBeNull();
+    expect(canonicalChord('Ctrl+')).toBeNull();
+    expect(canonicalChord('Ctrl+A+B')).toBeNull();
+  });
+
+  test('recording takes a chord, never a bare key or Escape', () => {
+    expect(
+      chordFromEvent({ key: ' ', ctrlKey: false, altKey: false, shiftKey: false, metaKey: true }),
+    ).toBe('Super+Space');
+    expect(
+      chordFromEvent({ key: 'k', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }),
+    ).toBe('Ctrl+K');
+    expect(
+      chordFromEvent({ key: 'K', ctrlKey: false, altKey: false, shiftKey: true, metaKey: true }),
+    ).toBe('Super+Shift+K');
+    expect(
+      chordFromEvent({ key: 'k', ctrlKey: false, altKey: false, shiftKey: false, metaKey: false }),
+    ).toBeNull();
+    expect(
+      chordFromEvent({ key: 'Control', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }),
+    ).toBeNull();
+    expect(
+      chordFromEvent({ key: 'Escape', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false }),
+    ).toBeNull();
+  });
+
+  test('the same chord on two actions badges both rows', () => {
+    const clash = [{ ...rows[1], chord: 'super+space' }, rows[0]];
+    expect(conflictingBinding(rows[0], rows)).toBeNull();
+    expect(conflictingBinding(clash[0], clash)?.action).toBe('toggleIsland');
+    expect(conflictingBinding(clash[1], clash)?.action).toBe('openSettings');
+  });
+
+  test('a cleared binding never conflicts', () => {
+    const cleared: ShortcutBinding[] = [{ ...rows[0], chord: null }, { ...rows[1], chord: null }];
+    expect(conflictingBinding(cleared[0], cleared)).toBeNull();
+    expect(conflictingBinding(cleared[1], cleared)).toBeNull();
   });
 });

@@ -30,6 +30,7 @@
     pageLabel,
     type AppearanceSettings,
     type SettingsPageId,
+    type ShortcutBinding,
   } from './lib/settings';
   import { isSupported } from './lib/capabilities';
   import { REMOTE_STATUS_EVENT, type RemoteStatuses } from './lib/remote';
@@ -68,6 +69,9 @@
   let prayer = $state<PrayerSettings>({ ...DEFAULT_PRAYER_SETTINGS });
   let cities = $state<PrayerCity[]>([]);
   let cues = $state<SoundCue[]>([]);
+  // #462: the editable chords, read from the same settings document the
+  // grabber uses. A write reloads them so the badge reflects the saved state.
+  let shortcuts = $state<ShortcutBinding[]>([]);
   // #448: hosts and their tunnel status. Status arrives as an event from the
   // shell's pump, so the card never polls ssh or reaches the network itself.
   let hosts = $state<RemoteHost[]>([]);
@@ -111,7 +115,7 @@
 
   async function load() {
     try {
-      const [h, c, a, stored, availableCities, sound, file, remoteHosts, remoteStatuses] =
+      const [h, c, a, stored, availableCities, sound, file, remoteHosts, remoteStatuses, shortcutRows] =
         await Promise.all([
           invoke<HooksSnapshot>('hooks_status'),
           invoke<CapabilityRow[]>('capabilities'),
@@ -122,11 +126,13 @@
           invoke<string>('settings_path'),
           invoke<RemoteHost[]>('remote_hosts'),
           invoke<RemoteStatuses>('remote_status'),
+          invoke<ShortcutBinding[]>('shortcut_list'),
         ]);
       hooks = h;
       capabilities = c;
       autostart = a;
       cues = sound;
+      shortcuts = shortcutRows;
       settingsFile = file;
       appearance = appearanceFromSettings(stored);
       prayer = prayerSettingsFromSettings(stored);
@@ -263,7 +269,12 @@
           onPreview={(cue) => run(() => invoke('sound_preview', { cue }), false)}
         />
       {:else if page === 'shortcuts'}
-        <ShortcutsPage hotkeySupported={hotkeySupported} hotkeyDetail={hotkeyDetail} />
+        <ShortcutsPage
+          bindings={shortcuts}
+          {hotkeySupported}
+          {hotkeyDetail}
+          onSet={(action, chord) => run(() => invoke('shortcut_set', { action, chord }))}
+        />
       {:else if page === 'appearance'}
         <AppearancePage {appearance} onChange={saveSetting} onResetPosition={resetPosition} />
       {:else if page === 'prayer'}

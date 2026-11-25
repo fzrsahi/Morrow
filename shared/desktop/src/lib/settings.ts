@@ -48,9 +48,109 @@ export function pageLabel(item: SettingsNavItem, language: string = BASE_LANGUAG
   return item.label;
 }
 
-/** The default global hotkey, as `hotkey.rs` registers it. One place, because the
- *  Shortcuts page must not be the second copy of a binding. */
+/** The default global hotkey, as `hotkey.rs` registers it on a fresh install.
+ *  One place, because the Shortcuts page must not be the second copy. */
 export const DEFAULT_HOTKEY = 'Super+Space';
+
+/** One row of `shortcut_list`: an action the shell can actually grab. */
+export type ShortcutBinding = {
+  action: string;
+  label: string;
+  /** The chord on a fresh install; `null` for an action that starts unbound. */
+  default: string | null;
+  /** The effective chord, or `null` when the user cleared it. */
+  chord: string | null;
+};
+
+const MODIFIERS: Record<string, string> = {
+  super: 'Super',
+  meta: 'Super',
+  cmd: 'Super',
+  command: 'Super',
+  ctrl: 'Ctrl',
+  control: 'Ctrl',
+  alt: 'Alt',
+  option: 'Alt',
+  shift: 'Shift',
+};
+const MODIFIER_ORDER = ['Super', 'Ctrl', 'Alt', 'Shift'];
+
+/** KeyboardEvent.key names that need their case preserved (Space is not SPACE). */
+const NAMED_KEYS: Record<string, string> = {
+  space: 'Space',
+  backspace: 'Backspace',
+  delete: 'Delete',
+  enter: 'Enter',
+  home: 'Home',
+  end: 'End',
+  pageup: 'PageUp',
+  pagedown: 'PageDown',
+  arrowup: 'ArrowUp',
+  arrowdown: 'ArrowDown',
+  arrowleft: 'ArrowLeft',
+  arrowright: 'ArrowRight',
+};
+
+function canonicalKey(raw: string): string {
+  return NAMED_KEYS[raw.toLowerCase()] ?? raw.toUpperCase();
+}
+
+/** One chord written two ways (`ctrl+a`, `Ctrl+A`) is one binding. Needed for
+ *  conflicts: a hand-edited settings file must not slip past the badge. */
+export function canonicalChord(value: string): string | null {
+  const modifiers = new Set<string>();
+  let key: string | null = null;
+  for (const token of value.split('+').map((part) => part.trim()).filter(Boolean)) {
+    const modifier = MODIFIERS[token.toLowerCase()];
+    if (modifier) {
+      modifiers.add(modifier);
+      continue;
+    }
+    if (key !== null) return null;
+    key = canonicalKey(token);
+  }
+  if (key === null) return null;
+  return [...MODIFIER_ORDER.filter((modifier) => modifiers.has(modifier)), key].join('+');
+}
+
+/** The parts of a key event a chord recorder needs. */
+export type ChordKeys = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'altKey' | 'shiftKey' | 'metaKey'>;
+
+/** Record a chord from a keydown. Bare keys, modifier-only presses and Escape
+ *  are rejected: a global grab must never swallow an ordinary key. */
+export function chordFromEvent(event: ChordKeys): string | null {
+  const modifiers = [
+    event.metaKey && 'Super',
+    event.ctrlKey && 'Ctrl',
+    event.altKey && 'Alt',
+    event.shiftKey && 'Shift',
+  ].filter((modifier): modifier is string => typeof modifier === 'string');
+  if (modifiers.length === 0) return null;
+  const key =
+    event.key === ' '
+      ? 'Space'
+      : /^[a-z0-9]$/i.test(event.key) || /^F([1-9]|1[0-2])$/i.test(event.key)
+        ? canonicalKey(event.key)
+        : (NAMED_KEYS[event.key.toLowerCase()] ?? null);
+  return key === null ? null : [...modifiers, key].join('+');
+}
+
+/** The other action bound to the same chord, for the conflict badge. */
+export function conflictingBinding(
+  row: ShortcutBinding,
+  rows: ShortcutBinding[],
+): ShortcutBinding | null {
+  const chord = row.chord === null ? null : canonicalChord(row.chord);
+  if (chord === null) return null;
+  return (
+    rows.find(
+      (other) =>
+        other.action !== row.action &&
+        other.chord !== null &&
+        canonicalChord(other.chord) === chord,
+    ) ?? null
+  );
+}
 
 export const SETTINGS_NAV: { group: string; items: SettingsNavItem[] }[] = [
   {
