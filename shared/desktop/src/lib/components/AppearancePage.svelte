@@ -2,7 +2,8 @@
   // #199 — the Appearance page. Every control writes one top-level key to the
   // existing ~/.codeisland/settings.json through the shell (no new store), so
   // values survive an app upgrade.
-  import { DEFAULT_APPEARANCE, SETTINGS_KEYS, type AppearanceSettings } from '../settings';
+  import { SETTINGS_KEYS, type AppearanceSettings } from '../settings';
+  import { ACCENTS, isAccent } from '../tokens';
 
   type Props = {
     appearance: AppearanceSettings;
@@ -16,6 +17,16 @@
   let { appearance, t, onChange, onResetPosition }: Props = $props();
 
   const sizes = [11, 12, 14, 16] as const;
+  const accents = Object.keys(ACCENTS) as Array<keyof typeof ACCENTS>;
+  // #465: Swift's notchAnimationSpeed is a multiplier; 1 is the shipped pace.
+  const speeds = [
+    { value: 0.5, label: 'Slow' },
+    { value: 0.75, label: '0.75×' },
+    { value: 1, label: '1×' },
+    { value: 1.5, label: '1.5×' },
+    { value: 2, label: 'Fast' },
+  ] as const;
+  const selectedAccent = $derived(isAccent(appearance.accent) ? appearance.accent : 'cyan');
 </script>
 
 <h2>{t('appearance')}</h2>
@@ -43,8 +54,37 @@
       </span>
     </span>
   </div>
-  <div><span class="n">Accent</span><span class="s">Cyan</span></div>
-  <div><span class="n">{t('notch_animation_speed')}</span><span class="s">{appearance.animationSpeed.toFixed(1)}×</span></div>
+  <div>
+    <span class="n">Accent</span>
+    <span class="s">
+      <span class="seg2">
+        {#each accents as accent}
+          <button
+            class:on={selectedAccent === accent}
+            aria-pressed={selectedAccent === accent}
+            aria-label="Accent {accent}"
+            onclick={() => onChange(SETTINGS_KEYS.accent, accent)}
+          >
+            <i class="dot" style:background={ACCENTS[accent]}></i>{accent}
+          </button>
+        {/each}
+      </span>
+    </span>
+  </div>
+  <div>
+    <span class="n">{t('notch_animation_speed')}</span>
+    <span class="s">
+      <span class="seg2">
+        {#each speeds as speed}
+          <button
+            class:on={appearance.animationSpeed === speed.value}
+            aria-pressed={appearance.animationSpeed === speed.value}
+            onclick={() => onChange(SETTINGS_KEYS.animationSpeed, speed.value)}>{speed.label}</button
+          >
+        {/each}
+      </span>
+    </span>
+  </div>
 </div>
 <div class="grp">
   <div>
@@ -86,3 +126,14 @@
     </span>
   </div>
 </div>
+
+<style>
+  .dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 5px;
+    border-radius: 50%;
+    vertical-align: middle;
+  }
+</style>

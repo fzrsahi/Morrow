@@ -28,6 +28,23 @@ export const PALETTE = {
   agent: '#FF9966',
 } as const;
 
+/** #465 — the Appearance accent picker. The six values mirror Swift's
+ *  `MusicProgressColor` palette; `cyan` is the shipped default. */
+export const ACCENTS = {
+  cyan: '#00F5D4',
+  amber: '#FFB833',
+  pink: '#FF6FB5',
+  green: '#4DD966',
+  violet: '#A68CF2',
+  blue: '#73B8FF',
+} as const;
+
+export type Accent = keyof typeof ACCENTS;
+
+export function isAccent(value: string): value is Accent {
+  return value in ACCENTS;
+}
+
 /** #202 — the two panel themes. Pixel stays the default. */
 export type Theme = 'pixel' | 'modern';
 
@@ -80,14 +97,18 @@ export const MOTION = {
   dwell: 0.5,
 } as const;
 
-export function cssVariables(base = 11, theme: Theme = 'pixel'): Record<string, string> {
+export function cssVariables(
+  base = 11,
+  theme: Theme = 'pixel',
+  accent: Accent = 'cyan',
+): Record<string, string> {
   const t = typeScale(base);
   const vars: Record<string, string> = {
     '--chassis': PALETTE.chassis,
     '--surface': PALETTE.surface,
     '--raised': PALETTE.surfaceRaised,
     '--slot': PALETTE.slot,
-    '--cyan': PALETTE.cyan,
+    '--cyan': ACCENTS[accent] ?? ACCENTS.cyan,
     '--amber': PALETTE.amber,
     '--red': PALETTE.red,
     '--tw': PALETTE.textWhite,
