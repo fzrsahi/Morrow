@@ -1,0 +1,892 @@
+<!doctype html>
+<!--
+  PROTOTYPE for #475 — throwaway. Question: "what should the Morrow landing page look like?"
+  Variant A combines A (Technical campaign) + C (Teenage Engineering spec tab & strip)
+  with real live recordings and screenshots captured from Morrow.app.
+  Run:  python3 -m http.server 8000  (from the gh-pages branch root), then open
+        http://localhost:8000/prototype/
+-->
+<html lang="en" data-theme="pixel">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Morrow website — prototype (#475)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Gabarito:wght@400;500;700&family=Figtree:wght@400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --accent: #c2501b;
+    --accent-ink: #ffffff;
+    --signal: #ff5000;
+    --canvas: #f5f5f2;
+    --canvas-cool: #f9faf9;
+    --ink: #171717;
+    --heading: #4f4d4c;
+    --body: #646261;
+    --faint: #8e8c8b;
+    --edge: #e7e7e3;
+    --mount: #eeeeeb;
+  }
+  html[data-theme="modern"] {
+    --accent: #256f82;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: Figtree, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: var(--canvas);
+    color: var(--ink);
+  }
+  img, video { display: block; max-width: 100%; height: auto; }
+  a { color: inherit; }
+
+  .variant { display: none; }
+  .variant.is-active { display: block; }
+
+  /* Shared theme switch */
+  .theme-switch {
+    display: inline-flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid rgba(23, 23, 23, .14);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .45);
+  }
+  .theme-switch button {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 11px;
+    border: 0;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--body);
+    font: 500 12px/1 Figtree, sans-serif;
+    cursor: pointer;
+    transition: background .15s ease, color .15s ease;
+  }
+  .theme-switch button[aria-pressed="true"] {
+    background: var(--accent);
+    color: var(--accent-ink);
+  }
+  .theme-switch button:focus-visible,
+  a:focus-visible,
+  button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* Physical controls (cofounder.co: 41px, 8px radius, inset highlight) */
+  .ctrl {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 41px;
+    padding: 0 14px;
+    border-radius: 8px;
+    font: 500 14px/1 Figtree, sans-serif;
+    text-decoration: none;
+    transition: transform .12s ease, opacity .12s ease;
+  }
+  .ctrl:active { transform: translateY(1px); }
+  .ctrl-dark {
+    color: rgba(255, 255, 255, .94);
+    border: 1px solid #383838;
+    background: linear-gradient(rgba(32, 32, 32, .1), rgba(32, 32, 32, .1)), linear-gradient(#4f4f4f, rgba(32, 32, 32, .88));
+    box-shadow: inset 0 2px 0 rgba(255, 255, 255, .22), 0 2px 6px rgba(0, 0, 0, .2);
+  }
+  .ctrl-ghost-dark {
+    color: rgba(255, 255, 255, .86);
+    background: rgba(255, 255, 255, .07);
+    border: 1px solid rgba(255, 255, 255, .16);
+  }
+
+  .eyebrow {
+    font: 400 11px/1.5 "DM Mono", monospace;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  /* ==========================================================================
+     VARIANT A — Technical campaign (A + C hybrid with real Morrow captures)
+     ========================================================================== */
+  .va { background: var(--canvas); color: var(--ink); }
+  .va-nav {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    height: 68px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 6vw;
+    background: rgba(245, 245, 242, .88);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--edge);
+  }
+  .va-logo {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font: 500 17px/1 Gabarito, sans-serif;
+    letter-spacing: -.02em;
+    text-decoration: none;
+  }
+  .va-mark {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 12px 0 0 var(--ink), 24px 0 0 var(--ink);
+    margin-right: 24px;
+  }
+  .va-nav-right { display: flex; align-items: center; gap: 28px; }
+  .va-links { display: flex; align-items: center; gap: 24px; font-size: 14px; color: var(--body); }
+  .va-links a { text-decoration: none; }
+  .va-links a:hover { color: var(--ink); }
+
+  /* Hero stage (#20232a matches real Morrow capture background) */
+  .va-hero {
+    background: #20232a;
+    color: #eeeeeb;
+    padding: 52px 6vw 56px;
+    overflow: hidden;
+  }
+  .va-hero-grid {
+    max-width: 1200px;
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: 44px;
+    align-items: center;
+  }
+  /* C's signature printed orange tab, scaled cleanly for campaign intro */
+  .va-tab {
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 5px;
+    background: var(--signal);
+    color: #ffffff;
+    font: 500 11px/1 "DM Mono", monospace;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+  }
+  .va-hero-copy h1 {
+    margin: 18px 0 16px;
+    font: 400 clamp(38px, 4.2vw, 52px)/1.06 Gabarito, sans-serif;
+    letter-spacing: -.03em;
+    color: #ffffff;
+  }
+  .va-hero-copy h1 .faint { color: rgba(238, 238, 235, .52); }
+  .va-hero-copy p {
+    margin: 0;
+    max-width: 430px;
+    font-size: 16px;
+    line-height: 1.48;
+    color: rgba(238, 238, 235, .78);
+  }
+  .va-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 26px; }
+  .va-frost-note {
+    margin-top: 26px;
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 13px;
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, .14);
+    background: linear-gradient(rgba(255, 255, 255, .07), rgba(255, 255, 255, .03));
+    backdrop-filter: blur(15px);
+    font: 400 12px/1.3 "DM Mono", monospace;
+    color: rgba(238, 238, 235, .84);
+  }
+  .va-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .va-hero-stage {
+    border-radius: 14px;
+    border: 1px solid rgba(255, 255, 255, .12);
+    background: #14161b;
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0, 0, 0, .48);
+  }
+  .va-stage-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+    font: 400 11px/1 "DM Mono", monospace;
+    color: rgba(238, 238, 235, .62);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .va-stage-bar button {
+    background: rgba(255, 255, 255, .08);
+    border: 1px solid rgba(255, 255, 255, .14);
+    color: #eeeeeb;
+    border-radius: 4px;
+    padding: 4px 8px;
+    font: 400 11px/1 "DM Mono", monospace;
+    cursor: pointer;
+  }
+  .va-hero-stage video {
+    width: 100%;
+    display: block;
+    background: #20232a;
+  }
+
+  /* C's static dark spec strip directly under hero */
+  .va-specstrip {
+    background: #0f0e12;
+    color: #f1f2f2;
+    padding: 13px 6vw;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px 24px;
+    border-top: 1px solid #26262a;
+    font: 400 12px/1.3 "DM Mono", monospace;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+  .va-specstrip span strong { color: #7f868d; font-weight: 400; margin-right: 6px; }
+
+  /* Interactive 01/02/03 capabilities with real Morrow screenshots */
+  .va-cap {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 88px 6vw;
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: 52px;
+    align-items: center;
+  }
+  .va-cap h2 {
+    margin: 10px 0 14px;
+    font: 400 clamp(32px, 3.4vw, 40px)/1.12 Gabarito, sans-serif;
+    letter-spacing: -.02em;
+    color: var(--heading);
+  }
+  .va-cap h2 .faint { color: var(--faint); }
+  .va-cap-lead {
+    margin: 0 0 26px;
+    color: var(--body);
+    font-size: 15px;
+    line-height: 1.5;
+    max-width: 400px;
+  }
+  .va-row {
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-top: 1px solid var(--edge);
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    gap: 14px;
+    padding: 16px 10px;
+    cursor: pointer;
+    transition: background .15s ease;
+  }
+  .va-row:last-child { border-bottom: 1px solid var(--edge); }
+  .va-row:hover { background: rgba(23, 23, 23, .03); }
+  .va-row.is-active {
+    background: #ecece7;
+    box-shadow: inset 3px 0 0 var(--accent);
+  }
+  .va-row .num {
+    font: 400 11px/1.6 "DM Mono", monospace;
+    color: var(--faint);
+    letter-spacing: .12em;
+  }
+  .va-row.is-active .num { color: var(--accent); }
+  .va-row h3 {
+    margin: 0 0 4px;
+    font: 400 20px/1.25 Gabarito, sans-serif;
+    color: var(--ink);
+  }
+  .va-row span {
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--body);
+  }
+
+  .va-shot-wrap {
+    border-radius: 14px;
+    padding: 12px;
+    background: #20232a;
+    border: 1px solid rgba(23, 23, 23, .16);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, .14);
+  }
+  .va-shot-wrap img {
+    width: 100%;
+    border-radius: 8px;
+    transition: opacity .18s ease;
+  }
+  .va-shot-caption {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 4px 2px;
+    font: 400 11px/1.3 "DM Mono", monospace;
+    color: rgba(238, 238, 235, .64);
+    letter-spacing: .06em;
+  }
+
+  /* Dark technical matrix */
+  .va-spec {
+    background: #0f0e12;
+    color: #e5e5e5;
+    padding: 80px 6vw;
+  }
+  .va-spec-inner { max-width: 1200px; margin: 0 auto; }
+  .va-spec-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    gap: 20px;
+    margin-bottom: 32px;
+  }
+  .va-spec-head .eyebrow { color: #989fa5; }
+  .va-spec h2 {
+    margin: 8px 0 0;
+    font: 400 clamp(28px, 3vw, 38px)/1.12 Gabarito, sans-serif;
+    letter-spacing: -.02em;
+    color: #eeeeeb;
+  }
+  .va-spec-note { margin: 0; max-width: 380px; font-size: 14px; line-height: 1.45; color: #989fa5; }
+  .va-spec table { width: 100%; border-collapse: collapse; font-size: 14px; border-top: 1px solid #26262a; }
+  .va-spec th {
+    text-align: left;
+    font: 400 11px/1.4 "DM Mono", monospace;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: #989fa5;
+    border-bottom: 1px solid #26262a;
+    padding: 14px 12px 14px 0;
+  }
+  .va-spec td {
+    padding: 18px 12px 18px 0;
+    border-bottom: 1px solid #26262a;
+    vertical-align: middle;
+    color: #e9e8e1;
+  }
+  .va-spec td:first-child { font: 500 15px/1.2 Gabarito, sans-serif; white-space: nowrap; }
+  .va-chip {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 5px;
+    font: 500 11px/1.1 "DM Mono", monospace;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  .va-chip-ga { background: var(--accent); color: #ffffff; }
+  .va-chip-preview { background: #222228; color: #b8bcc2; border: 1px solid #34343c; }
+
+  .va-band {
+    min-height: 68px;
+    background: var(--signal);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 16px 6vw;
+  }
+  .va-band-text { font: 500 17px/1.2 "DM Mono", monospace; letter-spacing: -.01em; }
+  .va-band a {
+    display: inline-flex;
+    align-items: center;
+    height: 36px;
+    padding: 0 14px;
+    border-radius: 6px;
+    background: #0f0e12;
+    color: #eeeeeb;
+    font: 500 13px/1 Figtree, sans-serif;
+    text-decoration: none;
+    white-space: nowrap;
+  }
+  .va-foot {
+    background: #efefeb;
+    padding: 36px 6vw;
+    display: flex;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 16px;
+    font-size: 13px;
+    color: var(--body);
+    border-top: 1px solid var(--edge);
+  }
+
+  /* ==========================================================================
+     VARIANT B — Warm editorial
+     ========================================================================== */
+  .vb { background: var(--canvas); color: var(--ink); }
+  .vb-nav {
+    position: fixed;
+    top: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 10;
+    height: 48px;
+    display: inline-flex;
+    align-items: center;
+    gap: 20px;
+    padding: 0 8px 0 16px;
+    border: 1px solid rgba(23, 23, 23, .12);
+    border-radius: 12px;
+    color: var(--ink);
+    background: rgba(245, 245, 242, .84);
+    backdrop-filter: blur(12px);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, .08);
+    white-space: nowrap;
+  }
+  .vb-nav-brand { font: 500 14px/1 Gabarito, sans-serif; text-decoration: none; }
+  .vb-nav a { text-decoration: none; font-size: 13px; color: var(--body); }
+  .vb-hero {
+    max-width: 1120px;
+    margin: 0 auto;
+    padding: 116px 6vw 72px;
+    display: grid;
+    grid-template-columns: minmax(0, 6fr) minmax(0, 6fr);
+    gap: 48px;
+    align-items: center;
+  }
+  .vb h1 { margin: 14px 0 16px; font: 400 clamp(38px, 4.4vw, 50px)/1.08 Gabarito, sans-serif; letter-spacing: -.03em; }
+  .vb h1 .faint { color: var(--faint); }
+  .vb-hero p { margin: 0; font-size: 16px; line-height: 1.5; color: var(--body); max-width: 440px; }
+  .vb-btn {
+    display: inline-flex; align-items: center; gap: 10px; height: 38px; margin-top: 24px;
+    padding: 0 12px 0 16px; border-radius: 8px; background: #1f1f29; color: #fff;
+    text-decoration: none; font-size: 13px; font-weight: 500;
+  }
+  .vb-btn .chev {
+    width: 12px; height: 16px; border: 1px solid rgba(255, 255, 255, .28); border-radius: 50px;
+    display: inline-flex; align-items: center; justify-content: center; font-size: 10px;
+  }
+  .vb-hero-art {
+    border-radius: 14px; padding: 10px; background: #20232a;
+    border: 1px solid rgba(23, 23, 23, .14); box-shadow: 0 16px 40px rgba(0, 0, 0, .14);
+  }
+  .vb-hero-art img { width: 100%; border-radius: 8px; }
+  .vb-editorial {
+    max-width: 1120px; margin: 0 auto; padding: 72px 6vw;
+    display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); gap: 32px; align-items: center;
+    border-top: 1px solid var(--edge);
+  }
+  .vb-editorial .copy { grid-column: 1 / span 5; }
+  .vb-editorial .shot { grid-column: 6 / -1; }
+  .vb h2 { margin: 10px 0 22px; font: 400 clamp(30px, 3.2vw, 40px)/1.14 Gabarito, sans-serif; letter-spacing: -.02em; color: var(--heading); }
+  .vb h2 .faint { color: var(--faint); }
+  .vb-item { padding: 15px 0; border-top: 1px solid var(--edge); }
+  .vb-item:last-child { border-bottom: 1px solid var(--edge); }
+  .vb-item h3 { margin: 0 0 4px; font: 400 20px/1.25 Gabarito, sans-serif; }
+  .vb-item p { margin: 0; color: var(--body); font-size: 14px; line-height: 1.45; }
+  .vb-foot {
+    background: #ffffff; border-top: 1px solid var(--edge); padding: 32px 6vw;
+    display: flex; justify-content: space-between; flex-wrap: wrap; gap: 16px; font-size: 13px; color: var(--body);
+  }
+
+  /* ==========================================================================
+     VARIANT C — Instrument / spec sheet
+     ========================================================================== */
+  .vc { background: var(--canvas-cool); color: #0f0e12; }
+  .vc-top {
+    max-width: 1200px; margin: 0 auto; padding: 20px 6vw 0;
+    display: flex; align-items: center; justify-content: space-between;
+    font: 400 14px/1 "DM Mono", monospace; letter-spacing: .04em;
+  }
+  .vc-tab {
+    width: fit-content; margin: 44px auto 0; padding: 0 22px; height: 64px;
+    display: flex; align-items: center; background: var(--signal); color: #e9e8e1;
+    border-radius: 7px; font: 500 clamp(22px, 3.4vw, 38px)/1.1 "DM Mono", monospace;
+    text-transform: uppercase; letter-spacing: -.02em;
+  }
+  .vc-sub { max-width: 680px; margin: 18px auto 0; padding: 0 6vw; text-align: center; font-size: 16px; line-height: 1.5; color: #444141; }
+  .vc-hero { max-width: 960px; margin: 32px auto 0; padding: 0 6vw; }
+  .vc-hero-mount { background: #20232a; border-radius: 10px; padding: 12px; }
+  .vc-hero-mount img { width: 100%; border-radius: 6px; }
+  .vc-specs {
+    max-width: 1120px; margin: 0 auto; padding: 72px 6vw;
+    display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 56px; align-items: start;
+  }
+  .vc-specs h2 { font: 500 32px/1.12 "DM Mono", monospace; text-transform: uppercase; letter-spacing: -.02em; margin: 0 0 20px; }
+  .vc-specs p { font-size: 15px; line-height: 1.55; color: #444141; }
+  .vc-table { width: 100%; border-collapse: collapse; font: 400 13px/1.3 "DM Mono", monospace; }
+  .vc-table th, .vc-table td { text-align: left; padding: 14px 10px; border-bottom: 1px solid #d4d4d0; }
+  .vc-table th { font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: #7f7f7f; }
+  .vc-flag { background: var(--signal); color: #fff; padding: 3px 7px; border-radius: 4px; font-size: 11px; text-transform: uppercase; }
+  .vc-store {
+    min-height: 68px; background: var(--signal); color: #e9e8e1;
+    display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 18px;
+    font: 500 18px/1.2 "DM Mono", monospace; text-transform: uppercase; padding: 16px 6vw;
+  }
+  .vc-store a {
+    font: 500 13px/1 Figtree, sans-serif; text-decoration: none; color: #0f0e12;
+    background: #f5f5f2; padding: 10px 14px; border-radius: 5px; text-transform: none;
+  }
+  .vc-foot {
+    background: #000000; color: #989fa5; display: flex; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px; padding: 28px 6vw; font: 400 13px/1.5 Figtree, sans-serif;
+  }
+
+  @media (max-width: 840px) {
+    .va-links { display: none; }
+    .va-hero-grid, .va-cap, .vb-hero, .vb-editorial, .vc-specs { grid-template-columns: 1fr; }
+    .vb-editorial .copy, .vb-editorial .shot { grid-column: 1; }
+    .va-band { flex-direction: column; align-items: flex-start; }
+    .vb-nav a:not(.vb-nav-brand) { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+  /* ---------- switcher ---------- */
+  #proto-state {
+    position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); z-index: 20;
+    background: #fff; color: #171717; border: 1px solid #171717; border-radius: 6px;
+    padding: 5px 10px; font: 400 11px/1.3 "DM Mono", monospace; white-space: nowrap;
+  }
+  #proto-bar {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 20;
+    display: flex; align-items: center; gap: 12px; background: #0f0e12; color: #fff;
+    border: 1px solid rgba(255,255,255,.35); border-radius: 999px; padding: 6px 10px;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, .35);
+  }
+  #proto-bar button {
+    width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(255,255,255,.45);
+    background: transparent; color: #fff; font-size: 15px; cursor: pointer;
+  }
+  #proto-label { min-width: 215px; text-align: center; font: 500 13px/1 Figtree, sans-serif; }
+</style>
+</head>
+<body>
+
+<!-- ============ A — Technical campaign (A + C hybrid, live Morrow media) ============ -->
+<section class="variant va" data-variant="A">
+  <header class="va-nav">
+    <a class="va-logo" href="#"><span class="va-mark" aria-hidden="true"></span>Morrow</a>
+    <div class="va-nav-right">
+      <nav class="va-links" aria-label="Main">
+        <a href="#what">The panel</a>
+        <a href="#platforms">Platforms</a>
+        <a href="#download">Install</a>
+      </nav>
+      <div class="theme-switch" role="group" aria-label="Island theme">
+        <button type="button" data-theme-set="pixel" aria-pressed="true">Pixel</button>
+        <button type="button" data-theme-set="modern" aria-pressed="false">Modern</button>
+      </div>
+    </div>
+  </header>
+  <main>
+    <section class="va-hero">
+      <div class="va-hero-grid">
+        <div class="va-hero-copy">
+          <span class="va-tab">macOS 14+ · notch panel</span>
+          <h1>Notch panel <span class="faint">for coding agents.</span></h1>
+          <p>Watch Claude Code, Codex and Gemini work from the MacBook notch. Approve tool prompts, inspect the Git graph and follow music without leaving your editor.</p>
+          <div class="va-actions">
+            <a class="ctrl ctrl-dark" href="#download">Install on macOS →</a>
+            <a class="ctrl ctrl-ghost-dark" href="https://github.com/fzrsahi/Morrow#readme">Read the docs</a>
+          </div>
+          <div class="va-frost-note">
+            <span class="va-dot" aria-hidden="true"></span>
+            <span>Captured live from Morrow.app · local hook socket</span>
+          </div>
+        </div>
+        <div class="va-hero-stage">
+          <div class="va-stage-bar">
+            <span>live capture // agents · approval · git graph</span>
+            <button type="button" id="va-video-toggle">Pause</button>
+          </div>
+          <video id="va-demo-video" autoplay loop muted playsinline poster="media/morrow-agents.png">
+            <source src="media/morrow-demo.mp4" type="video/mp4">
+          </video>
+        </div>
+      </div>
+    </section>
+
+    <div class="va-specstrip">
+      <span><strong>01</strong>HOOK: LOCAL UNIX SOCKET</span>
+      <span><strong>02</strong>AGENTS: CLAUDE · CODEX · GEMINI · CURSOR</span>
+      <span><strong>03</strong>TABS: AGENTS · WORKSPACE · MUSIC</span>
+      <span><strong>04</strong>MACOS: NOTARIZED</span>
+    </div>
+
+    <section class="va-cap" id="what">
+      <div>
+        <div class="eyebrow">01 / inside the notch</div>
+        <h2>One island, <span class="faint">real captures.</span></h2>
+        <p class="va-cap-lead">Select a capability to inspect the actual Morrow macOS panel.</p>
+        <div role="tablist" aria-label="Morrow features">
+          <button type="button" class="va-row is-active" role="tab" aria-selected="true"
+            data-shot="media/morrow-agents.png"
+            data-alt="Morrow Agents tab showing Claude, Codex and Gemini live sessions"
+            data-cap="Agents tab · 3 live sessions">
+            <span class="num">01</span>
+            <div><h3>Live agent sessions</h3><span>Claude, Codex and Gemini with branch, tool call and mascot status.</span></div>
+          </button>
+          <button type="button" class="va-row" role="tab" aria-selected="false"
+            data-shot="media/morrow-approval.png"
+            data-alt="Morrow permission prompt for Bash command with Allow once and Deny"
+            data-cap="PermissionRequest · inline approval">
+            <span class="num">02</span>
+            <div><h3>Inline approval card</h3><span>Bash and tool permission prompts surface at the notch; allow or deny in place.</span></div>
+          </button>
+          <button type="button" class="va-row" role="tab" aria-selected="false"
+            data-shot="media/morrow-workspace.png"
+            data-alt="Morrow Work tab showing interactive Git commit spine and commit input"
+            data-cap="Work tab · Git graph &amp; AI commit">
+            <span class="num">03</span>
+            <div><h3>Interactive Git graph</h3><span>Commit spine, modified file count, AI commit message and push from the notch.</span></div>
+          </button>
+        </div>
+      </div>
+      <div class="va-shot-wrap">
+        <img id="va-feature-img" src="media/morrow-agents.png" alt="Morrow Agents tab showing Claude, Codex and Gemini live sessions">
+        <div class="va-shot-caption">
+          <span id="va-feature-cap">Agents tab · 3 live sessions</span>
+          <span>Morrow.app (macOS)</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="va-spec" id="platforms">
+      <div class="va-spec-inner">
+        <div class="va-spec-head">
+          <div>
+            <div class="eyebrow">02 / platform matrix</div>
+            <h2>Platform status</h2>
+          </div>
+          <p class="va-spec-note">Shared hook contract across all three desktops. Unsupported host capabilities are reported plainly.</p>
+        </div>
+        <table>
+          <thead><tr><th>Platform</th><th>Status</th><th>Host evidence &amp; limits</th></tr></thead>
+          <tbody>
+            <tr><td>macOS</td><td><span class="va-chip va-chip-ga">available</span></td><td>Developer ID signed, notarized DMG, Sparkle updates</td></tr>
+            <tr><td>Linux X11</td><td><span class="va-chip va-chip-preview">preview</span></td><td>Capability readers ported (xdotool, xprop, playerctl); real X11 host gate not run</td></tr>
+            <tr><td>Windows</td><td><span class="va-chip va-chip-preview">preview</span></td><td>NSIS per-user build; named-pipe tunnel unsupported over ssh -R (#451)</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="va-band" id="download">
+      <span class="va-band-text">macOS installer ready — Linux &amp; Windows in preview</span>
+      <a href="https://github.com/fzrsahi/Morrow#installation">See install options →</a>
+    </section>
+  </main>
+  <footer class="va-foot">
+    <span>Morrow — one island for every coding agent</span>
+    <span>Real captures from Morrow.app on macOS.</span>
+  </footer>
+</section>
+
+<!-- ============ B — Warm editorial ============ -->
+<section class="variant vb" data-variant="B">
+  <nav class="vb-nav" aria-label="Main">
+    <a class="vb-nav-brand" href="#">Morrow</a>
+    <a href="#b-what">The panel</a>
+    <a href="#b-download">Install</a>
+    <div class="theme-switch" role="group" aria-label="Island theme">
+      <button type="button" data-theme-set="pixel" aria-pressed="true">Pixel</button>
+      <button type="button" data-theme-set="modern" aria-pressed="false">Modern</button>
+    </div>
+  </nav>
+  <main>
+    <section class="vb-hero">
+      <div>
+        <div class="eyebrow">macOS · Linux · Windows</div>
+        <h1>Notch panel <span class="faint">for coding agents.</span></h1>
+        <p>A capable, unhurried place to watch your agents work — and to decide when they ask for permission.</p>
+        <a class="vb-btn" href="#b-download">Install on macOS <span class="chev">›</span></a>
+      </div>
+      <div class="vb-hero-art">
+        <img src="media/morrow-agents.png" alt="Morrow notch panel with live agent sessions">
+      </div>
+    </section>
+    <section class="vb-editorial" id="b-what">
+      <div class="copy">
+        <div class="eyebrow">01 / the panel</div>
+        <h2>Three tabs, <span class="faint">kept close.</span></h2>
+        <div class="vb-item"><h3>Agent sessions</h3><p>Claude Code, Codex and Gemini appear with their current status.</p></div>
+        <div class="vb-item"><h3>Approval card</h3><p>Permission prompts land in the panel. Approve or deny there.</p></div>
+        <div class="vb-item"><h3>Git graph &amp; music</h3><p>Inspect commits or follow synced lyrics without leaving your flow.</p></div>
+      </div>
+      <div class="shot vb-hero-art">
+        <img src="media/morrow-approval.png" alt="Approval prompt in the Morrow panel">
+      </div>
+    </section>
+  </main>
+  <footer class="vb-foot" id="b-download">
+    <span>macOS installer available now · preview builds for Linux &amp; Windows</span>
+    <a href="https://github.com/fzrsahi/Morrow#installation">Install options →</a>
+  </footer>
+</section>
+
+<!-- ============ C — Instrument / spec sheet ============ -->
+<section class="variant vc" data-variant="C">
+  <main>
+    <div class="vc-top">
+      <span>MORROW // PANEL SPEC</span>
+      <div class="theme-switch" role="group" aria-label="Island theme">
+        <button type="button" data-theme-set="pixel" aria-pressed="true">Pixel</button>
+        <button type="button" data-theme-set="modern" aria-pressed="false">Modern</button>
+      </div>
+    </div>
+    <div class="vc-tab">one island, every agent</div>
+    <p class="vc-sub">A local notch panel for Claude Code, Codex and Gemini. Events arrive over a local socket; approvals return straight to the tool.</p>
+    <section class="vc-hero">
+      <div class="vc-hero-mount">
+        <img src="media/morrow-workspace.png" alt="Morrow Work tab with Git commit spine">
+      </div>
+    </section>
+    <section class="vc-specs">
+      <div>
+        <h2>Working logic</h2>
+        <p>A hook writes JSON to a local socket. The panel reads it, shows the session, and returns your answer. No second copy of the tool's configuration, no cloud round trip.</p>
+        <p><a href="https://github.com/fzrsahi/Morrow#readme" style="color:#0071bb">Explore the hook contract →</a></p>
+      </div>
+      <table class="vc-table">
+        <thead><tr><th>Unit</th><th>State</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>macOS</td><td><span class="vc-flag">available</span></td><td>signed + notarized</td></tr>
+          <tr><td>Linux / X11</td><td>preview</td><td>host gate pending</td></tr>
+          <tr><td>Windows</td><td>preview</td><td>named pipe, no ssh -R (#451)</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="vc-store">
+      <span>macOS build ready — previews documented</span>
+      <a href="https://github.com/fzrsahi/Morrow#installation">Install options</a>
+    </section>
+  </main>
+  <footer class="vc-foot">
+    <span>Morrow · engineering notes</span>
+    <span>Real captures from Morrow.app.</span>
+  </footer>
+</section>
+
+<div id="proto-state" aria-live="polite"></div>
+<div id="proto-bar" role="group" aria-label="Prototype variants">
+  <button type="button" id="proto-prev" aria-label="Previous variant">←</button>
+  <span id="proto-label"></span>
+  <button type="button" id="proto-next" aria-label="Next variant">→</button>
+</div>
+
+<script>
+(function () {
+  var keys = ['A', 'B', 'C'];
+  var names = {
+    A: 'A+C (Hybrid · live Morrow media)',
+    B: 'B (Warm editorial)',
+    C: 'C (Instrument / spec sheet)'
+  };
+  var state = {
+    A: 'A+C · real Morrow.app video + interactive feature captures',
+    B: 'B · cofounder-led editorial with real Morrow captures',
+    C: 'C · teenage-led spec sheet with Git Graph capture'
+  };
+  var current = 'A';
+
+  function readParam() {
+    var v = new URLSearchParams(location.search).get('variant');
+    v = (v || '').toUpperCase();
+    return keys.indexOf(v) >= 0 ? v : 'A';
+  }
+  function render(v) {
+    current = v;
+    document.querySelectorAll('.variant').forEach(function (el) {
+      el.classList.toggle('is-active', el.getAttribute('data-variant') === v);
+    });
+    document.getElementById('proto-label').textContent = names[v];
+    document.getElementById('proto-state').textContent = state[v];
+    window.scrollTo(0, 0);
+  }
+  function go(v) {
+    var url = new URL(location.href);
+    url.searchParams.set('variant', v);
+    history.replaceState(null, '', url);
+    render(v);
+  }
+  function step(delta) {
+    var i = keys.indexOf(current);
+    go(keys[(i + delta + keys.length) % keys.length]);
+  }
+
+  /* Interactive feature switcher in Variant A */
+  var featImg = document.getElementById('va-feature-img');
+  var featCap = document.getElementById('va-feature-cap');
+  document.querySelectorAll('.va-row[data-shot]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      document.querySelectorAll('.va-row[data-shot]').forEach(function (b) {
+        b.classList.remove('is-active');
+        b.setAttribute('aria-selected', 'false');
+      });
+      btn.classList.add('is-active');
+      btn.setAttribute('aria-selected', 'true');
+      featImg.src = btn.getAttribute('data-shot');
+      featImg.alt = btn.getAttribute('data-alt');
+      featCap.textContent = btn.getAttribute('data-cap');
+    });
+  });
+
+  /* Hero demo video play/pause toggle */
+  var video = document.getElementById('va-demo-video');
+  var videoBtn = document.getElementById('va-video-toggle');
+  if (video && videoBtn) {
+    videoBtn.addEventListener('click', function () {
+      if (video.paused) { video.play(); videoBtn.textContent = 'Pause'; }
+      else { video.pause(); videoBtn.textContent = 'Play'; }
+    });
+  }
+
+  /* Theme switch synced across all variants */
+  var root = document.documentElement;
+  function applyTheme(t) {
+    root.dataset.theme = t;
+    document.querySelectorAll('[data-theme-set]').forEach(function (btn) {
+      btn.setAttribute('aria-pressed', String(btn.dataset.themeSet === t));
+    });
+    try { localStorage.setItem('morrow-theme', t); } catch (e) {}
+  }
+  document.querySelectorAll('[data-theme-set]').forEach(function (btn) {
+    btn.addEventListener('click', function () { applyTheme(btn.dataset.themeSet); });
+  });
+  try {
+    var saved = localStorage.getItem('morrow-theme');
+    if (saved === 'pixel' || saved === 'modern') applyTheme(saved);
+  } catch (e) {}
+
+  var dev = location.hostname === 'localhost' || location.hostname === '127.0.0.1' ||
+            new URLSearchParams(location.search).has('prototype=1');
+  if (!dev) {
+    document.getElementById('proto-bar').style.display = 'none';
+    document.getElementById('proto-state').style.display = 'none';
+  }
+
+  document.getElementById('proto-prev').addEventListener('click', function () { step(-1); });
+  document.getElementById('proto-next').addEventListener('click', function () { step(1); });
+  document.addEventListener('keydown', function (e) {
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    if (e.key === 'ArrowLeft') { e.preventDefault(); step(-1); }
+    if (e.key === 'ArrowRight') { e.preventDefault(); step(1); }
+  });
+
+  render(readParam());
+})();
+</script>
+</body>
+</html>
