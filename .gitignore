@@ -3,6 +3,9 @@
 .swiftpm/
 target/
 dist/
+dist-web/
+web/node_modules/
+web/.astro/
 
 # Superpowers artifacts
 .superpowers/
