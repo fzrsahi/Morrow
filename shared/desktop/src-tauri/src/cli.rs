@@ -106,10 +106,6 @@ fn status(site: &HooksSite) {
                 }
             );
         }
-        let _ = site;
-        // The Windows build hooks [CC] only; the other eight arrive with their
-        // Windows paths (#99's follow-up), which is what Settings says too.
-        println!("claude: {}", windows_state(site));
     }
     let opencode = opencode::status(&site.opencode);
     println!(

@@ -12,7 +12,7 @@ The macOS app is the finished product. The Tauri shell for Linux and Windows is 
 | Hook install from the app | yes | yes, for Claude Code |
 | Real desktop gates | not run | not run |
 
-The gap is tracked in [issue #400](https://github.com/fzrsahi/Morrow/issues/400). Missing adapters and modules are in [issue #399](https://github.com/fzrsahi/Morrow/issues/399). The purity guard is currently red in [issue #401](https://github.com/fzrsahi/Morrow/issues/401).
+Issues [#400](https://github.com/fzrsahi/Morrow/issues/400), [#399](https://github.com/fzrsahi/Morrow/issues/399) and [#401](https://github.com/fzrsahi/Morrow/issues/401) are closed. The gates are tooling-complete but still have no real Linux X11 or Windows host evidence; #399 closed with adapter scope decisions, and the purity guard is green.
 
 ## Prerequisites
 
@@ -92,7 +92,6 @@ The NSIS bundle is configured for a per-user install. Beta builds are unsigned, 
 ### Known limits
 
 - The installer currently hooks Claude Code only. Other tools have no Windows config paths yet.
-- `windows/ci/e2e2.ps1` still matches the Linux hook name `codeisland-hook.sh`, while the Windows installer writes `morrow-hook.cmd`. The script will fail a correct install until that is fixed.
 - None of W-001 through W-009 has run on a Windows host. These cover named pipes with two accounts, click-through, SMTC, Core Audio, session changes, the installer, and the release build.
 
 ## What to read next
