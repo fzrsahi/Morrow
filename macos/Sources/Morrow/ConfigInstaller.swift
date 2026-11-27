@@ -3420,32 +3420,89 @@ struct ConfigInstaller {
         }
     }
 
-    private static func installBridgeBinary(fm: FileManager) {
-        guard let execPath = Bundle.main.executablePath else { return }
-        let execDir = (execPath as NSString).deletingLastPathComponent
+    private static func resolveBridgeSource(executablePath: String, fm: FileManager) -> String? {
+        let execDir = (executablePath as NSString).deletingLastPathComponent
         let contentsDir = (execDir as NSString).deletingLastPathComponent
-        var srcPath = contentsDir + "/Helpers/codeisland-bridge"
-        if !fm.fileExists(atPath: srcPath) { srcPath = execDir + "/codeisland-bridge" }
-        guard fm.fileExists(atPath: srcPath) else { return }
+        let candidates = [
+            contentsDir + "/Helpers/morrow-bridge",
+            contentsDir + "/Helpers/codeisland-bridge",
+            execDir + "/morrow-bridge",
+            execDir + "/codeisland-bridge",
+        ]
+        for candidate in candidates {
+            guard fm.fileExists(atPath: candidate) else { continue }
+            let resolved = URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
+            guard (try? fm.attributesOfItem(atPath: resolved))?[.type] as? FileAttributeType == .typeRegular else {
+                continue
+            }
+            return resolved
+        }
+        return nil
+    }
+
+    @discardableResult
+    static func installBridgeBinary(
+        fm: FileManager,
+        executablePath: String? = Bundle.main.executablePath,
+        destinationPath: String = bridgePath
+    ) -> Bool {
+        guard let executablePath,
+              let srcPath = resolveBridgeSource(executablePath: executablePath, fm: fm) else {
+            return false
+        }
+
+        let destURL = URL(fileURLWithPath: destinationPath)
+        let destDir = destURL.deletingLastPathComponent().path
+        let tmpPrefix = destURL.lastPathComponent + ".tmp."
+        PrivateFiles.prepareFolder(destDir)
+
+        // Remove stale .tmp.<PID> entries (including broken symlinks from older builds)
+        if let entries = try? fm.contentsOfDirectory(atPath: destDir) {
+            for entry in entries where entry.hasPrefix(tmpPrefix) {
+                let stalePath = (destDir as NSString).appendingPathComponent(entry)
+                if unlink(stalePath) != 0 {
+                    try? fm.removeItem(atPath: stalePath)
+                }
+            }
+        }
 
         // Atomic replace: copy to temp file first, then rename (overwrites atomically)
-        let tmpPath = bridgePath + ".tmp.\(ProcessInfo.processInfo.processIdentifier)"
+        let tmpPath = destinationPath + ".tmp.\(ProcessInfo.processInfo.processIdentifier)"
+        defer { _ = unlink(tmpPath) }
+
+        var installed = false
         do {
-            try? fm.removeItem(atPath: tmpPath)
             try fm.copyItem(atPath: srcPath, toPath: tmpPath)
             chmod(tmpPath, 0o700)
             // Strip quarantine xattr so Gatekeeper won't block the binary
             stripQuarantine(tmpPath)
-            _ = try fm.replaceItemAt(URL(fileURLWithPath: bridgePath), withItemAt: URL(fileURLWithPath: tmpPath))
+            do {
+                _ = try fm.replaceItemAt(
+                    URL(fileURLWithPath: destinationPath),
+                    withItemAt: URL(fileURLWithPath: tmpPath)
+                )
+                installed = true
+            } catch {
+                // replaceItemAt can fail if destination does not exist yet or is a broken symlink —
+                // fall back to atomic POSIX rename (same directory, never follows destination symlink).
+                if rename(tmpPath, destinationPath) == 0 {
+                    installed = true
+                } else {
+                    try fm.moveItem(atPath: tmpPath, toPath: destinationPath)
+                    installed = true
+                }
+            }
         } catch {
-            // replaceItemAt fails if destination doesn't exist yet — fall back to rename
-            try? fm.moveItem(atPath: tmpPath, toPath: bridgePath)
+            installed = false
         }
+        guard installed else { return false }
+
         // 0700 whichever way it got there: replaceItemAt keeps the replaced
         // binary's permissions, which an older build made 0755.
-        PrivateFiles.closeToOthers(bridgePath)
+        PrivateFiles.closeToOthers(destinationPath)
         // Ensure final binary is free of quarantine (covers both paths above)
-        stripQuarantine(bridgePath)
+        stripQuarantine(destinationPath)
+        return true
     }
 
     /// Remove com.apple.quarantine xattr so Gatekeeper won't block the binary.
