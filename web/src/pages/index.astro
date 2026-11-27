@@ -1,0 +1,510 @@
+---
+import '../styles/main.css';
+import {
+  FEATURE_SHOTS,
+  MASCOTS,
+  MORE_CLIS,
+  PLATFORMS,
+  SPLIT_PRESETS,
+} from '../data/morrow';
+
+// Astro's BASE_URL is "/Morrow" here; normalise it so local assets resolve
+// under the project pages URL instead of collapsing into "/Morrowassets/...".
+const base = import.meta.env.BASE_URL.replace(/\/$/, '') + '/';
+const splitOptions = SPLIT_PRESETS.map((id) => FEATURE_SHOTS.find((s) => s.id === id)!);
+const defaultSplit = splitOptions[0];
+const chapterShots = FEATURE_SHOTS.filter((s) => s.id !== 'agents');
+---
+<!doctype html>
+<html lang="en" data-theme="pixel">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Morrow — Live Coding Agents, Git Graph &amp; Synced Lyrics in Your Notch</title>
+  <meta name="description" content="Morrow turns the MacBook notch into a live HUD for Claude Code, Codex, Gemini CLI, Git workspaces, and floating synced lyrics—in 8-bit Pixel or Modern Clean.">
+  <meta property="og:title" content="Morrow — Live Coding Agents &amp; Music in Your Notch">
+  <meta property="og:description" content="Watch 30+ AI coding agents, approve tool calls inline, inspect Git commits, and follow synced lyrics in Pixel or Modern mode.">
+  <meta property="og:type" content="website">
+  <link rel="icon" href={base + 'assets/logo.svg'} type="image/svg+xml">
+  <meta name="theme-color" content="#080b10" id="meta-theme-color">
+  <script is:inline>
+    (() => {
+      const saved = localStorage.getItem('morrow-theme');
+      const theme = saved === 'modern' || saved === 'pixel' ? saved : 'pixel';
+      document.documentElement.dataset.theme = theme;
+      const meta = document.getElementById('meta-theme-color');
+      if (meta) meta.setAttribute('content', theme === 'modern' ? '#f3f5f8' : '#080b10');
+      document.documentElement.classList.add('reveal-ready');
+      setTimeout(() => {
+        for (const el of document.querySelectorAll('[data-reveal]')) el.classList.add('is-visible');
+      }, 1400);
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600&family=Gabarito:wght@500;700&family=JetBrains+Mono:wght@400;500;600&family=Silkscreen:wght@400;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <!-- Notch-shaped Hardware Navbar -->
+  <header class="notch-header" id="top">
+    <div class="notch-island">
+      <svg class="notch-ear notch-ear--left" viewBox="0 0 18 18" aria-hidden="true">
+        <path d="M18 0H0C9.941 0 18 8.059 18 18V0Z" fill="currentColor" />
+      </svg>
+      <svg class="notch-ear notch-ear--right" viewBox="0 0 18 18" aria-hidden="true">
+        <path d="M18 0H0C9.941 0 18 8.059 18 18V0Z" fill="currentColor" />
+      </svg>
+
+      <a class="notch-brand" href="#top">
+        <span class="notch-eye-pill" aria-hidden="true">
+          <span class="notch-eye"></span>
+          <span class="notch-eye"></span>
+        </span>
+        <span>Morrow</span>
+      </a>
+
+      <nav class="notch-links" aria-label="Primary">
+        <a href="#compare">Pixel / Modern</a>
+        <a href="#features">Features</a>
+        <a href="#agents">Agents</a>
+        <a href="#install">Install</a>
+      </nav>
+
+      <div class="theme-switch" role="group" aria-label="Notch theme skin">
+        <button type="button" data-theme-set="pixel" aria-pressed="true">
+          <span class="switch-pip" aria-hidden="true"></span>Pixel
+        </button>
+        <button type="button" data-theme-set="modern" aria-pressed="false">
+          <span class="switch-pip" aria-hidden="true"></span>Modern
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Hero + Interactive Live Notch Stage -->
+    <section class="hero wrap">
+      <div class="hero-head">
+        <h1 class="hero-title">One notch panel for every coding agent.</h1>
+        <div class="hero-side">
+          <p class="hero-lead">
+            Watch Claude Code, Codex, Gemini CLI, and Cursor live beneath your MacBook camera cutout. Approve tool calls, browse Git commits, and follow synced lyrics in 8-bit Pixel or Modern Clean.
+          </p>
+          <div class="hero-actions">
+            <a class="btn btn--primary" href="#install">Install on macOS</a>
+            <a class="btn btn--ghost" href="#features">Explore 8 surfaces</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="notch-stage" aria-label="Interactive Morrow notch preview">
+        <div class="stage-toolbar">
+          <div class="stage-tabs" role="tablist" aria-label="Morrow app tabs">
+            {FEATURE_SHOTS.map((shot, idx) => (
+              <button
+                type="button"
+                role="tab"
+                class="stage-tab"
+                id={`tab-${shot.id}`}
+                aria-controls={`panel-${shot.id}`}
+                aria-selected={idx === 0 ? 'true' : 'false'}
+                data-tab-target={shot.id}
+              >
+                {shot.label}
+              </button>
+            ))}
+          </div>
+          <div class="stage-meta">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span id="stage-skin-label">SKIN: PIXEL RETRO</span>
+          </div>
+        </div>
+
+        <div class="stage-frame">
+          {FEATURE_SHOTS.map((shot, idx) => (
+            <figure
+              role="tabpanel"
+              id={`panel-${shot.id}`}
+              aria-labelledby={`tab-${shot.id}`}
+              class={`stage-panel${idx === 0 ? ' is-active' : ''}`}
+              data-tab-panel={shot.id}
+            >
+              <img
+                class="shot-pixel"
+                src={base + shot.pixel.src}
+                alt={shot.pixel.alt}
+                width={shot.pixel.width}
+                height={shot.pixel.height}
+                loading={idx === 0 ? 'eager' : 'lazy'}
+                decoding="async"
+                fetchpriority={idx === 0 ? 'high' : undefined}
+              />
+              <img
+                class="shot-modern"
+                src={base + shot.modern.src}
+                alt={shot.modern.alt}
+                width={shot.modern.width}
+                height={shot.modern.height}
+                loading="lazy"
+                decoding="async"
+              />
+            </figure>
+          ))}
+        </div>
+
+        <div class="stage-caption">
+          <div>
+            <h2 id="stage-title">{FEATURE_SHOTS[0].title}</h2>
+            <p id="stage-summary">{FEATURE_SHOTS[0].summary}</p>
+          </div>
+          <span class="stage-detail" id="stage-detail">{FEATURE_SHOTS[0].detail}</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Half Pixel / Half Modern Interactive Split Comparison -->
+    <section class="section wrap" id="compare" data-reveal>
+      <div class="section-header">
+        <h2 class="section-title">Two native skins, drag to compare</h2>
+        <p class="section-desc">
+          Morrow ships both 8-bit Pixel Retro and Modern Clean inside the macOS app. Use the notch switch above to transform the whole page, or drag the divider across the exact same notch surface.
+        </p>
+      </div>
+
+      <div class="split-controls">
+        <div class="split-pills" role="group" aria-label="Surface to compare">
+          {splitOptions.map((item, idx) => (
+            <button
+              type="button"
+              class="split-pill"
+              data-split-surface={item.id}
+              aria-pressed={idx === 0 ? 'true' : 'false'}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <div class="split-legend">
+          <span>Left: Pixel Retro</span>
+          <span>/</span>
+          <span>Right: Modern Clean</span>
+        </div>
+      </div>
+
+      <div class="split-arena" id="split-arena" style="--split: 50%">
+        <div class="split-layer split-layer--modern">
+          <img
+            id="split-img-modern"
+            src={base + defaultSplit.modern.src}
+            alt={defaultSplit.modern.alt}
+            width={defaultSplit.modern.width}
+            height={defaultSplit.modern.height}
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
+        <div class="split-layer split-layer--pixel">
+          <img
+            id="split-img-pixel"
+            src={base + defaultSplit.pixel.src}
+            alt={defaultSplit.pixel.alt}
+            width={defaultSplit.pixel.width}
+            height={defaultSplit.pixel.height}
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
+
+        <span class="split-tag split-tag--pixel">Pixel Retro</span>
+        <span class="split-tag split-tag--modern">Modern Clean</span>
+
+        <div class="split-divider" aria-hidden="true">
+          <span class="split-knob">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M5 4L2 8L5 12M11 4L14 8L11 12" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+          </span>
+        </div>
+
+        <input
+          class="split-range"
+          id="split-range"
+          type="range"
+          min="8"
+          max="92"
+          value="50"
+          aria-label="Compare Pixel Retro on left and Modern Clean on right"
+        />
+      </div>
+    </section>
+
+    <!-- All Feature Captures -->
+    <section class="section wrap" id="features">
+      <div class="section-header" data-reveal>
+        <h2 class="section-title">Every surface built for staying in flow</h2>
+        <p class="section-desc">
+          Clean captures rendered directly from Morrow's native SwiftUI views—switch between Pixel and Modern in the notch bar to inspect both aesthetics across every tab.
+        </p>
+      </div>
+
+      <div class="chapters">
+        {chapterShots.map((shot, idx) => (
+          <article class={`chapter${idx % 2 === 1 ? ' chapter--reverse' : ''}`} data-reveal>
+            <div class="chapter-media">
+              <img
+                class="shot-pixel"
+                src={base + shot.pixel.src}
+                alt={shot.pixel.alt}
+                width={shot.pixel.width}
+                height={shot.pixel.height}
+                loading="lazy"
+                decoding="async"
+              />
+              <img
+                class="shot-modern"
+                src={base + shot.modern.src}
+                alt={shot.modern.alt}
+                width={shot.modern.width}
+                height={shot.modern.height}
+                loading="lazy"
+                decoding="async"
+              />
+            </div>
+            <div class="chapter-body">
+              <h3>{shot.title}</h3>
+              <p>{shot.summary}</p>
+              <ul class="chapter-specs">
+                {shot.detail.split(' · ').map((item) => (
+                  <li>{item}</li>
+                ))}
+              </ul>
+            </div>
+          </article>
+        ))}
+      </div>
+    </section>
+
+    <!-- 30+ Supported Coding Agents & Pixel Mascots -->
+    <section class="section wrap" id="agents" data-reveal>
+      <div class="section-header">
+        <h2 class="section-title">30+ AI tools with live pixel mascots</h2>
+        <p class="section-desc">
+          Morrow writes and repairs hooks automatically on launch for every major coding CLI, and jumps straight to the exact Ghostty, iTerm2, Warp, tmux, zellij, or Herdr pane on click.
+        </p>
+      </div>
+
+      <div class="mascot-grid">
+        {MASCOTS.map((m) => (
+          <div class="mascot-tile">
+            <img src={base + m.file} alt={`${m.name} pixel mascot`} width="44" height="44" loading="lazy" decoding="async" />
+            <span>{m.name}</span>
+          </div>
+        ))}
+      </div>
+
+      <div class="cli-chips" aria-label="Additional supported tools">
+        {MORE_CLIS.map((cli) => (
+          <span class="cli-chip">{cli}</span>
+        ))}
+      </div>
+    </section>
+
+    <!-- Honest Platform Matrix -->
+    <section class="section wrap" id="platforms" data-reveal>
+      <div class="section-header">
+        <h2 class="section-title">Shared hook contract, honest desktop status</h2>
+        <p class="section-desc">
+          macOS is the primary shipping app today. Linux and Windows share the same Rust contract and fixtures while host verification gates are still being completed.
+        </p>
+      </div>
+
+      <div class="platform-table">
+        {PLATFORMS.map((row) => (
+          <div class="platform-row">
+            <div>
+              <div class="platform-os">{row.os}</div>
+              <div class="platform-stack">{row.stack}</div>
+            </div>
+            <span class={`platform-status platform-status--${row.tone}`}>{row.status}</span>
+            <p class="platform-notes">{row.notes}</p>
+            <a
+              class="platform-link"
+              href={row.actionHref}
+              target={row.actionHref.startsWith('http') ? '_blank' : undefined}
+              rel={row.actionHref.startsWith('http') ? 'noopener noreferrer' : undefined}
+            >
+              {row.actionLabel} →
+            </a>
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <!-- Honest Install CTA -->
+    <section class="section wrap" id="install" data-reveal>
+      <div class="install-box">
+        <div>
+          <h2>Install Morrow on macOS</h2>
+          <p>
+            Signed and notarized via Homebrew cask. No prebuilt GitHub Releases binaries are published yet—use Homebrew on macOS 14+, or build the desktop targets from source.
+          </p>
+          <div class="brew-bar">
+            <code id="brew-cmd">brew tap wxtsky/tap &amp;&amp; brew install --cask morrow</code>
+            <button type="button" class="copy-btn" id="copy-brew">Copy</button>
+          </div>
+        </div>
+        <div class="install-links">
+          <a class="btn btn--primary" href="https://github.com/fzrsahi/Morrow#installation" target="_blank" rel="noopener noreferrer">
+            Read install docs
+          </a>
+          <a class="btn btn--ghost" href="https://github.com/fzrsahi/Morrow" target="_blank" rel="noopener noreferrer">
+            Browse GitHub repo
+          </a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer wrap">
+    <div class="footer-inner">
+      <span>Morrow — MIT License · Forked from wxtsky/CodeIsland</span>
+      <div class="footer-links">
+        <a href="https://github.com/fzrsahi/Morrow" target="_blank" rel="noopener noreferrer">GitHub</a>
+        <a href="https://github.com/fzrsahi/Morrow/blob/main/docs/build-windows-linux.md" target="_blank" rel="noopener noreferrer">Linux &amp; Windows guide</a>
+        <a href="#top">Back to top</a>
+      </div>
+    </div>
+  </footer>
+
+  <script define:vars={{ FEATURE_SHOTS, splitOptions, base }}>
+    const root = document.documentElement;
+    const metaTheme = document.getElementById('meta-theme-color');
+    const skinLabel = document.getElementById('stage-skin-label');
+    const themeBtns = [...document.querySelectorAll('[data-theme-set]')];
+
+    function applyTheme(theme) {
+      root.dataset.theme = theme;
+      localStorage.setItem('morrow-theme', theme);
+      for (const b of themeBtns) {
+        b.setAttribute('aria-pressed', String(b.dataset.themeSet === theme));
+      }
+      if (metaTheme) {
+        metaTheme.setAttribute('content', theme === 'modern' ? '#f3f5f8' : '#080b10');
+      }
+      if (skinLabel) {
+        skinLabel.textContent = theme === 'modern' ? 'SKIN: MODERN CLEAN' : 'SKIN: PIXEL RETRO';
+      }
+    }
+
+    applyTheme(root.dataset.theme === 'modern' ? 'modern' : 'pixel');
+    for (const b of themeBtns) {
+      b.addEventListener('click', () => applyTheme(b.dataset.themeSet));
+    }
+
+    // Scroll tightening on Notch Navbar
+    const notchHeader = document.getElementById('top');
+    const onScroll = () => {
+      if (!notchHeader) return;
+      notchHeader.classList.toggle('is-scrolled', window.scrollY > 24);
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    onScroll();
+
+    // Interactive Notch Stage Tabs
+    const tabBtns = [...document.querySelectorAll('[data-tab-target]')];
+    const tabPanels = [...document.querySelectorAll('[data-tab-panel]')];
+    const stageTitle = document.getElementById('stage-title');
+    const stageSummary = document.getElementById('stage-summary');
+    const stageDetail = document.getElementById('stage-detail');
+
+    function selectTab(id) {
+      const shot = FEATURE_SHOTS.find((s) => s.id === id);
+      if (!shot) return;
+      for (const b of tabBtns) {
+        b.setAttribute('aria-selected', String(b.dataset.tabTarget === id));
+      }
+      for (const p of tabPanels) {
+        p.classList.toggle('is-active', p.dataset.tabPanel === id);
+      }
+      if (stageTitle) stageTitle.textContent = shot.title;
+      if (stageSummary) stageSummary.textContent = shot.summary;
+      if (stageDetail) stageDetail.textContent = shot.detail;
+    }
+
+    for (const b of tabBtns) {
+      b.addEventListener('click', () => selectTab(b.dataset.tabTarget));
+    }
+
+    // Split-screen Pixel vs Modern Comparator
+    const splitArena = document.getElementById('split-arena');
+    const splitRange = document.getElementById('split-range');
+    const splitPixelImg = document.getElementById('split-img-pixel');
+    const splitModernImg = document.getElementById('split-img-modern');
+    const splitPills = [...document.querySelectorAll('[data-split-surface]')];
+
+    function setSplitPos(val) {
+      if (splitArena) splitArena.style.setProperty('--split', `${val}%`);
+    }
+
+    if (splitRange) {
+      splitRange.addEventListener('input', (e) => setSplitPos(e.target.value));
+    }
+
+    for (const pill of splitPills) {
+      pill.addEventListener('click', () => {
+        const target = splitOptions.find((s) => s.id === pill.dataset.splitSurface);
+        if (!target) return;
+        for (const p of splitPills) p.setAttribute('aria-pressed', String(p === pill));
+        if (splitPixelImg) {
+          splitPixelImg.src = base + target.pixel.src;
+          splitPixelImg.alt = target.pixel.alt;
+          splitPixelImg.width = target.pixel.width;
+          splitPixelImg.height = target.pixel.height;
+        }
+        if (splitModernImg) {
+          splitModernImg.src = base + target.modern.src;
+          splitModernImg.alt = target.modern.alt;
+          splitModernImg.width = target.modern.width;
+          splitModernImg.height = target.modern.height;
+        }
+      });
+    }
+
+    // Copy Homebrew Command
+    const copyBtn = document.getElementById('copy-brew');
+    const brewCmd = document.getElementById('brew-cmd');
+    if (copyBtn && brewCmd) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(brewCmd.textContent.trim());
+          copyBtn.textContent = 'Copied';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1600);
+        } catch {
+          copyBtn.textContent = 'Select & copy';
+        }
+      });
+    }
+
+    // IntersectionObserver Reveal
+    const revealEls = [...document.querySelectorAll('[data-reveal]')];
+    if ('IntersectionObserver' in window) {
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add('is-visible');
+              io.unobserve(entry.target);
+            }
+          }
+        },
+        { threshold: 0.12 }
+      );
+      for (const el of revealEls) io.observe(el);
+    } else {
+      for (const el of revealEls) el.classList.add('is-visible');
+    }
+  </script>
+</body>
+</html>
