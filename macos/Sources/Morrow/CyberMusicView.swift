@@ -2690,7 +2690,7 @@ struct ModernCleanMusicHUDContentView: View {
 
     var body: some View {
         HStack(alignment: .center, spacing: 14) {
-            // LEFT BLOCK: Full Image on Left + Info & Controls Stack Beside It (250pt fixed width)
+            // LEFT BLOCK: Full Image on Left + Info & Controls Stack Beside It (255pt fixed width)
             HStack(alignment: .center, spacing: 12) {
                 // 1. FULL ALBUM IMAGE (86x86 squircle - spans full vertical height)
                 ZStack {
@@ -2864,6 +2864,15 @@ struct ModernCleanMusicHUDContentView: View {
                 .padding(.trailing, 6)
             }
             .frame(width: 255, alignment: .leading)
+
+            // Soft vertical separator line (subtle gradient fade)
+            Rectangle()
+                .fill(LinearGradient(
+                    colors: [Color.clear, Color.white.opacity(0.12), Color.white.opacity(0.12), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                ))
+                .frame(width: 1, height: 74)
 
             // RIGHT COLUMN: Multi-Line Interactive Synced Lyrics (Seamless, Borderless, Scrollable)
             VStack(alignment: .leading, spacing: 0) {
@@ -3194,6 +3203,11 @@ struct RetroCyberMusicHUDContentView: View {
                 }
             }
             .frame(width: 255, alignment: .leading)
+
+            // Divider Rule: 1px phosphor vertical line
+            Rectangle()
+                .fill(Color.white.opacity(0.12))
+                .frame(width: 1, height: 94)
 
             // RIGHT COLUMN: Retro CRT Lyrics (Seamless, Borderless, Floating Stream)
             VStack(alignment: .leading, spacing: 4) {

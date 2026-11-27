@@ -22,6 +22,7 @@ This folder replaces the old implementation plans and progress boards. Those doc
 
 | [2026-11-25.md](2026-11-25.md) | Remaining #465 parity: per-display settings, Sound/Mascots/Buddy/Lyrics pages, tabs, notification previews and diagnostics export; Apple/hardware gaps documented in port-status. |
 | [2026-11-26.md](2026-11-26.md) | Duplicate Windows `claude:` status print removed and stale Windows gate docs corrected (#473, Refs #400, handoff #474). |
+| [2026-11-27.md](2026-11-27.md) | Restored expanded Music HUD vertical divider in Modern Clean and Retro Cyber themes (#481). |
 > Format: `date | what landed | why it matters`. Update this index when you create or modify a memory file. Older entries keep their original text; if a decision changed, append `Superseded on YYYY-MM-DD` to that entry instead of rewriting it.
 
 ## Entry format
